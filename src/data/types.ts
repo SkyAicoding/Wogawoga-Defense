@@ -434,6 +434,13 @@ export interface BattleOptions {
   deck: TowerId[];
   endless: boolean;
   seed: number;
+  /**
+   * 정의 테이블 주입 — sim은 data 구현 모듈을 임포트하지 않는다 (테스트 시 목 주입).
+   * waveFor는 반드시 결정론적이어야 한다 (같은 wave → 같은 WaveDef).
+   */
+  towerDefs: Readonly<Record<TowerId, TowerDef>>;
+  enemyDefs: Readonly<Record<EnemyId, EnemyDef>>;
+  waveFor(wave: number): WaveDef;
 }
 
 export interface BattleSim {
