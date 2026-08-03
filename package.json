@@ -1,0 +1,26 @@
+{
+  "name": "wogawoga-defense",
+  "private": true,
+  "version": "0.1.0",
+  "description": "와가와가 디펜스 — 원시시대 로우폴리 3D 타워 디펜스 (무료 웹게임)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "three": "~0.185.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/three": "~0.185.0",
+    "typescript": "~5.9.0",
+    "vite": "^8.2.0",
+    "vitest": "^4.1.0"
+  }
+}
