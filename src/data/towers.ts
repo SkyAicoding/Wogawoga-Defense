@@ -88,7 +88,7 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
       { dmg: 91, cooldownTicks: 24, range: 3.2, cost: 2240, chain: { jumps: 3, decay: 0.7, jumpRange: 2.4 } },
     ],
     starBonus: { dmgPct: 0.08, ratePct: 0.05 },
-    unlock: { type: 'stage', stage: 2 },
+    unlock: { type: 'stage', stage: 1 },
     starCosts: STAR_COSTS,
   },
   // 화염 모닥불 — 반경 오라, 0.5초마다 피해 + 화상(3스택). 지상 전용, 경로 밀집 지점용.
@@ -171,7 +171,7 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
       },
     ],
     starBonus: { dmgPct: 0.06, ratePct: 0.05, rangePct: 0.02 },
-    unlock: { type: 'stage', stage: 1 },
+    unlock: { type: 'start' },
     starCosts: STAR_COSTS,
   },
   // 독가시 식물 — 직격은 약하지만 강력한 DoT(armor 무시, 3스택). 고장갑 카운터.
@@ -205,7 +205,7 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
       },
     ],
     starBonus: { dmgPct: 0.1, ratePct: 0.04 },
-    unlock: { type: 'stage', stage: 3 },
+    unlock: { type: 'stage', stage: 2 },
     starCosts: STAR_COSTS,
   },
   // 상아 발리스타 — 초장거리 고데미지 저속, 대공 특화 저격.
@@ -224,7 +224,7 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
       { dmg: 350, cooldownTicks: 52, range: 5.7, cost: 2400, projectileSpeed: 20 },
     ],
     starBonus: { dmgPct: 0.1, ratePct: 0.05 },
-    unlock: { type: 'stage', stage: 4 },
+    unlock: { type: 'stage', stage: 3 },
     starCosts: STAR_COSTS,
   },
   // 전쟁북 — 공격 없음. 반경 내 타워 dmg/공속 버프(중첩 시 최대값만).

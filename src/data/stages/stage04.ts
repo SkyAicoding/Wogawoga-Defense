@@ -77,5 +77,4 @@ export const stage04: StageDef = {
   },
   firstClearAmber: 250,
   perWaveAmber: 2,
-  unlockTowers: ['ballista'],
 };

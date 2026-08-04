@@ -176,16 +176,7 @@ export class BattleController {
     }
 
     for (let i = 0; i < ticks; i++) this.sim.tick();
-    const events = this.sim.drainEvents();
-    if (events.length > 0) {
-      this.fx.handle(events);
-      for (const ev of events) {
-        if (ev.type === 'battleEnded') this.scheduleEnd(ev.won);
-        else if (ev.type === 'towerSold' || ev.type === 'towerUpgraded') {
-          this.placement.refreshSelection();
-        }
-      }
-    }
+    this.processEvents();
 
     // 뷰 갱신 (보간)
     const dt = Math.min(0.1, ticks * TICK_DT + 0.0001);
@@ -207,6 +198,19 @@ export class BattleController {
       h: Math.max(1, cssH - HUD_TOP_PX - bottom),
     };
     this.camera.fitToPlayfield(this.stage3d.aabb, rect, cssW, cssH);
+  }
+
+  /** 이벤트 소비 — frame()과 테스트 훅 ff()가 같은 경로를 쓴다 */
+  private processEvents(): void {
+    const events = this.sim.drainEvents();
+    if (events.length === 0) return;
+    this.fx.handle(events);
+    for (const ev of events) {
+      if (ev.type === 'battleEnded') this.scheduleEnd(ev.won);
+      else if (ev.type === 'towerSold' || ev.type === 'towerUpgraded') {
+        this.placement.refreshSelection();
+      }
+    }
   }
 
   private scheduleEnd(won: boolean): void {
@@ -256,7 +260,7 @@ export class BattleController {
       sim: this.sim,
       ff: (n: number): void => {
         for (let i = 0; i < n; i++) this.sim.tick();
-        this.fx.handle(this.sim.drainEvents());
+        this.processEvents();
       },
       place: (handIndex: number, x: number, z: number): boolean =>
         this.sim.applyCommand({ type: 'placeTower', handIndex, cellX: x, cellZ: z }),

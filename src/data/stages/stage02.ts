@@ -57,5 +57,5 @@ export const stage02: StageDef = {
   },
   firstClearAmber: 160,
   perWaveAmber: 1,
-  unlockTowers: ['lightning'],
+  unlockTowers: ['poison'],
 };

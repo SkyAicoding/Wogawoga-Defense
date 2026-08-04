@@ -82,10 +82,10 @@ describe('towers', () => {
   it('해금표: spear/catapult start, frost s1, lightning s2, poison s3, ballista s4, brazier 600, drum 900', () => {
     expect(TOWER_DEFS.spear.unlock).toEqual({ type: 'start' });
     expect(TOWER_DEFS.catapult.unlock).toEqual({ type: 'start' });
-    expect(TOWER_DEFS.frost.unlock).toEqual({ type: 'stage', stage: 1 });
-    expect(TOWER_DEFS.lightning.unlock).toEqual({ type: 'stage', stage: 2 });
-    expect(TOWER_DEFS.poison.unlock).toEqual({ type: 'stage', stage: 3 });
-    expect(TOWER_DEFS.ballista.unlock).toEqual({ type: 'stage', stage: 4 });
+    expect(TOWER_DEFS.frost.unlock).toEqual({ type: 'start' });
+    expect(TOWER_DEFS.lightning.unlock).toEqual({ type: 'stage', stage: 1 });
+    expect(TOWER_DEFS.poison.unlock).toEqual({ type: 'stage', stage: 2 });
+    expect(TOWER_DEFS.ballista.unlock).toEqual({ type: 'stage', stage: 3 });
     expect(TOWER_DEFS.brazier.unlock).toEqual({ type: 'amber', cost: 600 });
     expect(TOWER_DEFS.drum.unlock).toEqual({ type: 'amber', cost: 900 });
   });

@@ -124,11 +124,12 @@ describe('stages', () => {
       it('웨이브 플랜 파라미터 범위', () => {
         const p = stage.wavePlan;
         expect(stage.waveCount).toBe(50);
-        expect(p.budgetGrowth).toBeGreaterThanOrEqual(1.11);
+        // 스테이지1은 실측 플레이 튜닝으로 완만한 커브 허용 (초심자 클리어 보장)
+        expect(p.budgetGrowth).toBeGreaterThanOrEqual(stage.id === 1 ? 1.08 : 1.11);
         expect(p.budgetGrowth).toBeLessThanOrEqual(1.15);
-        expect(p.hpGrowth).toBeGreaterThanOrEqual(1.045);
+        expect(p.hpGrowth).toBeGreaterThanOrEqual(stage.id === 1 ? 1.015 : 1.045);
         expect(p.hpGrowth).toBeLessThanOrEqual(1.06);
-        expect(stage.baseHp).toBe([20, 20, 25, 25, 30, 30][stage.id - 1]);
+        expect(stage.baseHp).toBe([25, 20, 25, 25, 30, 30][stage.id - 1]);
         expect(stage.startGold).toBeGreaterThanOrEqual(220);
         expect(stage.startGold).toBeLessThanOrEqual(300);
         expect(stage.perWaveAmber).toBeGreaterThanOrEqual(1);
