@@ -105,8 +105,10 @@ export interface ExplosionOpts {
   smoke?: number;
   /** 지면 쇼크웨이브 색 (0이면 생략) */
   shock?: number;
-  /** 쇼크웨이브 기준 반경 (타일, 기본 0.5) */
+  /** 쇼크웨이브 기준 반경 (타일, 기본 0.5). strength로 스케일된다 */
   shockRadius?: number;
+  /** 쇼크웨이브 최종 반경을 직접 지정 (스플래시 반경에 링을 정확히 맞출 때) */
+  shockRadiusAbs?: number;
   /** 파편 중력 (기본 9). 돌=강, 불티=약 */
   gravity?: number;
   /** 파편 개수 배수 */
@@ -175,7 +177,7 @@ export class ParticleSystem {
       mesh.setMatrixAt(i, HIDDEN);
       mesh.setColorAt(i, _col.setRGB(1, 1, 1));
     }
-    mesh.count = capacity;
+    mesh.count = 0; // update()에서 생존 범위만큼 늘린다
     scene.add(mesh);
     return { mesh, pool, cursor: 0, capacity, live: 0 };
   }
@@ -197,16 +199,19 @@ export class ParticleSystem {
    */
   private budgetMul(strength: number): number {
     let m = this.qualityCount;
-    const load = this.main.live / this.main.capacity;
+    const load = Math.max(
+      this.main.live / this.main.capacity,
+      this.glow.live / this.glow.capacity,
+    );
     const big = strength >= 1.6;
     if (load > 0.62) m *= big ? 0.72 : 0.42;
     if (load > 0.85) m *= big ? 0.55 : 0.28;
     return m;
   }
 
-  /** 현재 본체 레이어 점유율 0~1 (연출 예산 판단용) */
+  /** 현재 점유율 0~1 (두 레이어 중 높은 쪽 — 연출 예산 판단용) */
   get load(): number {
-    return this.main.live / this.main.capacity;
+    return Math.max(this.main.live / this.main.capacity, this.glow.live / this.glow.capacity);
   }
 
   /** 방사형 버스트 (사망/착탄/업그레이드 등) */
@@ -322,32 +327,35 @@ export class ParticleSystem {
     const thick = opts.thickness ?? 1;
     _col.setHex(color);
     const spd = (radius * 2.1) / Math.max(0.05, life);
+    // 조각 하나가 덮는 호 길이 — 링이 통짜 원반으로 뭉치지 않도록 둘레에 맞춘다
+    const arc = (Math.PI * 2 * radius) / count;
     for (let i = 0; i < count; i++) {
       const p = this.spawn(true);
-      const a = ((i + this.rng.range(-0.3, 0.3)) / count) * Math.PI * 2;
+      const a = ((i + this.rng.range(-0.25, 0.25)) / count) * Math.PI * 2;
       const ca = Math.cos(a);
       const sa = Math.sin(a);
       p.alive = true;
-      p.x = x + ca * radius * 0.16;
+      p.x = x + ca * radius * 0.18;
       p.y = y;
-      p.z = z + sa * radius * 0.16;
+      p.z = z + sa * radius * 0.18;
       p.vx = ca * spd;
       p.vy = 0;
       p.vz = sa * spd;
       p.maxLife = p.life = life * this.rng.range(0.9, 1.1);
-      p.size = radius * 0.2 * thick;
-      p.r = _col.r; p.g = _col.g; p.b = _col.b;
+      p.size = arc * 0.4;
+      // 가산 링은 겹치면 순백으로 타버린다 — 밝기를 낮춰 무기 색이 남게 한다
+      p.r = _col.r * 0.78; p.g = _col.g * 0.78; p.b = _col.b * 0.78;
       p.gravity = 0;
       p.damping = 2.4;
       p.spin = 0;
-      // 링 접선 방향으로 눕힌 납작한 판
+      // 링 접선 방향으로 눕힌 납작한 판. 퍼지는 만큼 조각도 커져 틈이 벌어지지 않는다
       p.yaw = -a;
-      p.grow = radius * 0.5;
+      p.grow = arc * 0.95;
       p.taper = 1;
-      p.fadePow = 1.35;
-      p.sxm = 0.34;
-      p.sym = 0.16;
-      p.szm = 1.5;
+      p.fadePow = 1.4;
+      p.sxm = 0.42 * thick;
+      p.sym = 0.16 * thick;
+      p.szm = 1.25;
       p.ambient = false;
     }
   }
@@ -364,16 +372,30 @@ export class ParticleSystem {
     const flashMul = opts.flashMul ?? 1;
     const spread = opts.spreadMul ?? 1;
 
-    // 1) 코어 플래시 — 가장 크고 밝게, 그러나 아주 짧게
-    const flashN = Math.max(2, Math.round((3 + 5 * s) * m));
+    // 1a) 코어 플래시 — 아주 짧게 번쩍이고 줄어들며 꺼진다.
+    //     크게 키우고 taper를 1로 두면 가산 누적이 흰 안개로 뭉개진다.
+    const coreN = Math.max(1, Math.round((1 + 1.3 * s) * m));
     this.burst(
-      x, y, z, opts.core, flashN,
-      (0.9 + 1.1 * s) * spread,
-      0.155 * Math.pow(s, 0.8) * sizeMul * flashMul,
-      (0.1 + 0.05 * s) * flashMul,
+      x, y, z, opts.core, coreN,
+      0.55 * spread,
+      0.112 * Math.pow(s, 0.75) * sizeMul * flashMul,
+      (0.075 + 0.03 * s) * flashMul,
       {
-        glow: true, gravity: 0, drag: 7, upBias: 0.5, sizeVar: 0.4,
-        grow: 0.9 * s * flashMul, taper: 1, fadePow: 1.4, spin: 0.4,
+        glow: true, gravity: 0, drag: 8, upBias: 0.5, sizeVar: 0.25,
+        grow: 0.25 * s * flashMul, taper: 0.35, fadePow: 1.5, spin: 0.25,
+      },
+    );
+
+    // 1b) 스파크 — 가늘고 길쭉한 조각이 빠르게 뻗는다 (작지만 강렬)
+    const sparkN = Math.max(2, Math.round((4 + 7 * s) * flashMul * m));
+    this.burst(
+      x, y, z, opts.core, sparkN,
+      (2.2 + 2.6 * s) * spread,
+      0.045 * Math.pow(s, 0.5) * sizeMul,
+      0.13 + 0.09 * s,
+      {
+        glow: true, gravity: 1.5, drag: 4.2, upBias: 0.6, sizeVar: 0.5,
+        taper: 0.3, fadePow: 1.15, spin: 0.8, scaleXYZ: [0.5, 0.5, 2.6],
       },
     );
 
@@ -381,25 +403,26 @@ export class ParticleSystem {
     const debrisN = Math.max(2, Math.round((7 + 11 * s) * (opts.debrisMul ?? 1) * m));
     this.burst(
       x, y, z, opts.debris, debrisN,
-      (2.4 + 1.7 * s) * spread,
-      0.082 * Math.pow(s, 0.6) * sizeMul,
-      0.36 + 0.26 * s,
+      (2.5 + 1.9 * s) * spread,
+      0.058 * Math.pow(s, 0.5) * sizeMul,
+      0.34 + 0.24 * s,
       {
         gravity: opts.gravity ?? 9, drag: 2.0, upBias: 0.72,
-        sizeVar: 0.78, spin: 1.5, taper: 0.22,
+        sizeVar: 0.8, spin: 1.5, taper: 0.22,
       },
     );
 
-    // 3) 잔불/연기 — 작고 오래, 위로 부유하며 퍼진다
-    const smokeN = Math.max(1, Math.round((4 + 6 * s) * (opts.smokeMul ?? 1) * m));
+    // 3) 잔불/연기 — 작고 오래, 위로 부유하며 천천히 퍼진다.
+    //    grow를 크게 주면 덩어리로 뭉쳐 화면이 탁해진다 — 개수로 볼륨을 낸다.
+    const smokeN = Math.max(1, Math.round((5 + 7 * s) * (opts.smokeMul ?? 1) * m));
     this.burst(
       x, y + 0.08, z, opts.smoke ?? opts.debris, smokeN,
-      (0.7 + 0.5 * s) * spread,
-      0.058 * Math.pow(s, 0.45) * sizeMul,
-      (0.7 + 0.6 * s) * (opts.smokeLifeMul ?? 1),
+      (0.9 + 0.7 * s) * spread,
+      0.044 * Math.pow(s, 0.4) * sizeMul,
+      (0.55 + 0.35 * s) * (opts.smokeLifeMul ?? 1),
       {
-        gravity: -1.1, drag: 1.5, upBias: 0.85,
-        sizeVar: 0.55, spin: 0.5, grow: 0.16 * s, taper: 0.45,
+        gravity: -1.0, drag: 1.5, upBias: 0.88,
+        sizeVar: 0.55, spin: 0.5, grow: 0.03 * s, taper: 0.4,
       },
     );
 
@@ -407,10 +430,10 @@ export class ParticleSystem {
     const shockColor = opts.shock ?? opts.core;
     const shockMul = opts.shockMul ?? 1;
     if (shockColor !== 0 && shockMul > 0) {
-      const r = (opts.shockRadius ?? 0.5) * (0.75 + 0.55 * s);
+      const r = opts.shockRadiusAbs ?? (opts.shockRadius ?? 0.5) * (0.75 + 0.55 * s);
       this.shockwave(x, z, shockColor, r, 0.24 + 0.11 * s, {
         count: (14 + 7 * s) * shockMul * Math.max(0.45, m),
-        thickness: 0.85 + 0.35 * s,
+        thickness: 0.95 + 0.22 * s,
       });
     }
   }
@@ -454,6 +477,7 @@ export class ParticleSystem {
   private updateLayer(layer: Layer, dt: number, additive: boolean): number {
     let ambientAlive = 0;
     let live = 0;
+    let highest = -1;
     const mesh = layer.mesh;
     for (let i = 0; i < layer.capacity; i++) {
       const p = layer.pool[i] as P;
@@ -465,6 +489,7 @@ export class ParticleSystem {
         continue;
       }
       live++;
+      highest = i;
       if (p.ambient) ambientAlive++;
       p.vy -= p.gravity * dt;
       const d = Math.max(0, 1 - p.damping * dt);
@@ -484,6 +509,8 @@ export class ParticleSystem {
       mesh.setColorAt(i, _col.setRGB(p.r * k, p.g * k, p.b * k));
     }
     layer.live = live;
+    // 살아있는 최대 인덱스까지만 그린다 — 파티클이 없으면 드로우콜 0
+    mesh.count = highest + 1;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     return ambientAlive;

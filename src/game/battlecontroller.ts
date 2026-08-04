@@ -340,6 +340,15 @@ export class BattleController {
         this.sim.applyCommand({ type: 'placeTower', handIndex, cellX: x, cellZ: z }),
       callWave: (): boolean => this.sim.applyCommand({ type: 'callWave' }),
       drawCalls: (): number => this.renderer.gl.info.render.calls,
+      // 연출 검증용: 루프를 멈춘 채 파티클/카메라 시간만 수동으로 진행시켜
+      // 착탄 직후 프레임을 정확한 간격으로 캡처한다
+      pause: (v: boolean): void => {
+        this.loop.paused = v;
+      },
+      stepFx: (sec: number): void => {
+        this.stage3d.update(sec);
+        this.camera.update(sec);
+      },
       // 입력/뷰포트 검증용 (모바일 e2e)
       selectCard: (i: number | null): void => this.api.selectCard(i),
       selectedCard: (): number | null => this.api.selectedCard(),

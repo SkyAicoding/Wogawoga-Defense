@@ -111,8 +111,9 @@ const IMPACT_STYLE: Record<TowerId, ImpactStyle> = {
   catapult: {
     ...BASE_STYLE,
     core: 0xffe0a8,
-    debris: 0x9a8b72,
-    smoke: 0xb3a691,
+    debris: 0x8d7d63,
+    // 파편보다 밝은 흙먼지 — 같은 톤이면 한 덩어리로 뭉쳐 탁해진다
+    smoke: 0xd9cdb2,
     shock: 0xe8cf9e,
     gravity: 12,
     debrisMul: 1.55,
@@ -415,8 +416,6 @@ export class FxRouter {
           const w = s3.cellToWorld(ev.x, ev.z, this.v);
           const st = IMPACT_STYLE[ev.towerDefId];
           const s = fxStrength(ev.dmg, ev.tier);
-          // 스플래시면 실제 반경으로 지면 링을 맞춘다
-          const shockR = ev.splashRadius !== undefined ? ev.splashRadius * 0.62 : st.shockRadius;
           s3.particles.explosion(w.x, ev.splash ? 0.22 : 0.42, w.z, {
             strength: s,
             core: st.core,
@@ -425,13 +424,15 @@ export class FxRouter {
             shock: st.shock,
             gravity: st.gravity,
             debrisMul: st.debrisMul * (ev.splash ? 1.2 : 1),
-            smokeMul: st.smokeMul * (ev.splash ? 1.2 : 1),
+            smokeMul: st.smokeMul * (ev.splash ? 1.15 : 1),
             shockMul: st.shockMul * (ev.splash ? 1.25 : 0.8),
             sizeMul: st.sizeMul,
             flashMul: st.flashMul,
             spreadMul: st.spreadMul,
             smokeLifeMul: st.smokeLifeMul,
-            shockRadius: shockR,
+            shockRadius: st.shockRadius,
+            // 스플래시면 링이 실제 피해 반경을 그대로 그린다 (가독성 = 정보)
+            ...(ev.splashRadius !== undefined ? { shockRadiusAbs: ev.splashRadius * 1.02 } : {}),
           });
           if (ev.splash) {
             audio.play('boulderImpact');
@@ -507,12 +508,34 @@ export class FxRouter {
    */
   private auraFleck(source: TowerId | StatusKind, amount: number, x: number, z: number): void {
     if (source !== 'brazier' && source !== 'burn' && source !== 'poison') return;
-    if (this.auraFlecks >= 6 || this.stage3d.particles.load > 0.75) return;
+    if (this.auraFlecks >= 5 || this.stage3d.particles.load > 0.72) return;
     this.auraFlecks++;
-    // 피해량이 곧 티어 → 티어가 오르면 불티도 굵고 오래간다
+    // 오라 피해량이 곧 티어 → 티어가 오르면 펄스도 굵고 오래간다
     const s = fxStrength(amount, 0);
-    const fire = source !== 'poison';
     const w = this.stage3d.cellToWorld(x, z, this.v);
+    if (source === 'brazier') {
+      // 오라 펄스는 별도 이벤트가 없다 — 피해를 입은 적 자리에서 작은 화염 폭발로 보여준다
+      const st = IMPACT_STYLE.brazier;
+      this.stage3d.particles.explosion(w.x, 0.3, w.z, {
+        strength: s * 0.85,
+        core: st.core,
+        debris: st.debris,
+        smoke: st.smoke,
+        shock: st.shock,
+        gravity: -1.4,
+        debrisMul: 0.85,
+        smokeMul: 1.25,
+        shockMul: 0.6,
+        sizeMul: 0.9,
+        flashMul: 0.85,
+        spreadMul: 0.85,
+        smokeLifeMul: 1.5,
+        shockRadius: 0.32,
+      });
+      return;
+    }
+    // 화상/독 DoT — 잔불·포자 몇 점만
+    const fire = source === 'burn';
     this.stage3d.particles.burst(
       w.x,
       0.35,
