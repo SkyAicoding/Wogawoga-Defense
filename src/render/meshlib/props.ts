@@ -288,18 +288,50 @@ const PROP_SETS: Record<BiomeId, (() => PartSpec[])[]> = {
 };
 
 /**
+ * 소품 크기 배율 범위. 플레이어가 세운 타워(T1 = 루트 스케일 0.60)가 필드에서
+ * 가장 작은 오브젝트가 되지 않도록 장식 소품을 낮춘다 — 침엽수 최고점이
+ * 월드 1.52 → 1.16 로 내려와 타워(스피어 T1 0.80)와 같은 눈높이 대역에 들어온다.
+ */
+const PROP_SCALE_MIN = 0.62;
+const PROP_SCALE_MAX = 0.88;
+
+/** 소품이 셀 중심에서 흩어지는 최대 오프셋 (마커가 같은 값을 써서 밑동을 감싼다) */
+export const PROP_JITTER = 0.18;
+
+export interface PropsBuild {
+  group: THREE.Group;
+  /**
+   * 그 셀의 소품을 없애고 남은 셀만 다시 병합한다 (드로우콜은 그대로 1).
+   * 제거된 게 있으면 true. 골드 제거는 드문 이벤트라 재병합 비용을 감수한다.
+   */
+  removeCell(cellX: number, cellZ: number): boolean;
+  /**
+   * 그 셀 소품의 셀 중심 대비 산포 오프셋 (없으면 null).
+   * 선택 링이 밑동을 정확히 감싸도록 데칼이 이 값을 쓴다.
+   */
+  offsetOf(cellX: number, cellZ: number): { dx: number; dz: number } | null;
+  dispose(): void;
+}
+
+/**
  * 지정된 소품 셀에 산포 — 병합 메시 1개 반환.
  * 셀 선택은 data/grid.sceneryCells가 담당 (sim의 건설 불가 판정과 동일 시드).
+ *
+ * 셀별 변환 완료 지오메트리를 CPU에 들고 있다가 removeCell 시 남은 것만 재병합한다.
+ * (셀마다 Mesh를 두면 드로우콜이 소품 수만큼 늘어 예산을 즉시 초과한다)
  */
 export function buildProps(
   biome: BiomeId,
   propCellList: readonly Vec2[],
   cellToWorld: (x: number, z: number, out?: THREE.Vector3) => THREE.Vector3,
   seed: number,
-): { group: THREE.Group; dispose(): void } {
+): PropsBuild {
   const rng = new Rng(hashSeed(`props:${biome}:${seed}`));
   const set = PROP_SETS[biome];
-  const clones: THREE.BufferGeometry[] = [];
+  /** 셀 좌표 → 그 셀의 변환/틴트 완료 지오메트리 (병합 전 원본, 재병합용으로 보관) */
+  const parts = new Map<string, THREE.BufferGeometry>();
+  /** 셀 좌표 → 산포 오프셋 (선택 링이 밑동을 감싸도록 밖에 알려 준다) */
+  const offsets = new Map<string, { dx: number; dz: number }>();
   const v = new THREE.Vector3();
   for (const cell of propCellList) {
     const idx = rng.int(0, set.length - 1);
@@ -310,32 +342,63 @@ export function buildProps(
     );
     cellToWorld(cell.x, cell.z, v);
     const g = proto.clone();
+    const dx = rng.range(-PROP_JITTER, PROP_JITTER);
+    const dz = rng.range(-PROP_JITTER, PROP_JITTER);
     geoTransform(
       g,
-      v.x + rng.range(-0.18, 0.18),
+      v.x + dx,
       0,
-      v.z + rng.range(-0.18, 0.18),
+      v.z + dz,
       rng.range(0, Math.PI * 2),
-      rng.range(0.8, 1.15),
+      rng.range(PROP_SCALE_MIN, PROP_SCALE_MAX),
     );
     tintGeo(g, rng.range(0.92, 1.08));
-    clones.push(g);
+    parts.set(`${cell.x},${cell.z}`, g);
+    offsets.set(`${cell.x},${cell.z}`, { dx, dz });
   }
 
   const group = new THREE.Group();
   group.name = 'props';
-  let merged: THREE.BufferGeometry | null = null;
-  if (clones.length > 0) {
-    merged = mergeGeometries(clones, false);
-    for (const g of clones) g.dispose();
-    if (merged) {
-      const mesh = new THREE.Mesh(merged, flatMat());
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      group.add(mesh);
-    }
-  }
-  return { group, dispose: () => merged?.dispose() };
+  // flatMat()은 모듈 공유 싱글턴 — 여기서 dispose하면 안 된다
+  const mesh = new THREE.Mesh(new THREE.BufferGeometry(), flatMat());
+  mesh.name = 'propsMesh';
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  group.add(mesh);
+
+  /** 남은 셀 전체를 하나로 병합 — 소품이 0개면 메시를 숨겨 드로우콜도 0으로 */
+  const remerge = (): void => {
+    const prev = mesh.geometry;
+    const live = [...parts.values()];
+    const merged = live.length > 0 ? mergeGeometries(live, false) : null;
+    mesh.geometry = merged ?? new THREE.BufferGeometry();
+    mesh.visible = merged !== null;
+    prev.dispose();
+  };
+  remerge();
+
+  return {
+    group,
+    removeCell(cellX: number, cellZ: number): boolean {
+      const key = `${cellX},${cellZ}`;
+      const g = parts.get(key);
+      if (!g) return false;
+      parts.delete(key);
+      offsets.delete(key);
+      g.dispose();
+      remerge();
+      return true;
+    },
+    offsetOf(cellX: number, cellZ: number): { dx: number; dz: number } | null {
+      return offsets.get(`${cellX},${cellZ}`) ?? null;
+    },
+    dispose(): void {
+      mesh.geometry.dispose();
+      for (const g of parts.values()) g.dispose();
+      parts.clear();
+      offsets.clear();
+    },
+  };
 }
 
 /** 테스트/계측용 — 소품 원형 빌더 목록 (바이옴별 중복 제거) */

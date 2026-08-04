@@ -89,7 +89,12 @@ export class DioramaCamera {
   private hasFit = false;
 
   static readonly ZOOM_MIN = 1;
-  static readonly ZOOM_MAX = 2.6;
+  /**
+   * 최대 줌 3.1 — 세로(iPhone 13 390×664) 기준 2.6에서는 셀 간격이 37px 에 그쳐
+   * 모바일 44px 터치 타깃 가이드라인에 못 미쳤다(실측). 3.1이면 세로 44.5px,
+   * 데스크톱 61px 로 두 프로필 모두 가이드라인을 넘긴다.
+   */
+  static readonly ZOOM_MAX = 3.1;
 
   // --- 궤도 상태 (목표 각도 → update에서 지수 감쇠 보간) --------------------
   private yawGoal = YAW_BASE;

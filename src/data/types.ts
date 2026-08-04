@@ -341,6 +341,7 @@ export type BattleCommand =
   | { type: 'sellTower'; towerId: number }
   | { type: 'refreshHand' }
   | { type: 'setTargeting'; towerId: number; mode: TargetingMode }
+  | { type: 'clearScenery'; cellX: number; cellZ: number } // 골드로 나무/바위 치우기
   | { type: 'callWave' }; // prep 스킵 (조기 호출 보너스)
 
 // ---------------------------------------------------------------------------
@@ -374,6 +375,16 @@ export type SimEvent =
   | { type: 'towerPlaced'; towerId: number; defId: TowerId; cellX: number; cellZ: number }
   | { type: 'towerUpgraded'; towerId: number; defId: TowerId; tier: number }
   | { type: 'towerSold'; towerId: number; refund: number }
+  | {
+      /** 소품(나무/바위) 제거 성공 — 연출/사운드 + 렌더 소품 병합 갱신 */
+      type: 'sceneryCleared';
+      cellX: number;
+      cellZ: number;
+      /** 실제로 지불한 골드 */
+      cost: number;
+      /** 이 제거를 포함한 누적 제거 횟수 (1-base) */
+      clearedCount: number;
+    }
   | { type: 'towerFired'; towerId: number; defId: TowerId; targetId: number }
   | {
       type: 'projectileHit';
@@ -483,6 +494,10 @@ export interface BattleSim {
   towerAt(cellX: number, cellZ: number): TowerState | null;
   upgradeCost(towerId: number): number | null;
   sellRefund(towerId: number): number | null;
+  /** 그 셀에 아직 치우지 않은 소품(나무/바위)이 있는가 */
+  hasScenery(cellX: number, cellZ: number): boolean;
+  /** 지금 그 셀을 치우는 데 드는 골드 (소품이 없으면 null) — 제거 횟수에 따라 오른다 */
+  clearSceneryCost(cellX: number, cellZ: number): number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +542,16 @@ export interface BattleUiApi {
   selectedCard(): number | null;
   /** 현재 선택된 배치 타워 id (없으면 null) */
   selectedTower(): number | null;
+  /** 현재 선택된 소품 셀 (없으면 null) — 제거 패널 표시용 */
+  selectedScenery(): Vec2 | null;
+  /** 선택된 소품 셀 제거 요청 (골드 부족/미선택이면 무시) */
+  requestClearScenery(): void;
+  /**
+   * 선택(타워/소품)을 해제한다 — 패널의 닫기 버튼용.
+   * 패널이 그 셀을 덮으면 "같은 셀 재탭으로 닫기"가 물리적으로 불가능하므로
+   * UI 쪽에 명시적인 해제 경로가 필요하다.
+   */
+  clearSelection(): void;
   requestSetTargeting(mode: TargetingMode): void;
   requestRefresh(): void;
   requestCallWave(): void;

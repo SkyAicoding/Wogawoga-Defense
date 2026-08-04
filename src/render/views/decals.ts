@@ -27,9 +27,14 @@ export class Decals {
   private rangeSoft: THREE.Mesh;
   private slots: THREE.Mesh | null = null;
   private slotMat: THREE.MeshBasicMaterial;
+  /** 슬롯 디스크 원본 셀 — 소품 제거로 셀이 추가되면 재병합한다 */
+  private slotCells: Vec2[] = [];
   private chevrons: THREE.Mesh | null = null;
   private chevronMat: THREE.MeshBasicMaterial;
   private chevronPulse = 0;
+  /** 탭한 소품 셀 표시 링 (메시 1개 = 드로우콜 1, 평소엔 숨김) */
+  private marker: THREE.Mesh;
+  private markerMat: THREE.MeshBasicMaterial;
   private time = 0;
   private disposables: (THREE.BufferGeometry | THREE.Material)[] = [];
 
@@ -58,31 +63,33 @@ export class Decals {
     }
     this.slotMat = groundMat(0xffe084, 0.0);
     this.chevronMat = groundMat(0xfff2c0, 0.0);
-    this.disposables.push(fillGeo, edgeGeo, softGeo, fillMat, edgeMat, softMat, this.slotMat, this.chevronMat);
+
+    // 선택 마커 — 사거리 링과 구분되게 주황 계열.
+    // 링(지면) + 수직 기둥 + 정수리 다이아몬드를 **하나로 병합**해 드로우콜 1을 지킨다.
+    // 하단 HUD 패널이 그 셀을 덮어도 기둥/다이아가 패널 위로 솟아 "여기다"가 보인다.
+    const markerGeo = buildMarkerGeo();
+    this.markerMat = groundMat(0xffa63c, 0.9);
+    // 소품·지형에 가려지면 선택 표시로서 쓸모가 없다 — 항상 위에 그린다
+    this.markerMat.depthTest = false;
+    this.marker = new THREE.Mesh(markerGeo, this.markerMat);
+    this.marker.visible = false;
+    this.marker.renderOrder = 5;
+    this.group.add(this.marker);
+
+    this.disposables.push(
+      fillGeo, edgeGeo, softGeo, fillMat, edgeMat, softMat,
+      this.slotMat, this.chevronMat, markerGeo, this.markerMat,
+    );
   }
 
   /** 스테이지 데이터 준비 — 슬롯 위치/경로에 종속된 정적 데칼 생성 */
   init(slotCells: readonly Vec2[], paths: readonly Vec2[][]): void {
     // 슬롯 하이라이트: 병합된 디스크들 (배치 모드에서만 표시)
-    const slotGeos: THREE.BufferGeometry[] = [];
-    const v = new THREE.Vector3();
-    for (const cell of slotCells) {
-      const g = new THREE.CircleGeometry(0.34, 20);
-      g.rotateX(-Math.PI / 2);
-      this.cellToWorld(cell.x, cell.z, v);
-      g.translate(v.x, DECAL_Y + 0.06, v.z);
-      slotGeos.push(g);
-    }
-    if (slotGeos.length > 0) {
-      const merged = mergeGeos(slotGeos);
-      this.slots = new THREE.Mesh(merged, this.slotMat);
-      this.slots.renderOrder = 2;
-      this.slots.visible = false;
-      this.group.add(this.slots);
-      this.disposables.push(merged);
-    }
+    this.slotCells = slotCells.map((c) => ({ x: c.x, z: c.z }));
+    this.rebuildSlots();
 
     // 경로 셰브런: 1.1 간격으로 진행방향 삼각형
+    const v = new THREE.Vector3();
     const chevGeos: THREE.BufferGeometry[] = [];
     const sample = { x: 0, z: 0, heading: 0 };
     for (const path of paths) {
@@ -108,12 +115,55 @@ export class Decals {
       }
     }
     if (chevGeos.length > 0) {
-      const merged = mergeGeos(chevGeos);
-      this.chevrons = new THREE.Mesh(merged, this.chevronMat);
+      this.chevrons = new THREE.Mesh(mergeGeos(chevGeos), this.chevronMat);
       this.chevrons.renderOrder = 2;
       this.group.add(this.chevrons);
-      this.disposables.push(merged);
     }
+  }
+
+  /** slotCells → 병합 디스크 메시 1개 재생성 (셀 추가는 드물어 통째로 다시 만든다) */
+  private rebuildSlots(): void {
+    const visible = this.slots?.visible ?? false;
+    if (this.slots) {
+      this.group.remove(this.slots);
+      this.slots.geometry.dispose();
+      this.slots = null;
+    }
+    if (this.slotCells.length === 0) return;
+    const geos: THREE.BufferGeometry[] = [];
+    const v = new THREE.Vector3();
+    for (const cell of this.slotCells) {
+      const g = new THREE.CircleGeometry(0.34, 20);
+      g.rotateX(-Math.PI / 2);
+      this.cellToWorld(cell.x, cell.z, v);
+      g.translate(v.x, DECAL_Y + 0.06, v.z);
+      geos.push(g);
+    }
+    this.slots = new THREE.Mesh(mergeGeos(geos), this.slotMat);
+    this.slots.renderOrder = 2;
+    this.slots.visible = visible;
+    this.group.add(this.slots);
+  }
+
+  /** 소품을 치워 새로 건설 가능해진 셀을 슬롯 하이라이트에 편입 */
+  addSlotCell(cellX: number, cellZ: number): void {
+    if (this.slotCells.some((c) => c.x === cellX && c.z === cellZ)) return;
+    this.slotCells.push({ x: cellX, z: cellZ });
+    this.rebuildSlots();
+  }
+
+  /**
+   * 탭한 소품 셀 하이라이트 표시.
+   * offset은 소품이 셀 중심에서 흩어진 양(props.offsetOf) — 링이 실제 밑동을 감싼다.
+   */
+  showCellMarker(cellX: number, cellZ: number, offsetX = 0, offsetZ = 0): void {
+    const v = this.cellToWorld(cellX, cellZ);
+    this.marker.position.set(v.x + offsetX, DECAL_Y + 0.04, v.z + offsetZ);
+    this.marker.visible = true;
+  }
+
+  hideCellMarker(): void {
+    this.marker.visible = false;
   }
 
   /** 사거리 링 표시 (셀 좌표 + 타일 단위 반경) */
@@ -162,13 +212,39 @@ export class Decals {
       (this.rangeEdge.material as THREE.MeshBasicMaterial).opacity =
         0.7 + Math.sin(this.time * 4) * 0.15;
     }
+    // 선택 마커 — 살짝 커졌다 작아지며 "여기다" 하고 알린다.
+    // 기둥까지 같이 늘리면 다이아가 출렁이므로 수평만 호흡시킨다.
+    if (this.marker.visible) {
+      const s = 1 + Math.sin(this.time * 6) * 0.09;
+      this.marker.scale.set(s, 1, s);
+      this.markerMat.opacity = 0.72 + Math.sin(this.time * 6) * 0.22;
+    }
   }
 
   dispose(): void {
     this.group.parent?.remove(this.group);
+    this.slots?.geometry.dispose();
+    this.chevrons?.geometry.dispose();
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
   }
+}
+
+/**
+ * 선택 마커 지오메트리 — 지면 링 + 수직 기둥 + 정수리 다이아를 하나로 병합.
+ * 기둥 높이 2.2 월드는 하단 HUD 패널이 그 셀을 덮었을 때 패널 위로 솟아나오는 최소치다
+ * (기본 줌 세로/가로 실측 기준). 총 92 삼각형 / 드로우콜 1.
+ */
+const MARKER_BEACON_H = 2.2;
+
+function buildMarkerGeo(): THREE.BufferGeometry {
+  const ring = new THREE.RingGeometry(0.3, 0.46, 24);
+  ring.rotateX(-Math.PI / 2);
+  const shaft = new THREE.CylinderGeometry(0.028, 0.05, MARKER_BEACON_H, 4, 1, true);
+  shaft.translate(0, MARKER_BEACON_H / 2, 0);
+  const tip = new THREE.OctahedronGeometry(0.13);
+  tip.translate(0, MARKER_BEACON_H + 0.12, 0);
+  return mergeGeos([ring, shaft, tip]);
 }
 
 /** 소규모 병합 헬퍼 (BufferGeometryUtils 의존 없이 non-indexed 위치만) */

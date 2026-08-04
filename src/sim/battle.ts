@@ -20,7 +20,7 @@ import { Rng } from '@/core/rng';
 import { isBuildableCell, rasterizePathCells, sceneryCells } from '@/data/grid';
 import { recomputeBuffs, updateProjectiles, updateTowers } from './attack';
 import { addGold, leakEnemy } from './combat';
-import { Economy, sellRefundFor } from './economy';
+import { Economy, sceneryClearCostFor, sellRefundFor } from './economy';
 import { pathFor, World, type EnemySim, type SimCtx } from './entities';
 import { buildPath, buildStraight } from './path';
 import { effectiveSpeed, processHealAuras, tickEnemyStatuses } from './status';
@@ -53,8 +53,13 @@ class Battle implements BattleSim {
   private waveDef: WaveDef | null = null;
   /** 경로가 지나는 셀 — 건설 불가 (render와 동일 래스터라이즈) */
   private readonly pathCells: ReadonlySet<number>;
-  /** 나무/바위 등 소품 셀 — 건설 불가 (render와 동일 시드) */
-  private readonly scenery: ReadonlySet<number>;
+  /**
+   * 나무/바위 등 소품 셀 — 건설 불가 (render와 동일 시드).
+   * clearScenery로 치우면 여기서 빠져 그 자리에 타워를 지을 수 있게 된다.
+   */
+  private readonly scenery: Set<number>;
+  /** 치운 소품 셀 키 — 제거 순서대로. length가 곧 다음 제거 비용의 지수 */
+  private readonly clearedScenery: number[] = [];
 
   constructor(opts: BattleOptions) {
     const stage = opts.stage;
@@ -227,6 +232,8 @@ class Battle implements BattleSim {
         t.targetId = -1; // 새 모드로 재조준
         return true;
       }
+      case 'clearScenery':
+        return this.cmdClearScenery(cmd.cellX, cmd.cellZ);
       case 'callWave': {
         // 이미 호출됨(카운트다운 0)이면 중복 호출 거부
         if (v.phase !== 'prep' || v.prepTicksLeft <= 0) return false;
@@ -293,6 +300,28 @@ class Battle implements BattleSim {
     return true;
   }
 
+  /**
+   * 골드로 소품 치우기 — 성공하면 그 셀은 즉시 건설 가능해진다.
+   * 이미 치운 셀/소품 없는 셀/골드 부족이면 거부(골드 이중 차감 불가).
+   */
+  private cmdClearScenery(cellX: number, cellZ: number): boolean {
+    const ctx = this.ctx;
+    const cost = this.clearSceneryCost(cellX, cellZ);
+    if (cost === null || ctx.view.gold < cost) return false;
+    const key = cellZ * ctx.opts.stage.gridW + cellX;
+    addGold(ctx, -cost);
+    this.scenery.delete(key);
+    this.clearedScenery.push(key);
+    ctx.events.push({
+      type: 'sceneryCleared',
+      cellX,
+      cellZ,
+      cost,
+      clearedCount: this.clearedScenery.length,
+    });
+    return true;
+  }
+
   drainEvents(): SimEvent[] {
     const ev = this.ctx.events;
     return ev.splice(0, ev.length); // 배열 참조 유지 (SimCtx 공유)
@@ -324,16 +353,33 @@ class Battle implements BattleSim {
       h = mix(h, Math.round(p.z * 1000));
       h = mix(h, p.dmg);
     }
+    // 지형 개조 상태 — 어떤 셀을 어떤 순서로 치웠는지까지 해시에 넣어야
+    // 제거를 포함한 커맨드열의 결정론이 검증된다
+    h = mix(h, this.clearedScenery.length);
+    for (const key of this.clearedScenery) h = mix(h, key);
     return h;
   }
 
   canPlaceAt(cellX: number, cellZ: number): boolean {
     const stage = this.ctx.opts.stage;
     if (!Number.isInteger(cellX) || !Number.isInteger(cellZ)) return false;
-    // 자유 배치: 경로/물/장식('#')/소품(나무·바위)이 아닌 빈 땅 어디든
+    // 자유 배치: 경로/물/장식('#')/소품(나무·바위)이 아닌 빈 땅 어디든.
+    // 치운 소품 셀은 scenery에서 빠졌으므로 여기서 통과한다
     if (!isBuildableCell(stage, this.pathCells, cellX, cellZ)) return false;
     if (this.scenery.has(cellZ * stage.gridW + cellX)) return false;
     return this.towerAt(cellX, cellZ) === null;
+  }
+
+  hasScenery(cellX: number, cellZ: number): boolean {
+    const stage = this.ctx.opts.stage;
+    if (!Number.isInteger(cellX) || !Number.isInteger(cellZ)) return false;
+    if (cellX < 0 || cellX >= stage.gridW || cellZ < 0 || cellZ >= stage.gridH) return false;
+    return this.scenery.has(cellZ * stage.gridW + cellX);
+  }
+
+  clearSceneryCost(cellX: number, cellZ: number): number | null {
+    if (!this.hasScenery(cellX, cellZ)) return null;
+    return sceneryClearCostFor(this.clearedScenery.length);
   }
 
   towerAt(cellX: number, cellZ: number): TowerState | null {

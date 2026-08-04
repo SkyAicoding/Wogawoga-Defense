@@ -7,7 +7,7 @@
 import type {
   BattleSim, BattleStateView, BattleUiApi, CardState, GameFacade, ProfileApi,
   ProfileData, ResultSummary, ScreenId, StageProgress, TargetingMode, TowerId,
-  TowerProgress, TowerState,
+  TowerProgress, TowerState, Vec2,
 } from '@/data/types';
 import { TICK_RATE } from '@/data/types';
 import { ScreenFsm } from '@/core/fsm';
@@ -132,10 +132,14 @@ export function run(): void {
     towerAt: () => null,
     upgradeCost: () => 120,
     sellRefund: () => 45,
+    // 목: (3,4)에만 소품이 있다고 가정 — 제거 패널 레이아웃 확인용
+    hasScenery: (x, z) => x === 3 && z === 4,
+    clearSceneryCost: (x, z) => (x === 3 && z === 4 ? 80 : null),
   };
 
   let selectedCard: number | null = null;
   let selectedTower: number | null = null;
+  let selectedScenery: Vec2 | null = null;
   let waveTicksLeft = 0;
 
   const startWave = (): void => {
@@ -172,12 +176,20 @@ export function run(): void {
     requestSellSelected: () => {
       selectedTower = null;
     },
+    clearSelection: () => {
+      selectedTower = null;
+      selectedScenery = null;
+    },
     quitToLobby: () => {
       facade.battle = null;
       fsm.goto('lobby');
     },
     retry: () => undefined,
     selectedTower: () => selectedTower,
+    selectedScenery: () => selectedScenery,
+    requestClearScenery: () => {
+      selectedScenery = null;
+    },
     requestSetTargeting: (mode) => {
       mockTower.targeting = mode;
     },

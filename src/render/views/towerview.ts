@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import type { EnemyState, TowerId, TowerState } from '@/data/types';
 import { clamp, clamp01, damp, easeInOutQuad, easeOutCubic, lerp, lerpAngle } from '@/core/mathx';
 import { flatMat, glowMat } from '../palette';
-import { assembleTower, buildTower } from '../meshlib/towers';
+import { assembleTower, buildTower, towerTierScale } from '../meshlib/towers';
 import type { CellToWorld } from '../meshlib/terrain';
 
 /** 방향성 무기 — 헤드가 현재 타깃을 향해 요 회전 */
@@ -31,6 +31,8 @@ const RECOIL_TIME = 0.22;
 const POP_TIME = 0.3;
 /** ballista: 발사 직후 볼트 숨김 시간 */
 const BOLT_HIDE = 0.12;
+/** 배치 고스트 크기 — 실제로 놓이는 건 T1이므로 T1 크기와 같아야 한다 */
+const GHOST_SCALE = towerTierScale(0);
 
 interface TowerEntry {
   root: THREE.Group;
@@ -39,6 +41,12 @@ interface TowerEntry {
   flash: THREE.Mesh | null;
   defId: TowerId;
   tier: number;
+  /**
+   * 티어 시각 크기 배율 — 루트에 곱해 팝/반동 애니와 함께 실린다.
+   * 루트 스케일이라 그림자·발사 연출·actionPivot(투사체 발사 위치)이 전부 따라온다.
+   * 사거리 링은 decals가 게임 데이터로 따로 그리므로 여기 영향을 받지 않는다.
+   */
+  tierScale: number;
   /** action 그룹 기본 로컬 위치 (애니 오프셋 기준점) */
   actionPos: THREE.Vector3;
   /** head 피벗 높이 (poison 런지 복원용) */
@@ -72,8 +80,8 @@ export class TowerView {
   private group = new THREE.Group();
   private towers = new Map<number, TowerEntry>();
   private ghost: THREE.Group | null = null;
-  private ghostMatValid: THREE.MeshBasicMaterial;
-  private ghostMatInvalid: THREE.MeshBasicMaterial;
+  private ghostMatValid: THREE.MeshLambertMaterial;
+  private ghostMatInvalid: THREE.MeshLambertMaterial;
   private enemyById = new Map<number, EnemyState>();
   private time = 0;
 
@@ -83,16 +91,27 @@ export class TowerView {
   ) {
     this.group.name = 'towers';
     scene.add(this.group);
-    this.ghostMatValid = new THREE.MeshBasicMaterial({
-      color: 0x4ade64,
+    // 고스트는 **음영이 있어야** 모델 형태가 읽힌다. 예전엔 MeshBasic 단색이라
+    // 잔디+슬롯 디스크 위의 초록 얼룩으로만 보였다(실측: 초록은 식별 불가, 빨강만 판독).
+    // Lambert + 버텍스 컬러에 색을 곱하면 실루엣/면 방향이 살아나고, 곱해지는 틴트가
+    // 가능(청록 초록)/불가(적색)를 구분한다.
+    // 곱해지는 틴트는 채도를 세게 잡아야 갈색 원목 위에서 '초록'으로 읽힌다
+    // (0x59ffb0 은 올리브로 뭉개져 잔디와 구분이 잘 안 됐다).
+    // emissive 는 그늘진 면까지 색을 유지시켜 지면에서 떼어 놓는 역할.
+    this.ghostMatValid = new THREE.MeshLambertMaterial({
+      vertexColors: true,
+      color: 0x1cff7a,
+      emissive: 0x0c6b38,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.9,
       depthWrite: false,
     });
-    this.ghostMatInvalid = new THREE.MeshBasicMaterial({
-      color: 0xe84a3a,
+    this.ghostMatInvalid = new THREE.MeshLambertMaterial({
+      vertexColors: true,
+      color: 0xff4234,
+      emissive: 0x6b1008,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.9,
       depthWrite: false,
     });
   }
@@ -100,6 +119,8 @@ export class TowerView {
   private makeEntry(defId: TowerId, tier: number): TowerEntry {
     const model = buildTower(defId, tier);
     const rig = assembleTower(model, { flat: flatMat(), glow: glowMat() }, true);
+    // 첫 update 전 한 프레임이 원본 크기로 번쩍이지 않게 팝 시작값(0.6)까지 미리 반영
+    rig.root.scale.setScalar(towerTierScale(tier) * 0.6);
     return {
       root: rig.root,
       head: rig.head,
@@ -107,6 +128,7 @@ export class TowerView {
       flash: rig.flash,
       defId,
       tier,
+      tierScale: towerTierScale(tier),
       actionPos: new THREE.Vector3(model.actionPivot[0], model.actionPivot[1], model.actionPivot[2]),
       headPosY: model.headPivotY,
       yaw: 0,
@@ -211,13 +233,14 @@ export class TowerView {
     return true;
   }
 
-  /** 배치 프리뷰 고스트 — 반투명 초록(가능)/빨강(불가) */
+  /** 배치 프리뷰 고스트 — 반투명 초록(가능)/빨강(불가). 배치되는 건 T1이라 T1 크기로 보여준다 */
   setGhost(defId: TowerId, cellX: number, cellZ: number, valid: boolean): void {
     this.clearGhost();
     const mat = valid ? this.ghostMatValid : this.ghostMatInvalid;
     const rig = assembleTower(buildTower(defId, 0), { flat: mat, glow: mat }, false);
     const v = this.cellToWorld(cellX, cellZ);
     rig.root.position.set(v.x, 0.1, v.z);
+    rig.root.scale.setScalar(GHOST_SCALE);
     this.group.add(rig.root);
     this.ghost = rig.root;
   }
@@ -240,9 +263,9 @@ export class TowerView {
       if (e.fireT > 0) e.fireT = Math.max(0, e.fireT - dt);
       this.animate(e, dt);
 
-      // 루트 스케일: 팝 + 미세 반동 + drum 오라 펄스
-      let sx = 1;
-      let sy = 1;
+      // 루트 스케일: 티어 크기 × (팝 + 미세 반동 + drum 오라 펄스)
+      let sx = e.tierScale;
+      let sy = e.tierScale;
       if (e.recoilT > 0) {
         e.recoilT = Math.max(0, e.recoilT - dt / RECOIL_TIME);
         const k = e.recoilT * e.recoilT;
@@ -265,9 +288,9 @@ export class TowerView {
       e.root.scale.set(sx, sy, sx);
     }
     if (this.ghost) {
-      // 고스트 호흡 애니
+      // 고스트 호흡 애니 — T1 크기 위에 곱한다
       const b = 1 + Math.sin(this.time * 6) * 0.03;
-      this.ghost.scale.setScalar(b);
+      this.ghost.scale.setScalar(GHOST_SCALE * b);
     }
   }
 

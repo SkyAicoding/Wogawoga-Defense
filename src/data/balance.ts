@@ -3,6 +3,7 @@
  *
  * ⚠ 아래 값들은 sim 쪽 하드코딩과 반드시 일치해야 한다 (통합 시 교차 검증):
  *  - SELL_REFUND_RATE       ↔ src/sim/economy.ts SELL_RATE      = 0.6
+ *  - SCENERY_CLEAR_*        ↔ src/sim/economy.ts sceneryClearCostFor
  *  - REFRESH_BASE_COST      ↔ src/sim/economy.ts REFRESH_BASE   = 20
  *  - REFRESH_COST_GROWTH    ↔ src/sim/economy.ts REFRESH_GROWTH = 1.6
  *  - HAND_SIZE              ↔ src/sim/economy.ts HAND_SIZE      = 3
@@ -20,6 +21,27 @@ export const SELL_REFUND_RATE = 0.6;
  * (sim/economy.ts가 임포트해 적용 — 핸드 CardState.cost는 항상 '지금 배치 시 실비용')
  */
 export const PLACEMENT_TAX = 0.1;
+/**
+ * 방해 지형지물(나무·바위) 제거 비용 — n번째 제거(n은 0-base 누적 제거 수)에
+ * = min(round(BASE × GROWTH^n), MAX). 환불 없음.
+ * (sim/economy.ts sceneryClearCostFor가 임포트해 적용)
+ *
+ * 튜닝 근거:
+ *  · BASE 80 = 최저가 타워(frost 90)에 살짝 못 미치는 값. "타워 한 기 안 짓고 자리를 산다"는
+ *    체감이라 첫 제거는 초반(startGold 300)에도 가능하지만 공짜는 절대 아니다.
+ *  · GROWTH 1.6 = 새로고침 곡선과 같은 기울기. 개별가 80/128/205/328/524/839/1342…,
+ *    누적 80/208/413/741/1265/2104…로 6회째 누적이 스테이지1 웨이브 1~20 총 보상
+ *    (1,860골드)을 넘긴다. 스테이지1 소품은 40칸이라 '맵을 민다'는 선택지 자체가 없다.
+ *    → 지형 개조는 타워 강화를 포기해야만 가능해 배치세(PLACEMENT_TAX) 밸런스가 유지된다.
+ *      실측: 불도저 봇(제거 우선)이 스테이지1에서 일반 봇보다 우세하지 않고
+ *      스테이지6은 여전히 클리어 불가 (tests/sim/autoplay.test.ts).
+ *  · MAX 4000 = 무한 모드 후반 골드 인플레에서도 지수가 오버플로하지 않게 하는 상한.
+ *    (T5 업그레이드 1600~2400보다 비싸 후반에도 '도배'가 이득이 되지 않는다)
+ */
+export const SCENERY_CLEAR_BASE_COST = 80;
+export const SCENERY_CLEAR_GROWTH = 1.6;
+export const SCENERY_CLEAR_MAX_COST = 4000;
+
 /** 핸드 새로고침: 웨이브당 1회 무료, 이후 20 × 1.6^n 반올림 */
 export const REFRESH_BASE_COST = 20;
 export const REFRESH_COST_GROWTH = 1.6;

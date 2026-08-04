@@ -34,6 +34,16 @@ export interface Stage3D {
   basecamp: Basecamp;
   /** 기지 피해 외형 0=온전/1=파손/2=반파 */
   setBaseDamageLevel(level: 0 | 1 | 2): void;
+  /**
+   * 소품 제거 반영 — 그 셀의 소품을 지우고 남은 소품을 재병합(드로우콜 유지),
+   * 배치 하이라이트 슬롯에 셀을 편입한다. sim의 sceneryCleared 이벤트에만 반응한다.
+   */
+  clearScenery(cellX: number, cellZ: number): boolean;
+  /**
+   * 그 셀 소품의 셀 중심 대비 산포 오프셋 (소품이 없으면 null).
+   * 선택 링을 실제 밑동에 맞추는 데 쓴다.
+   */
+  sceneryOffset(cellX: number, cellZ: number): { dx: number; dz: number } | null;
   /** 매 프레임: 뷰 애니/물결/파티클 갱신 */
   update(dt: number): void;
   dispose(): void;
@@ -167,6 +177,12 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
     particles,
     basecamp,
     setBaseDamageLevel: (level) => basecamp.setDamageLevel(level),
+    clearScenery(cellX: number, cellZ: number): boolean {
+      if (!props.removeCell(cellX, cellZ)) return false;
+      decals.addSlotCell(cellX, cellZ);
+      return true;
+    },
+    sceneryOffset: (cellX: number, cellZ: number) => props.offsetOf(cellX, cellZ),
     update(dt: number): void {
       time += dt;
       towers.update(dt);
@@ -204,6 +220,10 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
       underGeo.dispose();
       waterGeo.dispose();
       waterMat.dispose();
+      // 그림자 맵(렌더 타깃)은 씬을 버려도 GPU에 남는다 — 전투를 반복하면
+      // 진입마다 텍스처가 쌓이므로 여기서 명시적으로 반납한다 (DirectionalLight.dispose가
+      // shadow.map/mapPass를 함께 버린다)
+      sun.dispose();
     },
   };
 }

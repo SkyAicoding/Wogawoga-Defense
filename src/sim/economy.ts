@@ -7,7 +7,12 @@
  * 타워 배치/판매 후 전 핸드를 재계산한다.
  */
 import type { CardState, TowerId } from '@/data/types';
-import { PLACEMENT_TAX } from '@/data/balance';
+import {
+  PLACEMENT_TAX,
+  SCENERY_CLEAR_BASE_COST,
+  SCENERY_CLEAR_GROWTH,
+  SCENERY_CLEAR_MAX_COST,
+} from '@/data/balance';
 import { addGold } from './combat';
 import type { SimCtx } from './entities';
 
@@ -23,6 +28,15 @@ export function sellRefundFor(invested: number): number {
 /** 배치 지가 — 현재 배치된 타워 수 기준 실비용 */
 export function placementCostFor(baseCost: number, towerCount: number): number {
   return Math.round(baseCost * (1 + PLACEMENT_TAX * towerCount));
+}
+
+/**
+ * 소품 제거 비용 — 이미 치운 개수(0-base)에 따라 지수적으로 오른다.
+ * 80 / 128 / 205 / 328 / 524 / 839 … (상한 4000). 환불은 없다.
+ */
+export function sceneryClearCostFor(clearedCount: number): number {
+  const raw = SCENERY_CLEAR_BASE_COST * SCENERY_CLEAR_GROWTH ** Math.max(0, clearedCount);
+  return Math.min(SCENERY_CLEAR_MAX_COST, Math.round(raw));
 }
 
 export class Economy {

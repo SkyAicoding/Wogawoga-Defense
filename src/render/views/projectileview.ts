@@ -13,6 +13,8 @@ import type { CellToWorld } from '../meshlib/terrain';
 const CAPACITY = 64;
 const BEAM_LIFE = 0.15;
 const BEAM_POOL = 8;
+/** 번개 구간당 분할 수 — 가늘어진 만큼 꺾임을 늘려야 번개로 읽힌다 */
+const BOLT_SEGS = 9;
 
 interface Beam {
   mesh: THREE.Mesh;
@@ -120,8 +122,18 @@ export class ProjectileView {
   }
 
   /**
-   * 지그재그 번개 빔 — points: 타워→적1→적2… (sim 좌표, y는 flying에 따름).
-   * 세그먼트마다 수직 교차 리본 2장으로 볼륨감을 낸다.
+   * 번개 빔 — points: 타워→적1→적2… (sim 좌표, y는 flying에 따름).
+   *
+   * 굵은 한 줄이 아니라 **가는 여러 가닥 + 분기**로 그린다:
+   * 1) 지터를 등방이 아니라 진행방향의 수직 평면에서만 준다. 등방 노이즈는 선이
+   *    뭉개지고, 수직 지터라야 번개 특유의 각진 꺾임이 나온다.
+   * 2) 오프셋은 분할점마다 독립 난수가 아니라 랜덤워크로 누적하고 sin(pi·t)
+   *    포락선을 곱한다 — 끊긴 노이즈가 아니라 이어진 경로로 보이고, 양 끝이
+   *    정확히 포탑/목표에 물린다(boltPath).
+   * 3) 본줄 중간에서 짧은 분기가 갈라져 허공에서 끝난다. 이게 있어야 "지그재그
+   *    선"이 아니라 번개로 읽힌다.
+   *
+   * 애디티브 머티리얼이라 가닥이 겹치는 곳이 저절로 밝아진다.
    * @param intensity 연출 강도 배수 (1 = 기본). 굵기/지그재그 진폭이 함께 커진다.
    */
   addBeam(
@@ -134,10 +146,20 @@ export class ProjectileView {
     const verts: number[] = [];
     const cols: number[] = [];
     const k = Math.max(0.5, Math.min(3.4, intensity));
-    const w = 0.055 * (0.85 + 0.55 * k);
-    const jitter = 0.28 * (0.7 + 0.45 * k);
-    const cMain = new THREE.Color(0xaef2ff);
-    const cCore = new THREE.Color(0xffffff);
+    // 기존 0.055*(0.85+0.55k)의 절반 남짓. 가닥 수가 늘어 총 밝기는 유지된다.
+    // 더 얇게 하면 애디티브 위로 잔디 초록이 비쳐 번개가 초록빛으로 보인다 —
+    // 흰 코어(cHot)를 두껍게 유지하는 게 색을 지키는 핵심이다.
+    const wBase = 0.03 * (0.8 + 0.5 * k);
+    const jBase = 0.3 * (0.7 + 0.45 * k);
+    const cHot = new THREE.Color(0xffffff);
+    const cMain = new THREE.Color(0xd8f7ff);
+    const cCool = new THREE.Color(0x8fdcff);
+    // 굵기·지터를 달리 준 세 가닥이 서로 엇갈린다
+    const strands: readonly { w: number; j: number; c: THREE.Color }[] = [
+      { w: wBase, j: jBase, c: cMain },
+      { w: wBase * 0.72, j: jBase * 1.45, c: cCool },
+      { w: wBase * 0.6, j: jBase * 0.55, c: cCool },
+    ];
 
     const world: THREE.Vector3[] = [];
     points.forEach((pt, i) => {
@@ -146,23 +168,53 @@ export class ProjectileView {
       world.push(v);
     });
 
-    // 각 구간을 4~6분할 지그재그
     for (let i = 0; i < world.length - 1; i++) {
       const a = world[i] as THREE.Vector3;
       const b = world[i + 1] as THREE.Vector3;
-      const segs = 5;
-      let prev = a;
-      for (let s = 1; s <= segs; s++) {
-        const t = s / segs;
-        const p = a.clone().lerp(b, t);
-        if (s < segs) {
-          p.x += (Math.random() - 0.5) * jitter;
-          p.y += (Math.random() - 0.5) * jitter * 0.86;
-          p.z += (Math.random() - 0.5) * jitter;
+      const span = a.distanceTo(b) || 1;
+      // 진행방향에 수직인 정규직교 기저 (u, v)
+      const dir = b.clone().sub(a).normalize();
+      const u = new THREE.Vector3(-dir.z, 0, dir.x);
+      if (u.lengthSq() < 1e-6) u.set(1, 0, 0);
+      u.normalize();
+      const v = new THREE.Vector3().crossVectors(dir, u).normalize();
+
+      for (let si = 0; si < strands.length; si++) {
+        const st = strands[si] as { w: number; j: number; c: THREE.Color };
+        const pts = this.boltPath(a, b, u, v, st.j * span * 0.42, BOLT_SEGS);
+        for (let s = 0; s < pts.length - 1; s++) {
+          this.pushRibbon(verts, cols, pts[s] as THREE.Vector3, pts[s + 1] as THREE.Vector3, st.w, st.c);
+          // 가장 굵은 가닥에만 흰 코어 — 중심이 하얗게 타는 느낌
+          if (si === 0) {
+            this.pushRibbon(verts, cols, pts[s] as THREE.Vector3, pts[s + 1] as THREE.Vector3, st.w * 0.62, cHot);
+          }
         }
-        this.pushRibbon(verts, cols, prev, p, w, cMain);
-        this.pushRibbon(verts, cols, prev, p, w * 0.4, cCore);
-        prev = p;
+        // 본줄에서 갈라져 허공에서 끝나는 짧은 분기
+        if (si !== 0) continue;
+        const forks = 1 + Math.floor(Math.random() * 2 + k * 0.4);
+        for (let f = 0; f < forks; f++) {
+          const root = pts[1 + Math.floor(Math.random() * (pts.length - 3))];
+          if (!root) continue;
+          const len = span * (0.16 + Math.random() * 0.2);
+          const off = u
+            .clone()
+            .multiplyScalar((Math.random() - 0.5) * 2)
+            .addScaledVector(v, (Math.random() - 0.5) * 2)
+            .normalize();
+          const tip = root.clone().addScaledVector(dir, len * 0.55).addScaledVector(off, len * 0.85);
+          const fp = this.boltPath(root, tip, u, v, jBase * len * 0.5, 4);
+          for (let s = 0; s < fp.length - 1; s++) {
+            const taper = 1 - s / (fp.length - 1); // 끝으로 갈수록 가늘게
+            this.pushRibbon(
+              verts,
+              cols,
+              fp[s] as THREE.Vector3,
+              fp[s + 1] as THREE.Vector3,
+              wBase * 0.55 * (0.35 + 0.65 * taper),
+              cCool,
+            );
+          }
+        }
       }
     }
 
@@ -173,6 +225,36 @@ export class ProjectileView {
     beam.life = BEAM_LIFE;
     beam.mat.opacity = 1;
     beam.mesh.visible = true;
+  }
+
+  /**
+   * a→b 를 잇는 지그재그 경로. 오프셋을 수직 평면(u,v)에서 랜덤워크로 누적하고
+   * sin(pi·t) 포락선을 곱해 양 끝이 정확히 a/b 에 붙게 한다.
+   */
+  private boltPath(
+    a: THREE.Vector3,
+    b: THREE.Vector3,
+    u: THREE.Vector3,
+    v: THREE.Vector3,
+    amp: number,
+    segs: number,
+  ): THREE.Vector3[] {
+    const out: THREE.Vector3[] = [a.clone()];
+    let ou = 0;
+    let ov = 0;
+    for (let s = 1; s < segs; s++) {
+      const t = s / segs;
+      // 랜덤워크 + 중심 복귀 — 한쪽으로 계속 흘러가지 않게
+      ou = ou * 0.55 + (Math.random() - 0.5) * 2;
+      ov = ov * 0.55 + (Math.random() - 0.5) * 2;
+      const env = Math.sin(Math.PI * t); // 끝점에서 0
+      const p = a.clone().lerp(b, t);
+      p.addScaledVector(u, ou * amp * env);
+      p.addScaledVector(v, ov * amp * env);
+      out.push(p);
+    }
+    out.push(b.clone());
+    return out;
   }
 
   /** 두 점 사이 교차 리본(수평+수직) 삼각형 12개 푸시 */

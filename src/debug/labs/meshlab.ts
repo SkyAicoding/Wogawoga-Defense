@@ -2,13 +2,15 @@
  * 메시 갤러리 랩 — ?scene=meshlab
  * 적 12 + 타워 8×5티어 + 기지 + 소품 + 투사체를 격자 배치, 천천히 회전.
  * ?model=raptor 로 단일 모델 확대. DOM 라벨로 이름 표시.
+ * ?model=towers 로 타워만 8행(종) × 5열(티어) — 등급 성장 비교 전용 격자.
  * ?yaw=0.9 로 회전을 고정(라디안) — 개선 전/후 동일 앵글 비교 캡처용.
+ * ?camyaw=0 으로 카메라 방위 고정 — 한 줄 배치를 정면으로 받아 화면을 꽉 채울 때 쓴다.
  */
 import * as THREE from 'three';
 import type { EnemyId, TowerId } from '@/data/types';
 import { flatMat, glowMat } from '@/render/palette';
 import { ALL_ENEMY_IDS, buildEnemy } from '@/render/meshlib/enemies';
-import { assembleTower, buildTower } from '@/render/meshlib/towers';
+import { assembleTower, buildTower, towerTierScale } from '@/render/meshlib/towers';
 import { PROJECTILE_TOWERS, buildProjectile } from '@/render/meshlib/projectiles';
 import { createBasecamp } from '@/render/meshlib/basecamp';
 
@@ -30,6 +32,8 @@ function makeItem(name: string, build: (g: THREE.Group) => void): Item {
 function towerItem(id: TowerId, tier: number): Item {
   return makeItem(`${id} t${tier + 1}`, (g) => {
     const rig = assembleTower(buildTower(id, tier), { flat: flatMat(), glow: glowMat() }, true);
+    // 게임과 동일한 티어 크기 램프를 실어야 갤러리에서 성장이 그대로 보인다
+    rig.root.scale.setScalar(towerTierScale(tier));
     g.add(rig.root);
   });
 }
@@ -42,9 +46,16 @@ function enemyItem(id: EnemyId): Item {
   });
 }
 
+/** 열 수를 강제하는 축약 갤러리 — 없으면 화면 비율로 자동 계산 */
+const GROUPS: Record<string, { cols: number; build: () => Item[] }> = {
+  enemies: { cols: 0, build: () => ALL_ENEMY_IDS.map(enemyItem) },
+  // 한 행 = 한 종, 왼→오 = T1→T5. 등급 성장을 나란히 읽는 격자.
+  towers: { cols: 5, build: () => TOWER_IDS.flatMap((id) => [0, 1, 2, 3, 4].map((t) => towerItem(id, t))) },
+};
+
 function buildItems(filter: string | null): Item[] {
-  // ?model=enemies → 적 12종만 (비교 캡처용 축약 갤러리)
-  if (filter === 'enemies') return ALL_ENEMY_IDS.map(enemyItem);
+  const group = filter === null ? undefined : GROUPS[filter];
+  if (group) return group.build();
   let items: Item[] = [
     ...ALL_ENEMY_IDS.map(enemyItem),
     ...TOWER_IDS.flatMap((id) => [0, 1, 2, 3, 4].map((t) => towerItem(id, t))),
@@ -77,6 +88,9 @@ export function run(): void {
   // 고정 yaw (비교 캡처용). 지정 없으면 null → 자동 회전
   const yawParam = params.get('yaw');
   const fixedYaw = yawParam === null ? null : Number(yawParam);
+  // 카메라 방위 (기본 -0.5rad = 살짝 비스듬). 0이면 정면 — 가로 한 줄 배치가 화면을 꽉 채운다
+  const camYawParam = Number(params.get('camyaw'));
+  const camYaw = Number.isFinite(camYawParam) && params.get('camyaw') !== null ? camYawParam : -0.5;
 
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -96,9 +110,14 @@ export function run(): void {
 
   const items = buildItems(single);
   const isSingle = single !== null && items.length <= 2;
-  // 화면 비율에 맞춘 열 수 (세로폰=5열, 데스크톱 와이드=10열)
+  // 화면 비율에 맞춘 열 수 (세로폰=5열, 데스크톱 와이드=10열). 축약 갤러리는 고정 열.
   const aspect0 = window.innerWidth / window.innerHeight;
-  const cols = isSingle ? 1 : Math.max(3, Math.min(10, Math.round(Math.sqrt(items.length * aspect0 * 1.4))));
+  const fixedCols = single === null ? 0 : (GROUPS[single]?.cols ?? 0);
+  const cols = isSingle
+    ? 1
+    : fixedCols > 0
+      ? fixedCols
+      : Math.max(3, Math.min(10, Math.round(Math.sqrt(items.length * aspect0 * 1.4))));
   const spacing = 2.6;
   const rows = Math.ceil(items.length / cols);
   const world = new THREE.Group();
@@ -153,7 +172,7 @@ export function run(): void {
 
   /** 투영 반복으로 AABB가 화면 90% 안에 들어오는 거리 탐색 */
   function fit(): void {
-    const dir = new THREE.Vector3(Math.sin(-0.5), 0, Math.cos(-0.5));
+    const dir = new THREE.Vector3(Math.sin(camYaw), 0, Math.cos(camYaw));
     dir.multiplyScalar(Math.cos(elev)).setY(Math.sin(elev));
     dist = fitBox.getSize(new THREE.Vector3()).length();
     const corner = new THREE.Vector3();

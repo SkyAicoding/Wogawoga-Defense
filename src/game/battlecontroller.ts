@@ -38,7 +38,13 @@ const END_DELAY_MS = 1500;
 const HUD_TOP_PX = 118;
 const HUD_BOTTOM_RATIO = 0.27;
 const HUD_BOTTOM_MIN_PX = 208;
-/** 가로모드(style.css: max-height 560px 압축 HUD)가 실제 차지하는 높이 근사 */
+/**
+ * 가로모드(style.css: max-height 560px 압축 HUD)가 실제 차지하는 높이 근사.
+ * 실측 HUD는 상단 96 / 하단 116(iPhone 13 landscape 750×342)이라 이 값보다 크지만,
+ * 그만큼 예약하면 342px 높이에서 셀이 8.5→6.8px 로 줄어 오히려 못 쓰게 된다.
+ * 실제로 상시 HUD 뒤로 내려가는 격자점은 165개 중 4개뿐이라 이 근사를 유지한다
+ * (제거 패널은 상시 요소가 아니고, 배경이 포인터를 통과시켜 탭은 살아 있다).
+ */
 const LANDSCAPE_MAX_CSS_H = 560;
 const HUD_TOP_LANDSCAPE_PX = 64;
 const HUD_BOTTOM_LANDSCAPE_PX = 84;
@@ -139,6 +145,17 @@ export class BattleController {
       selectCard: (i) => self.placement.selectCard(i),
       selectedCard: () => self.placement.selectedCard(),
       selectedTower: () => self.placement.selectedTower(),
+      selectedScenery: () => self.placement.selectedScenery(),
+      requestClearScenery: () => {
+        const c = self.placement.selectedScenery();
+        if (!c) return;
+        // 성공 시 sceneryCleared 이벤트가 연출/선택 해제를 처리한다
+        self.sim.applyCommand({ type: 'clearScenery', cellX: c.x, cellZ: c.z });
+      },
+      clearSelection: () => {
+        self.placement.clearScenerySelection();
+        self.placement.clearTowerSelection();
+      },
       requestSetTargeting: (mode: TargetingMode) => {
         const id = self.placement.selectedTower();
         if (id !== null) self.sim.applyCommand({ type: 'setTargeting', towerId: id, mode });
@@ -305,6 +322,8 @@ export class BattleController {
       if (ev.type === 'battleEnded') this.scheduleEnd(ev.won);
       else if (ev.type === 'towerSold' || ev.type === 'towerUpgraded') {
         this.placement.refreshSelection();
+      } else if (ev.type === 'sceneryCleared') {
+        this.placement.refreshScenerySelection();
       }
     }
   }
@@ -393,6 +412,28 @@ export class BattleController {
       // 입력/뷰포트 검증용 (모바일 e2e)
       selectCard: (i: number | null): void => this.api.selectCard(i),
       selectedCard: (): number | null => this.api.selectedCard(),
+      // 지형지물 제거 검증용
+      selectedScenery: (): { x: number; z: number } | null => this.api.selectedScenery(),
+      sceneryList: (): { x: number; z: number }[] => {
+        const out: { x: number; z: number }[] = [];
+        for (let z = 0; z < this.stage.gridH; z++) {
+          for (let x = 0; x < this.stage.gridW; x++) {
+            if (this.sim.hasScenery(x, z)) out.push({ x, z });
+          }
+        }
+        return out;
+      },
+      clearSceneryCost: (x: number, z: number): number | null =>
+        this.sim.clearSceneryCost(x, z),
+      clearScenery: (x: number, z: number): boolean => {
+        const ok = this.sim.applyCommand({ type: 'clearScenery', cellX: x, cellZ: z });
+        this.processEvents();
+        return ok;
+      },
+      setGold: (g: number): void => {
+        // 골드 부족/충분 분기 검증용 — 테스트 모드에서만 노출된다
+        (this.sim.state as { gold: number }).gold = g;
+      },
       cellToScreen: (x: number, z: number): { x: number; y: number } => {
         const v = new THREE.Vector3();
         this.stage3d.cellToWorld(x, z, v);

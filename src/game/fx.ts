@@ -16,6 +16,7 @@ import { vibrate } from '@/core/device';
 import { audio } from '@/audio';
 import type { SfxName } from '@/audio';
 import type { Stage3D } from '@/render/stage3d';
+import { towerTierScale } from '@/render/meshlib/towers';
 import type { DioramaCamera } from '@/render/camera';
 import { showBossBanner, showWaveBanner } from '@/ui/screens/battlehud';
 import { spawnDamageNumber } from '@/ui/widgets/damagenumbers';
@@ -385,7 +386,10 @@ export class FxRouter {
             const color = TOWER_FX_COLOR[ev.defId];
             // 티어가 오를수록 승급 연출도 커진다
             const s = 0.9 + ev.tier * 0.4;
-            s3.particles.explosion(w.x, 0.75, w.z, {
+            // 폭발 높이는 티어 스케일을 따라간다 — 고정값(0.75)이면 0.6배인 저티어
+            // 승급에서 지붕보다 한참 위 허공에서 터진다 (실측 캡처 확인)
+            const y = 0.1 + towerTierScale(ev.tier) * 0.95;
+            s3.particles.explosion(w.x, y, w.z, {
               strength: s,
               core: 0xfff6d8,
               debris: color,
@@ -407,6 +411,32 @@ export class FxRouter {
           s3.towers.remove(ev.towerId);
           audio.play('towerSell');
           break;
+        case 'sceneryCleared': {
+          // 소품 메시를 먼저 지우고(재병합) 그 자리에 먼지+파편을 터뜨린다.
+          // 렌더가 스스로 판단하지 않고 sim 이벤트에만 반응한다 (진실의 원천 = sim)
+          s3.clearScenery(ev.cellX, ev.cellZ);
+          const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
+          s3.particles.explosion(w.x, 0.4, w.z, {
+            strength: 1.5,
+            core: 0xfff0cf,
+            debris: 0x8d7d63,
+            smoke: 0xd9cdb2,
+            shock: 0xe8cf9e,
+            gravity: 12,
+            debrisMul: 1.7,
+            smokeMul: 1.6,
+            shockMul: 1.15,
+            sizeMul: 1.1,
+            spreadMul: 1.15,
+            smokeLifeMul: 1.5,
+            shockRadius: 0.62,
+          });
+          s3.particles.ring(w.x, w.z, 0xd9c8a0, 0.62);
+          audio.play('boulderImpact');
+          this.shake(0.08);
+          this.buzz(18);
+          break;
+        }
         case 'towerFired':
           s3.towers.recoil(ev.towerId);
           audio.play(FIRE_SFX[ev.defId]);

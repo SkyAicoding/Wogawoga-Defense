@@ -109,6 +109,13 @@ export const amberSvg = SVG(
    <ellipse cx="22" cy="26" rx="4" ry="5.5" fill="#7a3c00"/>`,
 );
 
+/** 방해 지형지물(나무+바위) — 골드로 치우는 대상 */
+export const sceneryIconSvg = SVG(
+  `<path d="M6 40 C6 32 11 26 17 26 C23 26 28 32 28 40 Z" fill="#4f9440" stroke="#25502a" stroke-width="3" stroke-linejoin="round"/>
+   <rect x="14.5" y="36" width="5" height="8" fill="#7a5230" stroke="#3d2a18" stroke-width="2.5"/>
+   <path d="M28 44 L31 30 L38 26 L44 32 L43 44 Z" fill="#9aa39a" stroke="#3f4640" stroke-width="3" stroke-linejoin="round"/>`,
+);
+
 /** 기지 HP 하트 */
 export const heartSvg = SVG(
   `<path d="M24 42 C10 32 4 24 4 15 A10 10 0 0 1 24 11 A10 10 0 0 1 44 15 C44 24 38 32 24 42 Z"

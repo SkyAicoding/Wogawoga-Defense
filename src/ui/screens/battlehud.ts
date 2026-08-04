@@ -10,7 +10,14 @@ import { TICK_RATE } from '@/data/types';
 import type { Screen } from '@/core/fsm';
 import { h, cls, fmt, mount, unmount, uiRoot, setText } from '../dom';
 import { t } from '../i18n';
-import { amberSvg, createTowerCard, goldSvg, heartSvg, towerIconSvg } from '../widgets/card';
+import {
+  amberSvg,
+  createTowerCard,
+  goldSvg,
+  heartSvg,
+  sceneryIconSvg,
+  towerIconSvg,
+} from '../widgets/card';
 import type { TowerCard } from '../widgets/card';
 import { showModal } from '../widgets/modal';
 import type { ModalHandle } from '../widgets/modal';
@@ -19,6 +26,9 @@ import type { ModalHandle } from '../widgets/modal';
 type BattleUiApiExt = BattleUiApi;
 
 const TARGETING_ORDER: readonly TargetingMode[] = ['first', 'last', 'strongest', 'nearest'];
+
+/** 제거 확인 무장이 자동으로 풀리는 시간 (ms) — 무장 상태가 잊힌 채 남지 않게 */
+const ARM_TIMEOUT_MS = 4000;
 
 // --- 배너 (모듈 스코프 — HUD 장착 중에만 동작) -------------------------------
 let bannerHost: HTMLElement | null = null;
@@ -72,6 +82,24 @@ export function createBattleHud(): Screen<GameFacade> {
   let sellBtnLabel!: HTMLElement;
   let targetBtn!: HTMLElement;
   let upBtn!: HTMLElement;
+  // 소품(방해 지형지물) 제거 패널 — 선택 타워 패널과 같은 자리/같은 톤
+  let scPanel!: HTMLElement;
+  let scDesc!: HTMLElement;
+  let scClearLabel!: HTMLElement;
+  let scClearBtn!: HTMLElement;
+  let scCloseBtn!: HTMLElement;
+  let lastSelScenery = '';
+  /** 제거 확인 무장 상태 — true일 때만 다음 탭이 실제로 골드를 쓴다 */
+  let scArmed = false;
+  let scArmTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const disarm = (): void => {
+    scArmed = false;
+    if (scArmTimer) {
+      clearTimeout(scArmTimer);
+      scArmTimer = null;
+    }
+  };
 
   const api = (facade: GameFacade): BattleUiApiExt | null =>
     facade.battle as BattleUiApiExt | null;
@@ -178,9 +206,62 @@ export function createBattleHud(): Screen<GameFacade> {
         onClick: () => api(facade)?.requestSellSelected(),
       }, h('span', { text: `${t('battle.sell')} ` }), sellBtnLabel);
 
-      panelHost = h('div', { class: 'tower-panel hud-item', attrs: { style: 'display:none' } },
+      // 패널 배경에는 hud-item을 주지 않는다 — 버튼만 포인터를 받고 나머지는
+      // 캔버스로 흘려보내 패널에 가린 셀도 그대로 탭할 수 있게 한다
+      panelHost = h('div', { class: 'tower-panel', attrs: { style: 'display:none' } },
         h('div', { class: 'tp-head' }, panelIco, panelName, panelLv),
         h('div', { class: 'tp-btns' }, upBtn, sellBtn, targetBtn),
+      );
+
+      // --- 방해 지형지물 제거 패널 -----------------------------------------
+      // 제거는 환불이 없고 비용이 최대 4,000까지 오른다. 그런데 패널이 방금 탭한
+      // 그 지점 위에 열려서, "같은 셀 재탭 → 닫기" 제스처가 그대로 결제가 되는
+      // 경로가 있었다(가로 실측: 1탭 선택 → 2탭 결제). 그래서 **두 번 눌러야**
+      // 실제로 나간다 — 첫 탭은 확인 상태로 무장만 하고 골드는 건드리지 않는다.
+      scDesc = h('span', { class: 'tp-sub' });
+      scClearLabel = h('span', { class: 'tp-btn-label' });
+      scClearBtn = h('button', {
+        class: 'tp-btn tp-btn--clear hud-item',
+        attrs: { type: 'button' },
+        onClick: () => {
+          const bb = api(facade);
+          if (!bb) return;
+          const sc = bb.selectedScenery?.() ?? null;
+          if (!sc) return;
+          const cost = bb.sim.clearSceneryCost(sc.x, sc.z);
+          if (cost === null || cost > bb.sim.state.gold) return;
+          if (!scArmed) {
+            // 1단계: 확인 대기. 자동 해제 타이머로 무장 상태가 남지 않게 한다
+            scArmed = true;
+            if (scArmTimer) clearTimeout(scArmTimer);
+            scArmTimer = setTimeout(() => { scArmed = false; scArmTimer = null; }, ARM_TIMEOUT_MS);
+            return;
+          }
+          scArmed = false;
+          if (scArmTimer) { clearTimeout(scArmTimer); scArmTimer = null; }
+          bb.requestClearScenery();
+        },
+      }, scClearLabel);
+      // 닫기 버튼 — 판을 덮은 패널을 확실히 치울 수 있는 경로. 같은 셀 재탭은
+      // 패널이 그 자리를 가리면 실행 자체가 불가능하다
+      scCloseBtn = h('button', {
+        class: 'tp-btn tp-btn--close hud-item',
+        attrs: { type: 'button', 'aria-label': t('battle.close') },
+        text: '✕',
+        onClick: () => {
+          disarm();
+          api(facade)?.clearSelection();
+        },
+      });
+      // 패널 자체에는 hud-item을 주지 않는다 — 배경이 포인터를 삼키면 그 밑의
+      // 소품/타워 셀 탭이 아무 피드백 없이 죽는다 (실측: 세로 9/40, 가로 13/40 셀)
+      scPanel = h('div', { class: 'tower-panel tower-panel--scenery', attrs: { style: 'display:none' } },
+        h('div', { class: 'tp-head' },
+          h('span', { class: 'tp-ico tp-ico--scenery', html: sceneryIconSvg }),
+          h('span', { class: 'tp-name', text: t('battle.scenery.title') }),
+        ),
+        scDesc,
+        h('div', { class: 'tp-btns' }, scClearBtn, scCloseBtn),
       );
 
       // --- 웨이브 시작 버튼 ------------------------------------------------
@@ -202,6 +283,7 @@ export function createBattleHud(): Screen<GameFacade> {
 
       const bottom = h('div', { class: 'hud-bottom' },
         panelHost,
+        scPanel,
         callWaveBtn,
         h('div', { class: 'hand-row hud-item' }, handHost, refreshBtn),
       );
@@ -213,10 +295,12 @@ export function createBattleHud(): Screen<GameFacade> {
       // 초기 상태 반영
       handSig = '';
       lastSelTower = null;
+      lastSelScenery = '';
       if (b) this.update?.(facade, 0);
     },
 
     exit() {
+      disarm();
       pauseModal?.close();
       pauseModal = null;
       if (root) unmount(root);
@@ -277,8 +361,12 @@ export function createBattleHud(): Screen<GameFacade> {
         );
       }
 
+      // 승패가 확정되면 선택 패널은 더 이상 유효한 조작이 아니다 — sim이 커맨드를
+      // 전부 거부하므로 눌러도 아무 일이 없는 '살아 있는 척하는 버튼'이 된다
+      const over = s.phase === 'won' || s.phase === 'lost';
+
       // 선택 타워 패널
-      const tw = selectedTowerState(b);
+      const tw = over ? null : selectedTowerState(b);
       const selId = tw ? tw.id : null;
       if (selId !== lastSelTower) {
         lastSelTower = selId;
@@ -294,6 +382,41 @@ export function createBattleHud(): Screen<GameFacade> {
         const refund = b.sim.sellRefund(tw.id);
         setText(sellBtnLabel, refund === null ? '—' : `+${fmt(refund)}`);
         setText(targetBtn, t(`battle.targeting.${tw.targeting}`));
+      }
+
+      // 방해 지형지물 제거 패널 (선택 타워 패널과 상호배타 — placement가 보장)
+      const sc = over ? null : (b.selectedScenery?.() ?? null);
+      const scSig = sc ? `${sc.x},${sc.z}` : '';
+      if (scSig !== lastSelScenery) {
+        lastSelScenery = scSig;
+        scPanel.style.display = sc ? '' : 'none';
+        disarm(); // 대상이 바뀌면 확인 무장은 무효
+      }
+      if (sc) {
+        const cost = b.sim.clearSceneryCost(sc.x, sc.z);
+        const short = cost === null ? 0 : cost - s.gold;
+        const blocked = cost === null || short > 0;
+        if (blocked && scArmed) disarm(); // 도중에 골드가 모자라지면 무장 해제
+        setText(
+          scClearLabel,
+          cost === null
+            ? '—'
+            : scArmed
+              ? `✓ ${t('battle.scenery.confirm')} ${fmt(cost)}`
+              : `⛏ ${t('battle.scenery.clear')} ${fmt(cost)}`,
+        );
+        cls(scClearBtn, 'is-armed', scArmed);
+        // 골드가 모자라면 비활성 + 얼마나 모자란지 이유를 그 자리에 띄운다
+        cls(scClearBtn, 'is-disabled', blocked);
+        setText(
+          scDesc,
+          short > 0
+            ? t('battle.scenery.needGold', { n: fmt(short) })
+            : scArmed && cost !== null
+              ? t('battle.scenery.confirmDesc', { n: fmt(cost) })
+              : t('battle.scenery.desc'),
+        );
+        cls(scDesc, 'is-warn', short > 0 || scArmed);
       }
     },
   };

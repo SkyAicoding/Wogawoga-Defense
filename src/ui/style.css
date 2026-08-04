@@ -346,10 +346,29 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 4px 8px;
 }
 .tp-btn:active { transform: translateY(2px); box-shadow: none; }
+/* 비활성 버튼이 포인터를 삼키면 그 밑의 판이 죽는다 — .is-disabled의
+   pointer-events:none 이 .screen--battle .hud-item(특이도 우위)에 덮이던 걸 되돌린다 */
+.screen--battle .tp-btn.is-disabled { pointer-events: none; }
 .tp-btn--up { background: linear-gradient(180deg, #ffd94a, #ff9d2e); }
 .tp-btn--sell { background: linear-gradient(180deg, #ff7a63, #e04f3f); color: #fff; }
 .tp-btn--target { background: linear-gradient(180deg, #9fdcf7, #58b7dd); }
+/* 방해 지형지물 제거 — 흙/돌 톤으로 강화(금)·판매(빨강)와 구분 */
+.tp-btn--clear { background: linear-gradient(180deg, #d3b487, #a07a4a); }
+/* 확인 무장 상태: 색이 확 바뀌어야 "한 번 더 누르면 나간다"가 읽힌다 */
+.tp-btn--clear.is-armed {
+  background: linear-gradient(180deg, #ffd94a, #ff8a1e); color: var(--ink);
+  box-shadow: 0 0 0 3px rgba(255, 208, 74, 0.5), 0 3px 0 rgba(0, 0, 0, 0.28);
+  animation: hp-blink 0.9s ease-in-out infinite;
+}
+/* 닫기 — 아이콘 하나짜리라 늘어나지 않게 고정폭 */
+.tp-btn--close {
+  flex: 0 0 auto; min-width: 48px; font-size: 1.1rem;
+  background: rgba(20, 14, 8, 0.72); color: var(--cream); border-color: var(--ink);
+}
 .tp-btn-label { font-size: 0.85rem; }
+.tp-sub { font-size: 0.8rem; font-weight: 700; opacity: 0.8; }
+.tp-sub.is-warn { color: #ff9d8a; opacity: 1; }
+.tp-ico--scenery svg { width: 100%; height: 100%; }
 
 /* --- 배너 ---------------------------------------------------------------- */
 .banner-host { position: absolute; left: 0; right: 0; top: 26%; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
@@ -478,7 +497,9 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   .tower-panel { flex-direction: row; align-items: center; gap: 10px; padding: 8px 12px; }
   .tp-head { flex: 0 0 auto; }
   .tp-btns { flex: 1; flex-wrap: nowrap; }
-  .tp-btn { min-height: 42px; }
+  /* 압축 HUD에서도 44px 터치 타깃 가이드라인을 지킨다 (예전 42px) */
+  .tp-btn { min-height: 44px; }
+  .tp-btn--close { min-width: 44px; }
   .hud-bottom { gap: 8px; }
   .banner-host { top: 20%; }
   .hud-side { top: 27%; flex-direction: row; gap: 8px; }

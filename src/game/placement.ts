@@ -1,10 +1,11 @@
 /**
  * 배치/선택 입력 — 탭·호버를 셀 좌표로 변환해 시뮬레이션 커맨드로.
  * 카드 선택 → 슬롯 발광 + 고스트 프리뷰 → 탭 배치.
- * 타워 탭 → 선택 + 사거리 링. 빈 곳 탭 → 해제.
+ * 타워 탭 → 선택 + 사거리 링. 소품(나무·바위) 탭 → 선택 + 링(제거 패널).
+ * 빈 곳 탭 / 같은 대상 재탭 → 해제. 카드 선택 중에는 배치 흐름이 우선이다.
  */
 import * as THREE from 'three';
-import type { BattleSim, StageDef, TowerId } from '@/data/types';
+import type { BattleSim, StageDef, TowerId, Vec2 } from '@/data/types';
 import { TOWER_DEFS } from '@/data';
 import { InputManager } from '@/core/input';
 import { audio } from '@/audio';
@@ -21,6 +22,8 @@ export class PlacementController {
   private hit = new THREE.Vector3();
   private selectedCardIndex: number | null = null;
   private selectedTowerId: number | null = null;
+  /** 탭해서 고른 소품 셀 (제거 패널 대상) */
+  private selectedSceneryCell: Vec2 | null = null;
   private ghostCell: { x: number; z: number } | null = null;
 
   constructor(
@@ -94,19 +97,47 @@ export class PlacementController {
         this.selectCard(null);
         return;
       }
-      // 슬롯 밖 탭 → 배치 모드 해제
-      if (!cell || !this.sim.canPlaceAt(cell.x, cell.z)) this.selectCard(null);
+      // 슬롯 밖 탭 → 배치 모드 해제.
+      // 그 자리가 타워/소품이면 같은 탭으로 바로 그 대상을 고른다 — 배치 자리를
+      // 찾다가 "여긴 나무네" 하고 누르는 동선에서 탭 하나를 버리지 않게 한다.
+      if (!cell || !this.sim.canPlaceAt(cell.x, cell.z)) {
+        this.selectCard(null);
+        if (cell) this.selectAt(cell);
+      }
       return;
     }
+    this.selectAt(cell);
+  }
+
+  /** 셀 하나에 대한 선택 규칙 — 타워 > 소품 > 해제 (셋은 상호배타) */
+  private selectAt(cell: { x: number; z: number } | null): void {
     // 타워 선택/해제
     const tower = cell ? this.sim.towerAt(cell.x, cell.z) : null;
     if (tower) {
+      this.clearScenerySelection();
       this.selectedTowerId = tower.id;
       this.showRangeFor(tower.id);
       audio.play('uiTap');
-    } else if (this.selectedTowerId !== null) {
-      this.clearTowerSelection();
+      return;
     }
+    // 소품(나무·바위) 선택/해제 — 같은 셀을 다시 탭하면 닫힌다
+    if (cell && this.sim.hasScenery(cell.x, cell.z)) {
+      const cur = this.selectedSceneryCell;
+      if (cur && cur.x === cell.x && cur.z === cell.z) {
+        this.clearScenerySelection();
+        return;
+      }
+      this.clearTowerSelection();
+      this.selectedSceneryCell = { x: cell.x, z: cell.z };
+      // 소품은 셀 중심에서 흩어져 있다 — 링을 실제 밑동에 맞춘다
+      const off = this.stage3d.sceneryOffset(cell.x, cell.z);
+      this.stage3d.decals.showCellMarker(cell.x, cell.z, off?.dx ?? 0, off?.dz ?? 0);
+      audio.play('uiTap');
+      return;
+    }
+    // 빈 곳 탭 → 전부 해제
+    if (this.selectedTowerId !== null) this.clearTowerSelection();
+    if (this.selectedSceneryCell !== null) this.clearScenerySelection();
   }
 
   private showRangeFor(towerId: number): void {
@@ -126,7 +157,10 @@ export class PlacementController {
     this.ghostCell = null;
     this.stage3d.towers.clearGhost();
     this.stage3d.decals.setSlotsVisible(index !== null);
-    if (index !== null) this.clearTowerSelection();
+    if (index !== null) {
+      this.clearTowerSelection();
+      this.clearScenerySelection();
+    }
   }
 
   selectedCard(): number | null {
@@ -135,6 +169,22 @@ export class PlacementController {
 
   selectedTower(): number | null {
     return this.selectedTowerId;
+  }
+
+  selectedScenery(): Vec2 | null {
+    return this.selectedSceneryCell;
+  }
+
+  clearScenerySelection(): void {
+    if (this.selectedSceneryCell === null) return;
+    this.selectedSceneryCell = null;
+    this.stage3d.decals.hideCellMarker();
+  }
+
+  /** 제거 성공/셀 상태 변화 후 정합성 유지 — 더 이상 소품이 아니면 선택 해제 */
+  refreshScenerySelection(): void {
+    const c = this.selectedSceneryCell;
+    if (c && !this.sim.hasScenery(c.x, c.z)) this.clearScenerySelection();
   }
 
   /** 업그레이드/판매/틱 후 선택 상태 정합성 유지 */
