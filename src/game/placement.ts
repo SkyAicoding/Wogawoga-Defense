@@ -36,7 +36,11 @@ export class PlacementController {
     this.input.events.on('move', (p) => this.onMove(p.x, p.y));
     // 모바일 드래그 배치: 카드 선택 중 드래그는 조준(고스트는 move로 갱신),
     // 릴리즈 지점에 배치. battlecontroller는 카드 선택 중 카메라 팬을 스킵한다.
-    this.input.events.on('dragEnd', (p) => this.onDragEnd(p.x, p.y));
+    // 우드래그/Shift+드래그는 카메라 궤도 회전 — 배치로 소비하면 안 된다
+    this.input.events.on('dragEnd', (p) => {
+      if (p.button !== 0 || p.shiftKey) return;
+      this.onDragEnd(p.x, p.y);
+    });
   }
 
   /** 화면 좌표 → 그리드 셀 (지면 밖이면 null) */

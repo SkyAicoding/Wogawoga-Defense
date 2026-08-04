@@ -43,6 +43,14 @@ const LANDSCAPE_MAX_CSS_H = 560;
 const HUD_TOP_LANDSCAPE_PX = 64;
 const HUD_BOTTOM_LANDSCAPE_PX = 84;
 
+const DEG = Math.PI / 180;
+/** 데스크톱 궤도 드래그 감도 — 요 허용폭 80°를 약 290px에 매핑 */
+const ORBIT_YAW_PER_PX = 0.28 * DEG;
+/** 피치 허용폭 32°를 약 180px에 매핑 (세로 화면에서 손가락이 짧다) */
+const ORBIT_PITCH_PER_PX = 0.18 * DEG;
+/** 두 손가락 트위스트 → 요. 1 = 손가락 회전각과 1:1 */
+const PINCH_TWIST_GAIN = 1;
+
 export class BattleController {
   readonly api: BattleUiApi;
   readonly sim: BattleSim;
@@ -159,26 +167,40 @@ export class BattleController {
       },
     };
 
-    // 카메라 제스처: 휠/핀치 줌 + (줌 상태에서) 드래그 팬
+    // 카메라 제스처
+    //  · 휠 / 두 손가락 거리 → 줌
+    //  · 두 손가락 트위스트 → 요, 두 손가락 상하 이동 → 피치
+    //  · 좌드래그 → 팬(줌 상태에서), 우드래그 / Shift+드래그 → 궤도 회전
     const input = this.placement.input;
     input.events.on('wheel', (w) => {
       this.camera.zoomBy(w.deltaY < 0 ? 1.12 : 1 / 1.12);
     });
     input.events.on('pinch', (p) => {
       this.camera.zoomBy(p.scale);
+      // 손가락을 시계방향으로 비틀면 월드도 시계방향으로 — 카메라는 반대로 돈다.
+      // 두 손가락을 아래로 내리면 탑다운(피치 ↑), 올리면 낮은 시점(피치 ↓).
+      this.camera.orbitBy(-p.rotate * PINCH_TWIST_GAIN, p.panY * ORBIT_PITCH_PER_PX);
     });
     let lastDragX = 0;
     let lastDragY = 0;
+    let orbitDrag = false;
     input.events.on('dragStart', (i) => {
       lastDragX = i.x;
       lastDragY = i.y;
+      // 버튼/수정키는 pointerdown 시점에 래치된 값 — 드래그 도중 모드가 바뀌지 않는다
+      orbitDrag = i.button === 2 || i.shiftKey;
     });
     input.events.on('drag', (i) => {
       const dx = i.x - lastDragX;
       const dy = i.y - lastDragY;
       lastDragX = i.x;
       lastDragY = i.y;
-      // 카드 선택 중 드래그는 배치 조준 — 카메라 팬과 충돌하지 않게 스킵
+      if (orbitDrag) {
+        // 오른쪽으로 끌면 섬의 앞면이 오른쪽으로 돌아간다 (턴테이블 관례)
+        this.camera.orbitBy(dx * ORBIT_YAW_PER_PX, dy * ORBIT_PITCH_PER_PX);
+        return;
+      }
+      // 카드 선택 중 좌드래그는 배치 조준 — 카메라 팬과 충돌하지 않게 스킵
       if (this.placement.selectedCard() !== null) return;
       this.camera.panByPixels(dx, dy);
     });
@@ -213,9 +235,15 @@ export class BattleController {
     }
   };
 
+  private lastFrameSec = -1;
+
   /** 매 rAF 호출 (nowSec = performance.now()/1000) */
   frame(nowSec: number): void {
     if (this.disposed) return;
+    // 카메라(궤도 보간/흔들림)는 실제 경과 시간을 쓴다 — 일시정지·배속에서도
+    // 시점 조절 손맛이 같아야 하고, 일시정지 중 ticks=0이면 보간이 멈춘다
+    const realDt = this.lastFrameSec < 0 ? 1 / 60 : Math.min(0.1, nowSec - this.lastFrameSec);
+    this.lastFrameSec = nowSec;
     const { ticks, alpha } = this.loop.update(nowSec);
     const st = this.sim.state;
 
@@ -241,7 +269,7 @@ export class BattleController {
     s3.projectiles.update(st.projectiles, alpha, dt);
     s3.towers.aim(st.towers, st.enemies, alpha);
     s3.update(dt);
-    this.camera.update(dt);
+    this.camera.update(realDt);
     this.renderer.render(s3.scene, this.camera.camera);
   }
 
@@ -355,6 +383,13 @@ export class BattleController {
         this.stage3d.update(sec);
         this.camera.update(sec);
       },
+      // 카메라 궤도 검증용
+      camState: (): { yawDeg: number; pitchDeg: number; zoom: number } => ({
+        yawDeg: this.camera.yaw / DEG,
+        pitchDeg: this.camera.pitch / DEG,
+        zoom: this.camera.zoom,
+      }),
+      resetView: (): void => this.camera.resetView(),
       // 입력/뷰포트 검증용 (모바일 e2e)
       selectCard: (i: number | null): void => this.api.selectCard(i),
       selectedCard: (): number | null => this.api.selectedCard(),

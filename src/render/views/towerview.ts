@@ -299,8 +299,9 @@ export class TowerView {
         a.visible = e.fireT <= FIRE_DUR.ballista - BOLT_HIDE;
         const reloadK = clamp01(e.fireT / (FIRE_DUR.ballista - BOLT_HIDE));
         a.position.x = e.actionPos.x - 0.5 * reloadK;
+        // 받침이 head에 병합돼 있으므로(드로우콜 절감) 기체 전체가 조준축으로 압축된다 → 폭 축소
         e.headPunch = damp(e.headPunch, 0, 9, dt);
-        e.head.scale.x = 1 - 0.16 * ex * e.headPunch;
+        e.head.scale.x = 1 - 0.09 * ex * e.headPunch;
         break;
       }
       case 'poison': {

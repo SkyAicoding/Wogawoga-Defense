@@ -2,6 +2,7 @@
  * 메시 갤러리 랩 — ?scene=meshlab
  * 적 12 + 타워 8×5티어 + 기지 + 소품 + 투사체를 격자 배치, 천천히 회전.
  * ?model=raptor 로 단일 모델 확대. DOM 라벨로 이름 표시.
+ * ?yaw=0.9 로 회전을 고정(라디안) — 개선 전/후 동일 앵글 비교 캡처용.
  */
 import * as THREE from 'three';
 import type { EnemyId, TowerId } from '@/data/types';
@@ -42,6 +43,8 @@ function enemyItem(id: EnemyId): Item {
 }
 
 function buildItems(filter: string | null): Item[] {
+  // ?model=enemies → 적 12종만 (비교 캡처용 축약 갤러리)
+  if (filter === 'enemies') return ALL_ENEMY_IDS.map(enemyItem);
   let items: Item[] = [
     ...ALL_ENEMY_IDS.map(enemyItem),
     ...TOWER_IDS.flatMap((id) => [0, 1, 2, 3, 4].map((t) => towerItem(id, t))),
@@ -71,6 +74,9 @@ export function run(): void {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
   const params = new URLSearchParams(location.search);
   const single = params.get('model');
+  // 고정 yaw (비교 캡처용). 지정 없으면 null → 자동 회전
+  const yawParam = params.get('yaw');
+  const fixedYaw = yawParam === null ? null : Number(yawParam);
 
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -105,6 +111,7 @@ export function run(): void {
     const cx = (i % cols) - (Math.min(cols, items.length) - 1) / 2;
     const cz = Math.floor(i / cols) - (rows - 1) / 2;
     item.group.position.set(cx * spacing, 0, cz * spacing);
+    if (fixedYaw !== null && Number.isFinite(fixedYaw)) item.group.rotation.y = fixedYaw;
     const pad = new THREE.Mesh(padGeo, padMat);
     pad.position.set(cx * spacing, -0.07, cz * spacing);
     pad.receiveShadow = true;
@@ -185,8 +192,10 @@ export function run(): void {
   const clock = new THREE.Clock();
   renderer.setAnimationLoop(() => {
     const t = clock.getElapsedTime();
-    // 아이템 자체 회전 (천천히)
-    for (const item of items) item.group.rotation.y = t * 0.5;
+    // 아이템 자체 회전 (천천히) — yaw 고정 시 생략
+    if (fixedYaw === null || !Number.isFinite(fixedYaw)) {
+      for (const item of items) item.group.rotation.y = t * 0.5;
+    }
     renderer.render(scene, camera);
     // 라벨 투영 (2프레임에 1회)
     if ((Math.floor(t * 60) & 1) === 0) {
