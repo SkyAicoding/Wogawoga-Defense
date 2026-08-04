@@ -147,15 +147,15 @@ export class DioramaCamera {
     const vh = Math.max(1, this.lastViewport.h);
     const worldPerPx =
       (2 * (this.fitDist / this.zoomLevel) * Math.tan(0.5 * this.camera.fov * DEG)) / vh;
-    // 화면 오른쪽 = 릭 right(수평 성분), 화면 위 = 지면에서 카메라 반대 방향
+    // dir = 타깃→카메라. 시선 forward = -dir 이므로
+    // 화면 오른쪽(월드) = normalize(cross(forward, up)) = normalize(dir.z, 0, -dir.x),
+    // 화면 위(지면 투영) = normalize(-dir.x, -dir.z) (카메라 반대 방향).
     const dir = this.rigDir(new THREE.Vector3());
-    const rightX = -dir.z;
-    const rightZ = dir.x;
-    const len = Math.hypot(rightX, rightZ) || 1;
-    const rx = rightX / len;
-    const rz = rightZ / len;
-    const fx = -dir.x / Math.hypot(dir.x, dir.z || 1e-6);
-    const fz = -dir.z / Math.hypot(dir.x, dir.z || 1e-6);
+    const groundLen = Math.hypot(dir.x, dir.z) || 1;
+    const rx = dir.z / groundLen;
+    const rz = -dir.x / groundLen;
+    const fx = -dir.x / groundLen;
+    const fz = -dir.z / groundLen;
     // 세로 드래그는 피치 때문에 지면 이동량이 커진다 — sin(pitch) 보정
     const vScale = 1 / Math.max(0.35, Math.sin(this.pitch));
     // 콘텐츠가 손가락을 따라온다: 오른쪽 드래그 → 왼쪽 내용 노출(타깃 -right),
