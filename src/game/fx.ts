@@ -373,7 +373,6 @@ export class FxRouter {
           s3.towers.add(ev.towerId, ev.defId, 0, ev.cellX, ev.cellZ);
           const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
           s3.particles.ring(w.x, w.z, 0xd9c8a0, 0.7);
-          s3.particles.shockwave(w.x, w.z, 0xffe6ad, 0.62, 0.3, { count: 16 });
           audio.play('towerPlace');
           this.buzz(12);
           break;

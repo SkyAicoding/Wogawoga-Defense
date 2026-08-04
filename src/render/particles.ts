@@ -426,16 +426,9 @@ export class ParticleSystem {
       },
     );
 
-    // 4) 지면 쇼크웨이브 — 강도에 따라 반경/두께가 커진다
-    const shockColor = opts.shock ?? opts.core;
-    const shockMul = opts.shockMul ?? 1;
-    if (shockColor !== 0 && shockMul > 0) {
-      const r = opts.shockRadiusAbs ?? (opts.shockRadius ?? 0.5) * (0.75 + 0.55 * s);
-      this.shockwave(x, z, shockColor, r, 0.24 + 0.11 * s, {
-        count: (14 + 7 * s) * shockMul * Math.max(0.45, m),
-        thickness: 0.95 + 0.22 * s,
-      });
-    }
+    // 지면 쇼크웨이브 링은 의도적으로 그리지 않는다 — 노란 링이 로우폴리 화면에서
+    // 이물감을 준다는 피드백. shock* 옵션은 호환을 위해 남겨두되 무시한다.
+    // (shockwave()는 여전히 공개 API이므로 필요하면 직접 호출할 수 있다.)
   }
 
   /** 바이옴 환경 파티클 (눈/화산재 등) — aabb 영역 내 순환 낙하 */
