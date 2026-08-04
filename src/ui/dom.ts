@@ -32,7 +32,7 @@ export function h<K extends keyof HTMLElementTagNameMap>(
     if (props.attrs) {
       for (const [k, v] of Object.entries(props.attrs)) el.setAttribute(k, v);
     }
-    if (props.onClick) el.addEventListener('click', props.onClick);
+    if (props.onClick) el.addEventListener('click', props.onClick as EventListener);
     if (props.onInput) el.addEventListener('input', props.onInput);
     if (props.onChange) el.addEventListener('change', props.onChange);
   }
