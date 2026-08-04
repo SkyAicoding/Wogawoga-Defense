@@ -11,19 +11,25 @@
 import { describe, expect, it } from 'vitest';
 import { createBattle } from '@/sim/battle';
 import { ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
-import type { BattleSim, TowerId } from '@/data/types';
+import { rasterizePathCells } from '@/data/grid';
+import type { BattleSim, StageDef, TowerId } from '@/data/types';
 
 const STAGE1_DECK: TowerId[] = ['spear', 'catapult', 'frost'];
 const ALL_DECK: TowerId[] = [
   'spear', 'catapult', 'frost', 'lightning', 'poison', 'ballista', 'brazier', 'drum',
 ];
 
-function makeSim(stageId: number, seed: number, deck: TowerId[], stars = 0): BattleSim {
+function makeSim(
+  stageId: number,
+  seed: number,
+  deck: TowerId[],
+  stars = 0,
+): { sim: BattleSim; stage: StageDef } {
   const stage = stageById(stageId);
   if (!stage) throw new Error(`no stage ${stageId}`);
   const starMap: Partial<Record<TowerId, number>> = {};
   for (const id of deck) starMap[id] = stars;
-  return createBattle({
+  const sim = createBattle({
     stage,
     stars: starMap,
     deck,
@@ -33,6 +39,7 @@ function makeSim(stageId: number, seed: number, deck: TowerId[], stars = 0): Bat
     enemyDefs: ENEMY_DEFS,
     waveFor: makeWaveFor(stage),
   });
+  return { sim, stage };
 }
 
 interface BotResult {
@@ -40,12 +47,24 @@ interface BotResult {
   wave: number;
 }
 
-function runBot(sim: BattleSim, maxIters = 900): BotResult {
-  const stage = { w: 40, h: 40 };
+function runBot(sim: BattleSim, stage: StageDef, maxIters = 900): BotResult {
+  // 자유 배치: 경로에서 가까운 셀부터 채운다 (사람의 상식적 배치 근사)
+  const pathCells = rasterizePathCells(stage);
+  const pathPts: [number, number][] = [];
+  for (const key of pathCells) pathPts.push([key % stage.gridW, Math.floor(key / stage.gridW)]);
   const slots: [number, number][] = [];
-  for (let z = 0; z < stage.h; z++) {
-    for (let x = 0; x < stage.w; x++) if (sim.canPlaceAt(x, z)) slots.push([x, z]);
+  for (let z = 0; z < stage.gridH; z++) {
+    for (let x = 0; x < stage.gridW; x++) if (sim.canPlaceAt(x, z)) slots.push([x, z]);
   }
+  const distToPath = ([x, z]: [number, number]): number => {
+    let best = Infinity;
+    for (const [px, pz] of pathPts) {
+      const d = (px - x) * (px - x) + (pz - z) * (pz - z);
+      if (d < best) best = d;
+    }
+    return best;
+  };
+  slots.sort((a, b) => distToPath(a) - distToPath(b));
   let guard = 0;
   while (sim.state.phase !== 'won' && sim.state.phase !== 'lost' && guard < maxIters) {
     guard++;
@@ -88,7 +107,10 @@ function runBot(sim: BattleSim, maxIters = 900): BotResult {
 describe('autoplay 난이도 봉투', () => {
   it('스테이지1: 평범한 봇이 시드 5개 중 3+ 클리어, 전부 웨이브 45+', () => {
     const seeds = [101, 202, 303, 404, 505];
-    const results = seeds.map((s) => runBot(makeSim(1, s, STAGE1_DECK)));
+    const results = seeds.map((s) => {
+      const { sim, stage } = makeSim(1, s, STAGE1_DECK);
+      return runBot(sim, stage);
+    });
     const wins = results.filter((r) => r.won).length;
     const minWave = Math.min(...results.map((r) => r.wave));
     expect(wins, `클리어 ${wins}/5, 결과: ${JSON.stringify(results)}`).toBeGreaterThanOrEqual(3);
@@ -96,7 +118,7 @@ describe('autoplay 난이도 봉투', () => {
   }, 60_000);
 
   it('스테이지1: 방치(타워 0)면 웨이브 10 안에 패배', () => {
-    const sim = makeSim(1, 7, STAGE1_DECK);
+    const { sim } = makeSim(1, 7, STAGE1_DECK);
     sim.applyCommand({ type: 'callWave' });
     for (let i = 0; i < 30 * 60 * 8 && sim.state.phase !== 'lost'; i++) {
       sim.tick();
@@ -108,7 +130,8 @@ describe('autoplay 난이도 봉투', () => {
   }, 30_000);
 
   it('스테이지6: 별 0 봇은 클리어 불가 (난이도 서열)', () => {
-    const r = runBot(makeSim(6, 11, ALL_DECK));
+    const { sim, stage } = makeSim(6, 11, ALL_DECK);
+    const r = runBot(sim, stage);
     expect(r.won, `stage6 결과: ${JSON.stringify(r)}`).toBe(false);
   }, 60_000);
 });

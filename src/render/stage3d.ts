@@ -140,7 +140,8 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
   const projectiles = new ProjectileView(scene, terrain.cellToWorld);
   const healthbars = new HealthBarView(scene);
   const decals = new Decals(scene, terrain.cellToWorld);
-  decals.init(terrain.slotCells, stage.paths);
+  // 자유 배치: 배치 모드 하이라이트는 건설 가능한 모든 셀에
+  decals.init(terrain.buildableCells, stage.paths);
   const particles = new ParticleSystem(scene, q.particleMax);
   if (q.ambientParticles) particles.setEnvironment(stage.biome, terrain.aabb);
 

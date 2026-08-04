@@ -5,6 +5,7 @@
  */
 import * as THREE from 'three';
 import type { StageDef, Vec2 } from '@/data/types';
+import { buildableCells as sharedBuildable, rasterizePathCells } from '@/data/grid';
 import { Rng, hashSeed } from '@/core/rng';
 import { BIOMES } from '../palette';
 import { flatMat } from '../palette';
@@ -22,36 +23,13 @@ export interface TerrainBuild {
   slotCells: Vec2[];
   /** 소품 산포 가능한 빈 지상 셀 */
   freeCells: Vec2[];
+  /** 자유 배치 가능한 모든 셀 (지상, 경로 제외) */
+  buildableCells: Vec2[];
   isGround(x: number, z: number): boolean;
   dispose(): void;
 }
 
 const TILE_H = 0.55;
-
-/** paths 웨이포인트를 0.25 간격 샘플링해 지나는 셀을 마킹 */
-export function rasterizePaths(stage: StageDef): Set<number> {
-  const cells = new Set<number>();
-  const mark = (x: number, z: number): void => {
-    const cx = Math.round(x);
-    const cz = Math.round(z);
-    if (cx >= 0 && cx < stage.gridW && cz >= 0 && cz < stage.gridH) {
-      cells.add(cz * stage.gridW + cx);
-    }
-  };
-  for (const path of stage.paths) {
-    for (let i = 0; i < path.length - 1; i++) {
-      const a = path[i] as Vec2;
-      const b = path[i + 1] as Vec2;
-      const len = Math.hypot(b.x - a.x, b.z - a.z);
-      const steps = Math.max(1, Math.ceil(len / 0.25));
-      for (let s = 0; s <= steps; s++) {
-        const t = s / steps;
-        mark(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t);
-      }
-    }
-  }
-  return cells;
-}
 
 function charAt(stage: StageDef, x: number, z: number): string {
   if (x < 0 || x >= stage.gridW || z < 0 || z >= stage.gridH) return '~';
@@ -62,7 +40,7 @@ function charAt(stage: StageDef, x: number, z: number): string {
 export function buildStage(stage: StageDef): TerrainBuild {
   const pal = BIOMES[stage.biome];
   const rng = new Rng(hashSeed(`terrain:${stage.id}`));
-  const pathCells = rasterizePaths(stage);
+  const pathCells = rasterizePathCells(stage);
   const slotCells: Vec2[] = [];
   const freeCells: Vec2[] = [];
   const halfW = (stage.gridW - 1) / 2;
@@ -126,23 +104,7 @@ export function buildStage(stage: StageDef): TerrainBuild {
       }
 
       if (ch === 'o') {
-        slotCells.push({ x, z });
-        // 슬롯 패드: 살짝 돌출된 원형 받침
-        pads.push({
-          kind: 'cyl',
-          pos: [wx, 0.045, wz],
-          scale: [0.86, 0.09, 0.86],
-          color: 0xb9ab8e,
-          seg: 8,
-          hueJitter: 0.01,
-        });
-        pads.push({
-          kind: 'cyl',
-          pos: [wx, 0.085, wz],
-          scale: [0.7, 0.05, 0.7],
-          color: 0xcec19f,
-          seg: 8,
-        });
+        slotCells.push({ x, z }); // 데이터 호환용 — 자유 배치라 시각 패드는 없음
       } else if (ch === '#') {
         // 바위 장식 (건설 불가) — 타일 지오메트리에 병합
         const n = rng.int(1, 2);
@@ -192,6 +154,7 @@ export function buildStage(stage: StageDef): TerrainBuild {
     pathCells,
     slotCells,
     freeCells,
+    buildableCells: sharedBuildable(stage, pathCells),
     isGround: (x, z) => charAt(stage, x, z) !== '~',
     dispose: () => {
       tileGeo.dispose();

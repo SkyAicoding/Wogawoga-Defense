@@ -14,7 +14,8 @@ import type { DioramaCamera } from '@/render/camera';
 const GROUND = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
 export class PlacementController {
-  private input: InputManager;
+  /** 전투 컨트롤러가 카메라 제스처(핀치/휠/드래그 팬)를 함께 구독한다 */
+  readonly input: InputManager;
   private raycaster = new THREE.Raycaster();
   private ndc = new THREE.Vector2();
   private hit = new THREE.Vector3();

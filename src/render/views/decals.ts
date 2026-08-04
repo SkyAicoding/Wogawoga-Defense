@@ -144,9 +144,9 @@ export class Decals {
 
   update(dt: number): void {
     this.time += dt;
-    // 슬롯 하이라이트 호흡
+    // 배치 가능 영역 하이라이트 호흡
     if (this.slots?.visible) {
-      this.slotMat.opacity = 0.4 + Math.sin(this.time * 5) * 0.18;
+      this.slotMat.opacity = 0.34 + Math.sin(this.time * 5) * 0.12;
     }
     // 셰브런: 평상시 은은하게, 펄스 중 강하게 점멸
     if (this.chevrons) {

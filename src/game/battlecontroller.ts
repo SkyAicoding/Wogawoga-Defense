@@ -151,6 +151,26 @@ export class BattleController {
       },
     };
 
+    // 카메라 제스처: 휠/핀치 줌 + (줌 상태에서) 드래그 팬
+    const input = this.placement.input;
+    input.events.on('wheel', (w) => {
+      this.camera.zoomBy(w.deltaY < 0 ? 1.12 : 1 / 1.12);
+    });
+    input.events.on('pinch', (p) => {
+      this.camera.zoomBy(p.scale);
+    });
+    let lastDragX = 0;
+    let lastDragY = 0;
+    input.events.on('dragStart', (i) => {
+      lastDragX = i.x;
+      lastDragY = i.y;
+    });
+    input.events.on('drag', (i) => {
+      this.camera.panByPixels(i.x - lastDragX, i.y - lastDragY);
+      lastDragX = i.x;
+      lastDragY = i.y;
+    });
+
     audio.music.setBiome(stage.biome);
     audio.music.setIntensity(1);
     if (!audio.music.isPlaying) audio.music.start();
