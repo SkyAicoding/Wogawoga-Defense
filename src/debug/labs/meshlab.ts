@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import type { EnemyId, TowerId } from '@/data/types';
 import { flatMat, glowMat } from '@/render/palette';
 import { ALL_ENEMY_IDS, buildEnemy } from '@/render/meshlib/enemies';
-import { buildTower } from '@/render/meshlib/towers';
+import { assembleTower, buildTower } from '@/render/meshlib/towers';
 import { PROJECTILE_TOWERS, buildProjectile } from '@/render/meshlib/projectiles';
 import { createBasecamp } from '@/render/meshlib/basecamp';
 
@@ -28,11 +28,8 @@ function makeItem(name: string, build: (g: THREE.Group) => void): Item {
 
 function towerItem(id: TowerId, tier: number): Item {
   return makeItem(`${id} t${tier + 1}`, (g) => {
-    const model = buildTower(id, tier);
-    const main = new THREE.Mesh(model.main, flatMat());
-    main.castShadow = true;
-    g.add(main);
-    if (model.glow) g.add(new THREE.Mesh(model.glow, glowMat()));
+    const rig = assembleTower(buildTower(id, tier), { flat: flatMat(), glow: glowMat() }, true);
+    g.add(rig.root);
   });
 }
 

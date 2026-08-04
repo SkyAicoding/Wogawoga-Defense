@@ -205,6 +205,7 @@ export class BattleController {
     s3.enemies.update(st.enemies, alpha, s3.cellToWorld, dt);
     s3.healthbars.update(st.enemies, alpha, s3.cellToWorld);
     s3.projectiles.update(st.projectiles, alpha, dt);
+    s3.towers.aim(st.towers, st.enemies, alpha);
     s3.update(dt);
     this.camera.update(dt);
     this.renderer.render(s3.scene, this.camera.camera);
