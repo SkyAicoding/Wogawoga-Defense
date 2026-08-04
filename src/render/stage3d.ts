@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import type { StageDef } from '@/data/types';
 import { Rng, hashSeed } from '@/core/rng';
+import { cellKey, sceneryCells } from '@/data/grid';
 import { BIOMES, flatMat } from './palette';
 import { buildParts, type PartSpec } from './meshlib/factory';
 import { buildStage as buildTerrain, type CellToWorld } from './meshlib/terrain';
@@ -78,7 +79,9 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
   // --- 지형 + 소품 + 기지 ---
   const terrain = buildTerrain(stage);
   root.add(terrain.group);
-  const props = buildProps(stage.biome, terrain.freeCells, terrain.cellToWorld, stage.id);
+  const scenery = sceneryCells(stage, terrain.pathCells);
+  const sceneryList = [...scenery].map((k) => ({ x: k % stage.gridW, z: Math.floor(k / stage.gridW) }));
+  const props = buildProps(stage.biome, sceneryList, terrain.cellToWorld, stage.id);
   root.add(props.group);
   const basecamp = createBasecamp();
   const baseV = terrain.cellToWorld(stage.baseCell.x, stage.baseCell.z);
@@ -140,8 +143,11 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
   const projectiles = new ProjectileView(scene, terrain.cellToWorld);
   const healthbars = new HealthBarView(scene);
   const decals = new Decals(scene, terrain.cellToWorld);
-  // 자유 배치: 배치 모드 하이라이트는 건설 가능한 모든 셀에
-  decals.init(terrain.buildableCells, stage.paths);
+  // 자유 배치: 배치 모드 하이라이트는 건설 가능한 셀(소품 제외)에
+  decals.init(
+    terrain.buildableCells.filter((c) => !scenery.has(cellKey(stage, c.x, c.z))),
+    stage.paths,
+  );
   const particles = new ParticleSystem(scene, q.particleMax);
   if (q.ambientParticles) particles.setEnvironment(stage.biome, terrain.aabb);
 

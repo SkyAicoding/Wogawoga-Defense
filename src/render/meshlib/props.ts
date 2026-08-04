@@ -132,20 +132,21 @@ const PROP_SETS: Record<BiomeId, (() => PartSpec[])[]> = {
   volcano: [vent, charStump, () => rock(0x4c3a34), charStump],
 };
 
-/** 빈 지상 셀에 소품 산포 — 병합 메시 1개 반환 */
+/**
+ * 지정된 소품 셀에 산포 — 병합 메시 1개 반환.
+ * 셀 선택은 data/grid.sceneryCells가 담당 (sim의 건설 불가 판정과 동일 시드).
+ */
 export function buildProps(
   biome: BiomeId,
-  freeCells: readonly Vec2[],
+  propCellList: readonly Vec2[],
   cellToWorld: (x: number, z: number, out?: THREE.Vector3) => THREE.Vector3,
   seed: number,
-  density = 0.3,
 ): { group: THREE.Group; dispose(): void } {
   const rng = new Rng(hashSeed(`props:${biome}:${seed}`));
   const set = PROP_SETS[biome];
   const clones: THREE.BufferGeometry[] = [];
   const v = new THREE.Vector3();
-  for (const cell of freeCells) {
-    if (!rng.chance(density)) continue;
+  for (const cell of propCellList) {
     const idx = rng.int(0, set.length - 1);
     const builder = set[idx];
     if (!builder) continue;
@@ -156,9 +157,9 @@ export function buildProps(
     const g = proto.clone();
     geoTransform(
       g,
-      v.x + rng.range(-0.24, 0.24),
+      v.x + rng.range(-0.18, 0.18),
       0,
-      v.z + rng.range(-0.24, 0.24),
+      v.z + rng.range(-0.18, 0.18),
       rng.range(0, Math.PI * 2),
       rng.range(0.8, 1.15),
     );

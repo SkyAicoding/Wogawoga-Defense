@@ -17,7 +17,7 @@ import type {
   WaveDef,
 } from '@/data/types';
 import { Rng } from '@/core/rng';
-import { isBuildableCell, rasterizePathCells } from '@/data/grid';
+import { isBuildableCell, rasterizePathCells, sceneryCells } from '@/data/grid';
 import { recomputeBuffs, updateProjectiles, updateTowers } from './attack';
 import { addGold, leakEnemy } from './combat';
 import { Economy, sellRefundFor } from './economy';
@@ -50,6 +50,8 @@ class Battle implements BattleSim {
   private waveDef: WaveDef | null = null;
   /** 경로가 지나는 셀 — 건설 불가 (render와 동일 래스터라이즈) */
   private readonly pathCells: ReadonlySet<number>;
+  /** 나무/바위 등 소품 셀 — 건설 불가 (render와 동일 시드) */
+  private readonly scenery: ReadonlySet<number>;
 
   constructor(opts: BattleOptions) {
     const stage = opts.stage;
@@ -88,6 +90,7 @@ class Battle implements BattleSim {
       airPaths,
     };
     this.pathCells = rasterizePathCells(stage);
+    this.scenery = sceneryCells(stage, this.pathCells);
     this.economy.fillHand(this.ctx);
   }
 
@@ -323,8 +326,9 @@ class Battle implements BattleSim {
   canPlaceAt(cellX: number, cellZ: number): boolean {
     const stage = this.ctx.opts.stage;
     if (!Number.isInteger(cellX) || !Number.isInteger(cellZ)) return false;
-    // 자유 배치: 경로/물/장식('#')이 아닌 빈 땅 어디든
+    // 자유 배치: 경로/물/장식('#')/소품(나무·바위)이 아닌 빈 땅 어디든
     if (!isBuildableCell(stage, this.pathCells, cellX, cellZ)) return false;
+    if (this.scenery.has(cellZ * stage.gridW + cellX)) return false;
     return this.towerAt(cellX, cellZ) === null;
   }
 

@@ -1,7 +1,8 @@
 /**
- * 그리드 공유 유틸 — sim과 render가 동일한 경로 셀/건설 가능 판정을 쓰도록 단일화.
- * (three/DOM 의존 없음)
+ * 그리드 공유 유틸 — sim과 render가 동일한 경로 셀/건설 가능/소품 셀 판정을
+ * 쓰도록 단일화. (three/DOM 의존 없음)
  */
+import { Rng, hashSeed } from '@/core/rng';
 import type { StageDef, Vec2 } from './types';
 
 export function cellKey(stage: StageDef, x: number, z: number): number {
@@ -55,13 +56,29 @@ export function isBuildableCell(
   return !pathCells.has(cellKey(stage, x, z));
 }
 
-/** 스테이지의 모든 건설 가능 셀 목록 */
+/** 스테이지의 모든 건설 가능 셀 목록 (소품 미고려 — sceneryCells로 추가 제외) */
 export function buildableCells(stage: StageDef, pathCells: ReadonlySet<number>): Vec2[] {
   const out: Vec2[] = [];
   for (let z = 0; z < stage.gridH; z++) {
     for (let x = 0; x < stage.gridW; x++) {
       if (isBuildableCell(stage, pathCells, x, z)) out.push({ x, z });
     }
+  }
+  return out;
+}
+
+/** 소품 산포 밀도 (건설 가능 셀 대비) */
+export const SCENERY_DENSITY = 0.3;
+
+/**
+ * 소품(나무/바위 등)이 놓이는 셀 — 시드 고정이라 sim/render가 항상 일치한다.
+ * 이 셀에는 타워를 지을 수 없고, 렌더는 정확히 이 셀에만 큰 소품을 배치한다.
+ */
+export function sceneryCells(stage: StageDef, pathCells: ReadonlySet<number>): Set<number> {
+  const rng = new Rng(hashSeed(`scenery:${stage.id}`));
+  const out = new Set<number>();
+  for (const c of buildableCells(stage, pathCells)) {
+    if (rng.chance(SCENERY_DENSITY)) out.add(cellKey(stage, c.x, c.z));
   }
   return out;
 }
