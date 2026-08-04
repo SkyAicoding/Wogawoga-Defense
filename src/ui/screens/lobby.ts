@@ -8,6 +8,27 @@ import { h, cls, fmt, mount, unmount, uiRoot, clearChildren } from '../dom';
 import { t } from '../i18n';
 import { amberSvg, lockSvg } from '../widgets/card';
 
+/** 번들된 스테이지 일러스트 (파일명 = BiomeId) */
+const STAGE_ART = import.meta.glob<string>('../../assets/stages/*.webp', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+});
+
+function stageArtUrl(biome: BiomeId): string | null {
+  for (const [path, url] of Object.entries(STAGE_ART)) {
+    if (path.endsWith(`/${biome}.webp`)) return url;
+  }
+  return null;
+}
+
+/** 스테이지 카드 아트 — 일러스트 우선, 없으면 바이옴 SVG 폴백 */
+function biomeArt(biome: BiomeId): string {
+  const art = stageArtUrl(biome);
+  if (art) return `<img class="stage-art" src="${art}" alt="" draggable="false" />`;
+  return biomeSvg(biome);
+}
+
 const B = (body: string, sky: string): string =>
   `<svg viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
    <rect width="120" height="80" rx="10" fill="${sky}"/>${body}</svg>`;
@@ -89,7 +110,7 @@ export function createLobbyScreen(): Screen<GameFacade> {
           'div',
           { class: `stage-card biome--${stage.biome}${unlocked ? '' : ' is-locked'}` },
           h('div', { class: 'stage-card-no', text: t('lobby.stageNo', { n: stage.id }) }),
-          h('div', { class: 'stage-card-art', html: biomeSvg(stage.biome) }),
+          h('div', { class: 'stage-card-art', html: biomeArt(stage.biome) }),
           h('div', { class: 'stage-card-name', text: t(stage.nameKey) }),
           unlocked
             ? h('div', { class: `stage-card-prog${prog.cleared ? ' is-cleared' : ''}`, text: progressText })
