@@ -24,6 +24,7 @@ function miniCtx(seed = 1): SimCtx {
     baseHp: 10,
     baseHpMax: 10,
     prepTicksLeft: 0,
+    earlyCallBonusGold: 0,
     hand: [],
     refreshCost: 0,
     enemies: world.enemies.items,

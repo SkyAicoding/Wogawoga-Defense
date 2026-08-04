@@ -7,7 +7,7 @@ import { bossWave, g, v } from './helpers';
 
 export const stage01: StageDef = {
   id: 1,
-  nameKey: 'stage.1',
+  nameKey: 'stage.1.name',
   biome: 'grassland',
   gridW: 11,
   gridH: 15,

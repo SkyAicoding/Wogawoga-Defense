@@ -66,6 +66,7 @@ class Battle implements BattleSim {
       baseHp: stage.baseHp,
       baseHpMax: stage.baseHp,
       prepTicksLeft: PREP_TICKS_FIRST,
+      earlyCallBonusGold: Math.floor(PREP_TICKS_FIRST * EARLY_CALL_RATE),
       hand,
       refreshCost: 0,
       enemies: world.enemies.items,
@@ -98,6 +99,7 @@ class Battle implements BattleSim {
     // 1) prep 진행 / 웨이브 스폰
     if (v.phase === 'prep') {
       if (v.prepTicksLeft > 0) v.prepTicksLeft--;
+      v.earlyCallBonusGold = Math.floor(v.prepTicksLeft * EARLY_CALL_RATE);
       if (v.prepTicksLeft <= 0) this.startWave();
     }
     if (v.phase === 'wave') this.spawner.update(ctx);
@@ -222,6 +224,7 @@ class Battle implements BattleSim {
         if (bonus > 0) addGold(this.ctx, bonus);
         this.ctx.events.push({ type: 'earlyCallBonus', gold: bonus });
         v.prepTicksLeft = 0; // 다음 틱에 웨이브 시작
+        v.earlyCallBonusGold = 0;
         return true;
       }
     }

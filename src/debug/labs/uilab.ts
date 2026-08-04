@@ -12,6 +12,8 @@ import type {
 import { TICK_RATE } from '@/data/types';
 import { ScreenFsm } from '@/core/fsm';
 import { Rng } from '@/core/rng';
+import { STAGES } from '@/data/stages';
+import { TOWER_DEFS } from '@/data/towers';
 import { setLang } from '@/ui/i18n';
 import { createTitleScreen } from '@/ui/screens/title';
 import { createLobbyScreen } from '@/ui/screens/lobby';
@@ -84,6 +86,9 @@ function makeProfile(): ProfileApi {
     updateSettings(patch) {
       Object.assign(data.settings, patch);
     },
+    resetData() {
+      /* 목: 초기화 안 함 */
+    },
     save() {
       /* 목: 저장 안 함 */
     },
@@ -112,6 +117,7 @@ export function run(): void {
   const st: BattleStateView = {
     tick: 0, phase: 'prep', waveIndex: 1, waveCount: 50, gold: 120,
     baseHp: 100, baseHpMax: 100, prepTicksLeft: 6 * TICK_RATE,
+    earlyCallBonusGold: Math.floor(6 * TICK_RATE * 0.15),
     hand: drawHand(), refreshCost: 0, enemies: [], towers: [mockTower],
     projectiles: [], amberEarned: 0, endless: false,
   };
@@ -201,6 +207,8 @@ export function run(): void {
   // --- 파사드 + FSM ---------------------------------------------------------
   const facade: GameFacade = {
     profile,
+    stages: STAGES,
+    towerDefs: TOWER_DEFS,
     goto: (s, params) => fsm.goto(s, params),
     currentScreen: () => fsm.currentId() ?? 'title',
     startBattle: (stageId, endless) => {

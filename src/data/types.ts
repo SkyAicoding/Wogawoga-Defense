@@ -248,6 +248,8 @@ export interface EnemyState {
   radius: number;
   alive: boolean;
   hpMul: number;
+  /** 보스 여부 (연출 강조용, def.boss 복사) */
+  boss?: boolean;
 }
 
 export interface TowerState {
@@ -315,6 +317,8 @@ export interface BattleStateView {
   baseHpMax: number;
   /** prep 카운트다운 남은 틱 */
   prepTicksLeft: number;
+  /** 지금 callWave 시 받을 조기 호출 보너스 골드 (prep 아닐 땐 0) */
+  earlyCallBonusGold: number;
   hand: CardState[];
   refreshCost: number; // 0이면 무료
   enemies: readonly EnemyState[];
@@ -487,6 +491,8 @@ export interface ProfileApi {
   isStageUnlocked(stageId: number): boolean;
   isEndlessUnlocked(): boolean;
   updateSettings(patch: Partial<Settings>): void;
+  /** 세이브 삭제 + 새 프로필 (설정 화면 2단 확인 후) */
+  resetData(): void;
   save(): void;
 }
 
@@ -498,6 +504,9 @@ export interface BattleUiApi {
   /** 셀 선택/타워 선택 상태는 game/placement가 관리, UI는 콜백만 받는다 */
   selectCard(handIndex: number | null): void;
   selectedCard(): number | null;
+  /** 현재 선택된 배치 타워 id (없으면 null) */
+  selectedTower(): number | null;
+  requestSetTargeting(mode: TargetingMode): void;
   requestRefresh(): void;
   requestCallWave(): void;
   requestUpgradeSelected(): void;
@@ -515,5 +524,8 @@ export interface GameFacade {
   battle: BattleUiApi | null;
   /** 결과 화면 데이터 */
   lastResult: ResultSummary | null;
+  /** 표시용 실데이터 (로비/도감) */
+  stages: readonly StageDef[];
+  towerDefs: Readonly<Record<TowerId, TowerDef>>;
   version: string;
 }

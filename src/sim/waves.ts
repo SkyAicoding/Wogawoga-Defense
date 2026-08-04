@@ -59,6 +59,7 @@ export class WaveSpawner {
     e.statuses.length = 0;
     e.stunImmuneUntil = -1;
     e.alive = true;
+    e.boss = def.boss ?? false;
     e.bounty = def.bounty;
     e.baseDamage = def.baseDamage;
     e.radius = def.radius;

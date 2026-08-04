@@ -97,4 +97,14 @@ export class InputManager {
     // 물리 키코드 사용 (비라틴 자판 호환)
     this.events.emit('key', { code: e.code });
   };
+
+  /** 리스너 해제 (전투 종료 시 누수 방지) */
+  dispose(): void {
+    this.el.removeEventListener('pointerdown', this.onDown);
+    window.removeEventListener('pointermove', this.onMove);
+    window.removeEventListener('pointerup', this.onUp);
+    window.removeEventListener('pointercancel', this.onUp);
+    window.removeEventListener('keydown', this.onKey);
+    this.events.clear();
+  }
 }

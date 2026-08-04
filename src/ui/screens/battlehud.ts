@@ -14,11 +14,8 @@ import { amberSvg, createTowerCard, goldSvg, heartSvg, towerIconSvg } from '../w
 import type { TowerCard } from '../widgets/card';
 import { showModal } from '../widgets/modal';
 
-/** 계약 외 선택 확장 — game 트랙이 제공하면 사용 */
-interface BattleUiApiExt extends BattleUiApi {
-  selectedTower?(): number | null;
-  requestSetTargeting?(mode: TargetingMode): void;
-}
+/** selectedTower/requestSetTargeting이 계약(BattleUiApi)에 편입됨 — 별칭만 유지 */
+type BattleUiApiExt = BattleUiApi;
 
 const TARGETING_ORDER: readonly TargetingMode[] = ['first', 'last', 'strongest', 'nearest'];
 
@@ -288,14 +285,13 @@ export function createBattleHud(): Screen<GameFacade> {
         const refund = b.sim.sellRefund(tw.id);
         setText(sellBtnLabel, refund === null ? '—' : `+${fmt(refund)}`);
         setText(targetBtn, t(`battle.targeting.${tw.targeting}`));
-        targetBtn.style.display = b.requestSetTargeting ? '' : 'none';
       }
     },
   };
 
-  /** 확장 API에서 선택 타워 상태 조회 (미지원 시 null) */
+  /** 선택 타워 상태 조회 */
   function selectedTowerState(b: BattleUiApiExt | null): TowerState | null {
-    if (!b || !b.selectedTower) return null;
+    if (!b) return null;
     const id = b.selectedTower();
     if (id === null) return null;
     return b.sim.state.towers.find((tw) => tw.id === id) ?? null;
