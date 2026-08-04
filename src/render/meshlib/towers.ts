@@ -240,27 +240,25 @@ function poison(t: number): Parts {
   const bs = 0.24 + t * 0.05;
   const by = 0.2 + bs;
   const pivotY = 0.3;
-  // 헤드: 벌린 턱잎(t3+) — 줄기 위에서 타깃을 향해 회전
-  const head: PartSpec[] = [];
+  // 액션(발광): 식물 머리 + 벌린 턱잎(t3+) — 헤드 요 회전 + 스쿼시&스트레치를 함께 받는다
+  const action: PartSpec[] = [
+    { kind: 'sphere', pos: [0, 0, 0], scale: [bs * 2, bs * 1.7, bs * 2], color: C.poison },
+  ];
   if (t >= 3) {
     for (let i = 0; i < 5; i++) {
       const a = (i / 5) * Math.PI * 2;
-      head.push({
+      action.push({
         kind: 'cone',
-        pos: [Math.cos(a) * bs * 1.1, by + bs * 0.9 - pivotY, Math.sin(a) * bs * 1.1],
+        pos: [Math.cos(a) * bs * 1.1, bs * 0.9, Math.sin(a) * bs * 1.1],
         rot: [Math.sin(a) * 0.9, 0, -Math.cos(a) * 0.9],
         scale: [0.16, 0.34, 0.06],
         color: 0xb8478a,
       });
     }
   }
-  // 액션(발광): 식물 머리 — 움츠렸다 뱉는 스쿼시&스트레치
-  const action: PartSpec[] = [
-    { kind: 'sphere', pos: [0, 0, 0], scale: [bs * 2, bs * 1.7, bs * 2], color: C.poison },
-  ];
   const glow: PartSpec[] = [];
   if (t >= 4) glow.push({ kind: 'sphere', pos: [0.3, 0.3, 0.24], scale: 0.18, color: 0xc0f24a });
-  return { base, head, action, glow, actionMat: 'glow', headPivotY: pivotY, actionPivot: [0, by - pivotY, 0] };
+  return { base, action, glow, actionMat: 'glow', headPivotY: pivotY, actionPivot: [0, by - pivotY, 0] };
 }
 
 function ballista(t: number): Parts {

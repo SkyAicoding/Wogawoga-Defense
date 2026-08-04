@@ -20,7 +20,7 @@ const FIRE_DUR: Record<TowerId, number> = {
   lightning: 0.22,
   brazier: 0.5,
   frost: 0.32,
-  poison: 0.3,
+  poison: 0.38,
   ballista: 0.9, // 재장전 슬라이드 전체
   drum: 0,
 };
@@ -41,6 +41,8 @@ interface TowerEntry {
   tier: number;
   /** action 그룹 기본 로컬 위치 (애니 오프셋 기준점) */
   actionPos: THREE.Vector3;
+  /** head 피벗 높이 (poison 런지 복원용) */
+  headPosY: number;
   /** 현재/목표 요 (마지막 타깃 방향 유지) */
   yaw: number;
   targetYaw: number;
@@ -106,6 +108,7 @@ export class TowerView {
       defId,
       tier,
       actionPos: new THREE.Vector3(model.actionPivot[0], model.actionPivot[1], model.actionPivot[2]),
+      headPosY: model.headPivotY,
       yaw: 0,
       targetYaw: 0,
       fireT: 0,
@@ -279,7 +282,7 @@ export class TowerView {
         // 장전 자세(0) → 발사 시 ~140ms 전방 스냅 → 쿨다운 동안 천천히 재장전
         const swing = clamp(1.55 * ex, 0, 1.9);
         if (e.fireT > 0) e.armVal = -swing * easeOutCubic(1 - k);
-        else e.armVal = damp(e.armVal, 0, 1.9, dt);
+        else e.armVal = damp(e.armVal, 0, 1.4, dt);
         a.rotation.z = e.armVal;
         break;
       }
@@ -301,26 +304,27 @@ export class TowerView {
         break;
       }
       case 'poison': {
-        // 움츠림(1/3) → 뱉기 스냅 + 감쇠 복귀 (스쿼시&스트레치, +X = 타깃 방향)
+        // 움츠림(1/3) → 뱉기 스냅 + 감쇠 복귀 — 헤드(턱잎+머리) 전체 스쿼시&스트레치
         let sx = 1;
         let sy = 1;
         let px = 0;
         if (e.fireT > 0) {
           const u = 1 - k;
-          if (u < 0.33) {
-            const c = easeOutCubic(u / 0.33);
-            sx = 1 - 0.3 * c;
-            sy = 1 + 0.14 * c;
-            px = -0.1 * c;
+          if (u < 0.32) {
+            const c = easeOutCubic(u / 0.32);
+            sx = 1 - 0.32 * c;
+            sy = 1 + 0.16 * c;
+            px = -0.12 * c;
           } else {
-            const w = (1 - (u - 0.33) / 0.67) ** 2;
-            sx = 1 + 0.55 * ex * w;
-            sy = 1 - 0.28 * w;
-            px = 0.16 * ex * w;
+            const w = (1 - (u - 0.32) / 0.68) ** 2;
+            sx = 1 + 0.6 * ex * w;
+            sy = 1 - 0.3 * w;
+            px = 0.2 * ex * w;
           }
         }
-        a.scale.set(sx, sy, 1 - (sx - 1) * 0.3);
-        a.position.x = e.actionPos.x + px;
+        // 스케일은 헤드 로컬 축(+X=전방), 런지는 요를 반영한 루트 공간 오프셋
+        e.head.scale.set(sx, sy, 1 - (sx - 1) * 0.35);
+        e.head.position.set(Math.cos(e.yaw) * px, e.headPosY, -Math.sin(e.yaw) * px);
         break;
       }
       case 'lightning': {
