@@ -340,6 +340,12 @@ export class BattleController {
         this.sim.applyCommand({ type: 'placeTower', handIndex, cellX: x, cellZ: z }),
       callWave: (): boolean => this.sim.applyCommand({ type: 'callWave' }),
       drawCalls: (): number => this.renderer.gl.info.render.calls,
+      renderInfo: (): { calls: number; triangles: number; geometries: number; textures: number } => ({
+        calls: this.renderer.gl.info.render.calls,
+        triangles: this.renderer.gl.info.render.triangles,
+        geometries: this.renderer.gl.info.memory.geometries,
+        textures: this.renderer.gl.info.memory.textures,
+      }),
       // 연출 검증용: 루프를 멈춘 채 파티클/카메라 시간만 수동으로 진행시켜
       // 착탄 직후 프레임을 정확한 간격으로 캡처한다
       pause: (v: boolean): void => {
