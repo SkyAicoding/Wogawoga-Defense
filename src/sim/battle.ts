@@ -33,6 +33,9 @@ const BUFF_INTERVAL = 5;
 const ENDLESS_HP_GROWTH = 1.06;
 const MAX_TIER = 4;
 
+/** 진행거리 오름차순, 동점은 id (타게팅 규약, 완전 결정론) — 매 틱 클로저 생성 방지용 호이스팅 */
+const byDistThenId = (a: EnemySim, b: EnemySim): number => a.dist - b.dist || a.id - b.id;
+
 // FNV-1a — float를 비트 단위로 혼합 (결정론 해시)
 const hashF64 = new Float64Array(1);
 const hashU32 = new Uint32Array(hashF64.buffer);
@@ -165,8 +168,8 @@ class Battle implements BattleSim {
       }
       path.sample(e.dist, e);
     }
-    // 진행거리 오름차순 정렬 유지 (타게팅 규약, 동점은 id — 완전 결정론)
-    items.sort((a, b) => a.dist - b.dist || a.id - b.id);
+    // 진행거리 오름차순 정렬 유지 (타게팅 규약)
+    items.sort(byDistThenId);
   }
 
   private checkEnd(): void {
@@ -286,6 +289,7 @@ class Battle implements BattleSim {
     ctx.world.towers.removeAt(idx);
     addGold(ctx, refund);
     ctx.events.push({ type: 'towerSold', towerId, refund });
+    this.economy.recalcCosts(ctx); // 타워 수 감소 → 핸드 실비용 하락 반영
     return true;
   }
 

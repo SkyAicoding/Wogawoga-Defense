@@ -34,11 +34,14 @@ export function createApp(): void {
   // --- 오디오: 첫 제스처 언락 + 설정 반영 -----------------------------------
   audio.setMusicVolume(profile.data.settings.music);
   audio.setSfxVolume(profile.data.settings.sfx);
+  // iOS 사파리 등은 pointerdown만으로 언락이 안 되는 경우가 있어
+  // touchend/click까지 함께 대기 — 처음 발화한 이벤트가 셋 다 제거한다
+  const UNLOCK_EVENTS = ['pointerdown', 'touchend', 'click'] as const;
   const unlockOnce = (): void => {
     audio.unlock();
-    window.removeEventListener('pointerdown', unlockOnce);
+    for (const ev of UNLOCK_EVENTS) window.removeEventListener(ev, unlockOnce);
   };
-  window.addEventListener('pointerdown', unlockOnce);
+  for (const ev of UNLOCK_EVENTS) window.addEventListener(ev, unlockOnce);
 
   profile.onSettingsChanged = (s) => {
     audio.setMusicVolume(s.music);
@@ -158,16 +161,21 @@ export function createApp(): void {
   // 컨텍스트 복구 시 씬 재구축
   renderer.onContextRestored = () => {
     if (controller) {
-      // 전투 중 복구는 드묾 — 안전하게 로비로
-      disposeBattle();
-      buildBackdrop();
-      fsm.goto('lobby');
+      // 전투 중 복구는 드묾 — 진행분 정산 포함 종료 후 로비로 (quit 경로 재사용).
+      // 이미 종료 연출 중이면 no-op — 기존 종료 흐름(결과/로비 전환)이 마무리한다.
+      controller.forceQuit();
+      audio.music.setIntensity(0);
     } else {
       backdrop?.dispose();
       backdrop = null;
       backdropStageId = 0;
       buildBackdrop();
     }
+  };
+
+  // 동적 해상도가 바닥(0.7)에 닿아도 계속 느림 → 품질 티어 한 단계 강등
+  renderer.onPersistentlySlow = () => {
+    if (qm.degrade()) renderer.setQuality(qm.flags);
   };
 
   // --- 메인 루프 -------------------------------------------------------------

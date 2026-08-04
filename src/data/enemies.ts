@@ -107,7 +107,8 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 24,
     baseDamage: 1,
     radius: 0.34,
-    // 주변 힐 — 반경 2, 0.5초마다 8 회복 (자신 제외)
+    // 주변 힐 — 반경 2, 0.5초마다 hpPerStatusTick × 시전자 hpMul 회복 (자신 제외).
+    // hpMul 스케일 덕에 중후반 웨이브에서도 힐러 메커니크가 유효하다 (sim/status.ts).
     healAura: { radius: 2, hpPerStatusTick: 8 },
     cost: 30,
   },

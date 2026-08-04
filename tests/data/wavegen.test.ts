@@ -72,10 +72,10 @@ describe('wavegen', () => {
         }
       });
 
-      it('보스 웨이브가 직전 웨이브보다 약하지 않음 (클라이맥스 보장)', () => {
+      it('보스 웨이브가 직전 웨이브보다 확실히 강함 (클라이맥스 보장, 앤티클라이맥스 방지)', () => {
         for (const wave of [10, 20, 30, 40, 50]) {
           const ratio = totalHp(waveFor(wave)) / totalHp(waveFor(wave - 1));
-          expect(ratio, `w${wave} 보스/직전 HP비`).toBeGreaterThan(0.95);
+          expect(ratio, `w${wave} 보스/직전 HP비`).toBeGreaterThan(1.1);
         }
       });
 

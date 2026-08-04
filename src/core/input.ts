@@ -47,13 +47,21 @@ export class InputManager {
     el.addEventListener('pointerdown', this.onDown, { passive: false });
     window.addEventListener('pointermove', this.onMove, { passive: false });
     window.addEventListener('pointerup', this.onUp, { passive: false });
-    window.addEventListener('pointercancel', this.onUp, { passive: false });
+    window.addEventListener('pointercancel', this.onCancel, { passive: false });
     window.addEventListener('keydown', this.onKey);
     el.addEventListener('wheel', this.onWheel, { passive: false });
     // 모바일 제스처 차단
-    el.addEventListener('contextmenu', (e) => e.preventDefault());
-    el.addEventListener('dblclick', (e) => e.preventDefault());
+    el.addEventListener('contextmenu', this.onContextMenu);
+    el.addEventListener('dblclick', this.onDblClick);
   }
+
+  private onContextMenu = (e: Event): void => {
+    e.preventDefault();
+  };
+
+  private onDblClick = (e: Event): void => {
+    e.preventDefault();
+  };
 
   private setInfo(e: PointerEvent): void {
     const rect = this.el.getBoundingClientRect();
@@ -79,13 +87,11 @@ export class InputManager {
   private onDown = (e: PointerEvent): void => {
     this.pointers.set(e.pointerId, this.pointerPos(e));
     if (this.pointers.size === 2) {
-      // 두 번째 손가락 → 핀치 모드: 진행 중이던 탭/드래그 취소
+      // 두 번째 손가락 → 핀치 모드: 진행 중이던 탭/드래그는 취소.
+      // 취소이므로 dragEnd를 방출하지 않는다 (dragEnd = 의도된 릴리즈에만).
       this.pinching = true;
       this.lastPinchDist = this.pinchDist();
-      if (this.dragging) {
-        this.dragging = false;
-        this.events.emit('dragEnd', this.info);
-      }
+      this.dragging = false;
       this.isDown = false;
       return;
     }
@@ -151,6 +157,17 @@ export class InputManager {
     }
   };
 
+  /** pointercancel — tap/dragEnd 없이 상태만 리셋 (브라우저가 제스처를 가로챈 경우) */
+  private onCancel = (e: PointerEvent): void => {
+    this.pointers.delete(e.pointerId);
+    if (this.pointers.size < 2) {
+      this.pinching = false;
+      this.lastPinchDist = 0;
+    }
+    this.isDown = false;
+    this.dragging = false;
+  };
+
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault(); // 페이지 스크롤/브라우저 줌 방지
     const rect = this.el.getBoundingClientRect();
@@ -171,9 +188,11 @@ export class InputManager {
     this.el.removeEventListener('pointerdown', this.onDown);
     window.removeEventListener('pointermove', this.onMove);
     window.removeEventListener('pointerup', this.onUp);
-    window.removeEventListener('pointercancel', this.onUp);
+    window.removeEventListener('pointercancel', this.onCancel);
     window.removeEventListener('keydown', this.onKey);
     this.el.removeEventListener('wheel', this.onWheel);
+    this.el.removeEventListener('contextmenu', this.onContextMenu);
+    this.el.removeEventListener('dblclick', this.onDblClick);
     this.events.clear();
   }
 }

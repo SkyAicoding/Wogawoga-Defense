@@ -89,19 +89,47 @@ describe('status', () => {
     expect(effectiveSpeed(e)).toBeCloseTo(2 * 0.3);
   });
 
-  it('poison — 최대 3스택, 초과 시 가장 오래된 것 갱신, armor 무시', () => {
+  it('poison — 같은 소스 재적용은 자기 스택 갱신 (스택 수 불변)', () => {
+    const ctx = miniCtx();
+    const e = spawn(ctx, enemyDef('raptor', { hp: 100 }));
+    tryApplyStatus(ctx, e, { kind: 'poison', magnitude: 2, durationTicks: 100, chance: 1 }, 7);
+    tryApplyStatus(ctx, e, { kind: 'poison', magnitude: 3, durationTicks: 80, chance: 1 }, 7);
+    const stacks = e.statuses.filter((s) => s.kind === 'poison');
+    expect(stacks).toHaveLength(1); // 같은 소스 → 새 스택 없음
+    expect(stacks[0]?.magnitude).toBe(3); // 갱신됨
+    expect(stacks[0]?.remainingTicks).toBe(80);
+    expect(stacks[0]?.sourceId).toBe(7);
+  });
+
+  it('poison — 다른 소스는 별도 스택으로 병존, armor 무시 합산', () => {
     const ctx = miniCtx();
     const e = spawn(ctx, enemyDef('raptor', { armor: 50, hp: 100 }));
-    for (let i = 0; i < 3; i++) {
-      tryApplyStatus(ctx, e, { kind: 'poison', magnitude: 2, durationTicks: 100, chance: 1 });
-    }
-    expect(e.statuses.filter((s) => s.kind === 'poison')).toHaveLength(3);
-    tryApplyStatus(ctx, e, { kind: 'poison', magnitude: 9, durationTicks: 40, chance: 1 });
+    tryApplyStatus(ctx, e, { kind: 'poison', magnitude: 2, durationTicks: 100, chance: 1 }, 1);
+    tryApplyStatus(ctx, e, { kind: 'poison', magnitude: 4, durationTicks: 100, chance: 1 }, 2);
+    tryApplyStatus(ctx, e, { kind: 'poison', magnitude: 6, durationTicks: 100, chance: 1 }, 3);
+    expect(e.statuses.filter((s) => s.kind === 'poison')).toHaveLength(3); // 소스별 병존
+    tickN(ctx, e, 15); // STATUS_TICK_INTERVAL 경계 도달
+    expect(e.hp).toBeCloseTo(100 - (2 + 4 + 6)); // armor 50 무시하고 3스택 합산
+  });
+
+  it('poison — 소스별 3스택 캡: 4번째 소스는 가장 오래된 스택 교체', () => {
+    const ctx = miniCtx();
+    const e = spawn(ctx, enemyDef('raptor', { hp: 100 }));
+    tryApplyStatus(ctx, e, { kind: 'poison', magnitude: 2, durationTicks: 30, chance: 1 }, 1);
+    tryApplyStatus(ctx, e, { kind: 'poison', magnitude: 2, durationTicks: 100, chance: 1 }, 2);
+    tryApplyStatus(ctx, e, { kind: 'poison', magnitude: 2, durationTicks: 100, chance: 1 }, 3);
+    tryApplyStatus(ctx, e, { kind: 'poison', magnitude: 9, durationTicks: 40, chance: 1 }, 4);
     const stacks = e.statuses.filter((s) => s.kind === 'poison');
     expect(stacks).toHaveLength(3); // 초과 스택 없음
-    expect(stacks.filter((s) => s.magnitude === 9)).toHaveLength(1); // 가장 오래된 것이 교체됨
-    tickN(ctx, e, 15); // STATUS_TICK_INTERVAL 경계 도달
-    expect(e.hp).toBeCloseTo(100 - (2 + 2 + 9)); // armor 50 무시하고 원 데미지
+    expect(stacks.some((s) => s.sourceId === 1)).toBe(false); // 잔여 최소(가장 오래된) 소스1 교체
+    const replaced = stacks.find((s) => s.sourceId === 4);
+    expect(replaced?.magnitude).toBe(9);
+    expect(replaced?.remainingTicks).toBe(40);
+    // 캡 상태에서 기존 소스 재적용은 여전히 자기 스택 갱신
+    tryApplyStatus(ctx, e, { kind: 'poison', magnitude: 5, durationTicks: 60, chance: 1 }, 2);
+    const s2 = e.statuses.filter((s) => s.kind === 'poison').find((s) => s.sourceId === 2);
+    expect(e.statuses.filter((s) => s.kind === 'poison')).toHaveLength(3);
+    expect(s2?.magnitude).toBe(5);
   });
 
   it('burn — armor 적용(최소 1), poison과 독립 스택', () => {
@@ -163,5 +191,17 @@ describe('status', () => {
     expect(far.hp).toBe(4); // 반경 밖
     expect(healer.hp).toBe(5); // 자신 제외
     expect(ctx.events.filter((e) => e.type === 'enemyDamaged')).toHaveLength(0); // 음수 이벤트 금지
+  });
+
+  it('healAura — 회복량이 시전자 hpMul로 스케일 (중반 이후 힐러 유효)', () => {
+    const ctx = miniCtx();
+    spawn(
+      ctx,
+      enemyDef('shaman', { hp: 100, healAura: { radius: 2, hpPerStatusTick: 8 } }),
+      { hpMul: 4 },
+    );
+    const ally = spawn(ctx, enemyDef('raptor', { hp: 100 }), { x: 1, hp: 10, maxHp: 100 });
+    processHealAuras(ctx);
+    expect(ally.hp).toBe(10 + 8 * 4); // 8 × hpMul(4) = 32 회복
   });
 });

@@ -14,7 +14,7 @@ import type {
 } from '@/data/types';
 import { clamp01, dist, dist2, lerp, parabola } from '@/core/mathx';
 import { damageEnemy } from './combat';
-import { pathFor, type EnemySim, type SimCtx } from './entities';
+import { pathFor, type EnemySim, type ProjectileSim, type SimCtx } from './entities';
 import type { PathPoint } from './path';
 import { effectiveSpeed, tryApplyStatus } from './status';
 import { canTarget, lockedTarget, selectTarget } from './targeting';
@@ -32,6 +32,11 @@ export function effDmg(ctx: SimCtx, t: TowerState, def: TowerDef, tier: TowerTie
 
 export function effRange(ctx: SimCtx, def: TowerDef, tier: TowerTier): number {
   return tier.range * (1 + starsOf(ctx, def) * (def.starBonus.rangePct ?? 0));
+}
+
+/** 오라 반경(drum/brazier) — 별 rangePct 보너스 적용 */
+export function effAuraRadius(ctx: SimCtx, def: TowerDef, radius: number): number {
+  return radius * (1 + starsOf(ctx, def) * (def.starBonus.rangePct ?? 0));
 }
 
 export function effCooldown(ctx: SimCtx, t: TowerState, def: TowerDef, tier: TowerTier): number {
@@ -52,6 +57,7 @@ function applyArea(
   dmg: number,
   splash: SplashSpec,
   source: TowerDef['id'],
+  sourceTowerId: number,
   status: StatusApplySpec | undefined,
   excludeId: number,
 ): void {
@@ -60,7 +66,7 @@ function applyArea(
     const d = dist(x, z, e.x, e.z);
     if (d > splash.radius + e.radius) continue;
     damageEnemy(ctx, e, dmg * splashScale(d, splash), source);
-    if (status && e.alive) tryApplyStatus(ctx, e, status);
+    if (status && e.alive) tryApplyStatus(ctx, e, status, sourceTowerId);
   }
 }
 
@@ -76,7 +82,8 @@ export function recomputeBuffs(ctx: SimCtx): void {
     const tier = def.tiers[d.tier] as TowerTier;
     const aura = tier.aura;
     if (!aura || (aura.dmgPct === undefined && aura.ratePct === undefined)) continue;
-    const r2 = aura.radius * aura.radius;
+    const r = effAuraRadius(ctx, def, aura.radius); // 별 rangePct 반영
+    const r2 = r * r;
     for (const t of towers) {
       if (t === d) continue;
       if (dist2(d.cellX, d.cellZ, t.cellX, t.cellZ) > r2) continue;
@@ -118,12 +125,12 @@ function pulseTick(ctx: SimCtx, t: TowerState, def: TowerDef, tier: TowerTier): 
   const dmg =
     aura.dmgPerStatusTick * (1 + starsOf(ctx, def) * def.starBonus.dmgPct) * (1 + t.buffDmgPct);
   const status = aura.status ?? tier.status;
-  const r = aura.radius;
+  const r = effAuraRadius(ctx, def, aura.radius); // 별 rangePct 반영
   for (const e of ctx.world.enemies.items) {
     if (!e.alive || e.flying) continue;
     if (dist2(t.cellX, t.cellZ, e.x, e.z) > r * r) continue;
     damageEnemy(ctx, e, dmg, def.id);
-    if (status && e.alive) tryApplyStatus(ctx, e, status);
+    if (status && e.alive) tryApplyStatus(ctx, e, status, t.id);
   }
 }
 
@@ -137,6 +144,7 @@ function fireHoming(
   const p = ctx.world.acquireProjectile();
   p.kind = 'homing';
   p.towerDefId = def.id;
+  p.sourceTowerId = t.id;
   p.x = p.prevX = p.startX = t.cellX;
   p.z = p.prevZ = p.startZ = t.cellZ;
   p.y = p.prevY = 0.6;
@@ -173,6 +181,7 @@ function fireBallistic(
   const p = ctx.world.acquireProjectile();
   p.kind = 'ballistic';
   p.towerDefId = def.id;
+  p.sourceTowerId = t.id;
   p.x = p.prevX = p.startX = t.cellX;
   p.z = p.prevZ = p.startZ = t.cellZ;
   p.y = p.prevY = 0.6;
@@ -211,7 +220,7 @@ function fireBeam(
   let mult = 1;
   while (cur) {
     damageEnemy(ctx, cur, baseDmg * mult, def.id);
-    if (tier.status && cur.alive) tryApplyStatus(ctx, cur, tier.status);
+    if (tier.status && cur.alive) tryApplyStatus(ctx, cur, tier.status, t.id);
     points.push({ x: cur.x, z: cur.z, flying: cur.flying });
     hitIds.push(cur.id);
     if (hitIds.length > jumps) break;
@@ -237,7 +246,7 @@ function fireBeam(
 export function updateProjectiles(ctx: SimCtx): void {
   const list = ctx.world.projectiles;
   for (let i = list.length - 1; i >= 0; i--) {
-    const p = list.items[i] as ProjectileState;
+    const p = list.items[i] as ProjectileSim;
     p.prevX = p.x;
     p.prevY = p.y;
     p.prevZ = p.z;
@@ -278,20 +287,23 @@ export function updateProjectiles(ctx: SimCtx): void {
   }
 }
 
-function impactHoming(ctx: SimCtx, p: ProjectileState, primary: EnemySim | null): void {
+function impactHoming(ctx: SimCtx, p: ProjectileSim, primary: EnemySim | null): void {
   if (primary) {
     damageEnemy(ctx, primary, p.dmg, p.towerDefId);
-    if (p.status && primary.alive) tryApplyStatus(ctx, primary, p.status);
+    if (p.status && primary.alive) tryApplyStatus(ctx, primary, p.status, p.sourceTowerId);
   }
   if (p.splash) {
-    applyArea(ctx, p.x, p.z, p.dmg, p.splash, p.towerDefId, p.status, primary ? primary.id : -1);
+    applyArea(
+      ctx, p.x, p.z, p.dmg, p.splash, p.towerDefId, p.sourceTowerId, p.status,
+      primary ? primary.id : -1,
+    );
   }
   ctx.events.push({ type: 'projectileHit', towerDefId: p.towerDefId, x: p.x, z: p.z, splash: !!p.splash });
 }
 
-function impactBallistic(ctx: SimCtx, p: ProjectileState): void {
+function impactBallistic(ctx: SimCtx, p: ProjectileSim): void {
   if (p.splash) {
-    applyArea(ctx, p.x, p.z, p.dmg, p.splash, p.towerDefId, p.status, -1);
+    applyArea(ctx, p.x, p.z, p.dmg, p.splash, p.towerDefId, p.sourceTowerId, p.status, -1);
   } else {
     // 스플래시가 없으면 착탄점 최근접 단일 타격
     let hit: EnemySim | null = null;
@@ -306,7 +318,7 @@ function impactBallistic(ctx: SimCtx, p: ProjectileState): void {
     }
     if (hit) {
       damageEnemy(ctx, hit, p.dmg, p.towerDefId);
-      if (p.status && hit.alive) tryApplyStatus(ctx, hit, p.status);
+      if (p.status && hit.alive) tryApplyStatus(ctx, hit, p.status, p.sourceTowerId);
     }
   }
   ctx.events.push({ type: 'projectileHit', towerDefId: p.towerDefId, x: p.x, z: p.z, splash: !!p.splash });

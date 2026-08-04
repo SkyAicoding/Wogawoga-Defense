@@ -13,6 +13,7 @@ import { t } from '../i18n';
 import { amberSvg, createTowerCard, goldSvg, heartSvg, towerIconSvg } from '../widgets/card';
 import type { TowerCard } from '../widgets/card';
 import { showModal } from '../widgets/modal';
+import type { ModalHandle } from '../widgets/modal';
 
 /** selectedTower/requestSetTargeting이 계약(BattleUiApi)에 편입됨 — 별칭만 유지 */
 type BattleUiApiExt = BattleUiApi;
@@ -48,6 +49,9 @@ export function createBattleHud(): Screen<GameFacade> {
   let cards: TowerCard[] = [];
   let lastSelTower: number | null = null;
 
+  // 열린 일시정지 모달 — 화면 이탈 시 닫아 결과 화면에 잔존하지 않게 한다
+  let pauseModal: ModalHandle | null = null;
+
   // 참조 요소 (enter에서 채움)
   let waveNum!: HTMLElement;
   let goldNum!: HTMLElement;
@@ -74,13 +78,14 @@ export function createBattleHud(): Screen<GameFacade> {
 
   const openPauseModal = (b: BattleUiApiExt): void => {
     b.paused = true;
-    showModal({
+    pauseModal = showModal({
       title: t('battle.paused'),
       body: t('battle.quitBody'),
       buttons: [
         { label: t('battle.quit'), kind: 'danger', onTap: () => b.quitToLobby() },
         { label: t('battle.resume'), kind: 'primary', onTap: () => { b.paused = false; } },
       ],
+      onClose: () => { pauseModal = null; },
     });
   };
 
@@ -212,6 +217,8 @@ export function createBattleHud(): Screen<GameFacade> {
     },
 
     exit() {
+      pauseModal?.close();
+      pauseModal = null;
       if (root) unmount(root);
       root = null;
       bannerHost = null;
@@ -264,8 +271,10 @@ export function createBattleHud(): Screen<GameFacade> {
       callWaveBtn.style.display = prep ? '' : 'none';
       if (prep) {
         const secs = Math.ceil(s.prepTicksLeft / TICK_RATE);
-        // 조기 보너스 골드가 계약(BattleStateView)에 없어 근사치 표기 (contractIssues 참고)
-        setText(callWaveSub, `${t('battle.earlyBonus', { g: secs * 2 })} · ${t('battle.prep', { s: secs })}`);
+        setText(
+          callWaveSub,
+          `${t('battle.earlyBonus', { g: s.earlyCallBonusGold })} · ${t('battle.prep', { s: secs })}`,
+        );
       }
 
       // 선택 타워 패널

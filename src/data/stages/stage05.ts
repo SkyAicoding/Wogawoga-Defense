@@ -47,23 +47,29 @@ export const stage05: StageDef = {
       'raptor', 'compy', 'boar', 'trike', 'ptera', 'warrior', 'shaman', 'ankylo', 'mammoth',
     ],
     bossOverrides: {
-      10: bossWave(g('spino', 1, 0, 30, 0.9), g('shaman', 3, 45, 120), g('boar', 8, 15, 180)),
+      // w10 첫 보스 벽 완화: 전체 ×0.65 (w9 대비 총 HP ~5.9배 → ~3.8배)
+      10: bossWave(
+        g('spino', 1, 0, 30, 0.59),
+        g('shaman', 3, 45, 120, 0.65),
+        g('boar', 8, 15, 180, 0.65),
+      ),
       20: bossWave(g('spino', 1, 0, 30, 1.15), g('mammoth', 2, 90, 120), g('shaman', 3, 45, 240)),
+      // 클라이맥스 보정: 직전 웨이브 대비 총 HP ≥1.15×
       30: bossWave(
-        g('spino', 2, 240, 30, 1.3),
-        g('ankylo', 4, 50, 150),
-        g('shaman', 3, 45, 300),
+        g('spino', 2, 240, 30, 1.56),
+        g('ankylo', 4, 50, 150, 1.2),
+        g('shaman', 3, 45, 300, 1.2),
       ),
       40: bossWave(
-        g('trex', 1, 0, 30, 1.3),
-        g('mammoth', 3, 90, 240),
-        g('shaman', 4, 45, 180),
-        g('warrior', 8, 20, 120),
+        g('trex', 1, 0, 30, 1.56),
+        g('mammoth', 3, 90, 240, 1.2),
+        g('shaman', 4, 45, 180, 1.2),
+        g('warrior', 8, 20, 120, 1.2),
       ),
       50: bossWave(
-        g('trex', 1, 0, 30, 1.3),
-        g('spino', 1, 0, 420, 1.0),
-        g('mammoth', 2, 90, 240),
+        g('trex', 1, 0, 30, 1.5),
+        g('spino', 1, 0, 420, 1.15),
+        g('mammoth', 2, 90, 240, 1.15),
       ),
     },
   },

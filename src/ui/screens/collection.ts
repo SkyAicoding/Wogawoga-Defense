@@ -1,46 +1,13 @@
 /**
  * 도감 — 타워 그리드(별/조각 진행) + 탭 시 상세 시트(스탯/별 강화/해금).
- * 타워 스탯·비용은 data 트랙 소유(TowerDef)라 GameFacade로 접근 불가 →
- * 표시용 로컬 테이블 사용 (contractIssues 보고 대상, 통합 시 TowerDef로 대체).
+ * 스탯·비용·해금 조건은 전부 facade.towerDefs(TowerDef 실데이터)에서 읽는다.
  */
-import type { GameFacade, TowerId } from '@/data/types';
+import type { GameFacade, TowerDef, TowerId } from '@/data/types';
+import { TICK_RATE } from '@/data/types';
 import type { Screen } from '@/core/fsm';
-import { h, cls, fmt, mount, unmount, uiRoot, clearChildren } from '../dom';
+import { h, fmt, mount, unmount, uiRoot, clearChildren } from '../dom';
 import { t } from '../i18n';
 import { amberSvg, starSvg, towerIconSvg, lockSvg } from '../widgets/card';
-
-const ALL_TOWERS: readonly TowerId[] = [
-  'spear', 'catapult', 'lightning', 'brazier', 'frost', 'poison', 'ballista', 'drum',
-];
-
-interface TowerDisplayMeta {
-  dmg: number;
-  /** 초당 공격 횟수 (오라는 2/s 고정) */
-  rate: number;
-  range: number;
-  cost: number;
-  /** 별 n+1개가 되기 위한 [조각, 호박] */
-  starCosts: [number, number][];
-  starBonus: { dmgPct: number; ratePct: number };
-  /** 호박 해금 타워만 값 존재 */
-  unlockAmber?: number;
-}
-
-const DEFAULT_STAR_COSTS: [number, number][] = [
-  [5, 60], [10, 150], [20, 350], [40, 700], [80, 1400],
-];
-
-/** 표시용 밸런스 근사값 — 실제 수치는 통합 때 TowerDef에서 읽는다 */
-const META: Record<TowerId, TowerDisplayMeta> = {
-  spear: { dmg: 12, rate: 1.5, range: 3.2, cost: 60, starCosts: DEFAULT_STAR_COSTS, starBonus: { dmgPct: 10, ratePct: 5 } },
-  catapult: { dmg: 30, rate: 0.5, range: 4.0, cost: 90, starCosts: DEFAULT_STAR_COSTS, starBonus: { dmgPct: 12, ratePct: 4 } },
-  lightning: { dmg: 18, rate: 0.8, range: 3.4, cost: 110, starCosts: DEFAULT_STAR_COSTS, starBonus: { dmgPct: 10, ratePct: 6 } },
-  brazier: { dmg: 6, rate: 2, range: 1.8, cost: 70, starCosts: DEFAULT_STAR_COSTS, starBonus: { dmgPct: 12, ratePct: 0 } },
-  frost: { dmg: 8, rate: 0.9, range: 3.0, cost: 80, starCosts: DEFAULT_STAR_COSTS, starBonus: { dmgPct: 8, ratePct: 6 } },
-  poison: { dmg: 10, rate: 1.0, range: 3.2, cost: 85, starCosts: DEFAULT_STAR_COSTS, starBonus: { dmgPct: 10, ratePct: 5 }, unlockAmber: 300 },
-  ballista: { dmg: 60, rate: 0.4, range: 5.0, cost: 140, starCosts: DEFAULT_STAR_COSTS, starBonus: { dmgPct: 14, ratePct: 4 } },
-  drum: { dmg: 0, rate: 0, range: 2.2, cost: 100, starCosts: DEFAULT_STAR_COSTS, starBonus: { dmgPct: 6, ratePct: 6 }, unlockAmber: 500 },
-};
 
 function starsRow(stars: number, cl: string): HTMLElement {
   const row = h('div', { class: cl });
@@ -50,12 +17,50 @@ function starsRow(stars: number, cl: string): HTMLElement {
   return row;
 }
 
+/** 별 1개당 보너스 요약 — def.starBonus 실측값(비율 → %). 0인 항목은 생략 */
+function bonusSummary(def: TowerDef): string {
+  const pct = (n: number): number => Math.round(n * 100);
+  const parts: string[] = [];
+  if (def.starBonus.dmgPct > 0) parts.push(t('collection.bonusDmg', { n: pct(def.starBonus.dmgPct) }));
+  if (def.starBonus.ratePct > 0) parts.push(t('collection.bonusRate', { n: pct(def.starBonus.ratePct) }));
+  const rangePct = def.starBonus.rangePct ?? 0;
+  if (rangePct > 0) parts.push(t('collection.bonusRange', { n: pct(rangePct) }));
+  return parts.join(' · ');
+}
+
+/** 특수효과(스플래시/체인/상태이상/오라) 한 줄 요약 — 티어0 스펙 존재 여부 기준 */
+function fxSummary(def: TowerDef): string {
+  const t0 = def.tiers[0];
+  if (!t0) return '';
+  const parts: string[] = [];
+  if (t0.splash) parts.push(t('collection.fxSplash'));
+  if (t0.chain) parts.push(t('collection.fxChain'));
+  const status = t0.status ?? t0.aura?.status;
+  if (status) parts.push(t(`collection.fxStatus.${status.kind}`));
+  if (t0.aura) {
+    if (t0.aura.dmgPerStatusTick !== undefined) parts.push(t('collection.fxAuraDmg'));
+    if (t0.aura.dmgPct !== undefined || t0.aura.ratePct !== undefined) {
+      parts.push(t('collection.fxAuraBuff'));
+    }
+  }
+  return parts.join(' · ');
+}
+
+/** 실패 피드백 — 흔들기 애니메이션 재시작 */
+function shake(el: HTMLElement): void {
+  el.classList.remove('is-shake');
+  void el.offsetWidth; // 리플로우로 애니메이션 리셋
+  el.classList.add('is-shake');
+}
+
 export function createCollectionScreen(): Screen<GameFacade> {
   let root: HTMLElement | null = null;
 
   return {
     enter(facade) {
       const p = facade.profile;
+      const defs = facade.towerDefs;
+      const towerIds = Object.keys(defs) as TowerId[];
       const amberNum = h('span', { class: 'pill-num', text: fmt(p.data.amber) });
       const grid = h('div', { class: 'coll-grid' });
       const sheetHost = h('div', { class: 'sheet-host' });
@@ -67,10 +72,10 @@ export function createCollectionScreen(): Screen<GameFacade> {
       // --- 그리드 렌더 -----------------------------------------------------
       const renderGrid = (): void => {
         clearChildren(grid);
-        for (const id of ALL_TOWERS) {
+        for (const id of towerIds) {
           const tp = p.data.towers[id];
-          const meta = META[id];
-          const nextCost = tp.stars < 5 ? meta.starCosts[tp.stars] : null;
+          const def = defs[id];
+          const nextCost = tp.stars < 5 ? def.starCosts[tp.stars] : null;
           const cell = h(
             'button',
             {
@@ -79,7 +84,7 @@ export function createCollectionScreen(): Screen<GameFacade> {
               onClick: () => openSheet(id),
             },
             h('div', { class: 'coll-ico', html: towerIconSvg(id) }),
-            h('div', { class: 'coll-name', text: t(`tower.${id}.name`) }),
+            h('div', { class: 'coll-name', text: t(def.nameKey) }),
             tp.unlocked ? starsRow(tp.stars, 'coll-stars') : h('div', { class: 'coll-lockrow' },
               h('span', { class: 'coll-lock-ico', html: lockSvg }),
               h('span', { text: t('collection.locked') }),
@@ -104,7 +109,8 @@ export function createCollectionScreen(): Screen<GameFacade> {
       const openSheet = (id: TowerId): void => {
         clearChildren(sheetHost);
         const tp = p.data.towers[id];
-        const meta = META[id];
+        const def = defs[id];
+        const tier0 = def.tiers[0];
         const statRow = (label: string, value: string): HTMLElement =>
           h('div', { class: 'sheet-stat' },
             h('span', { class: 'sheet-stat-k', text: label }),
@@ -113,37 +119,48 @@ export function createCollectionScreen(): Screen<GameFacade> {
 
         let action: HTMLElement;
         if (!tp.unlocked) {
-          action = meta.unlockAmber !== undefined
-            ? h('button', {
-                class: `btn btn--primary sheet-action${p.data.amber < meta.unlockAmber ? ' is-disabled' : ''}`,
-                attrs: { type: 'button' },
-                onClick: () => {
-                  if (p.unlockTower(id)) {
-                    refreshAmber();
-                    renderGrid();
-                    openSheet(id);
-                  }
-                },
+          const unlock = def.unlock;
+          if (unlock.type === 'amber') {
+            action = h('button', {
+              class: `btn btn--primary sheet-action${p.data.amber < unlock.cost ? ' is-disabled' : ''}`,
+              attrs: { type: 'button' },
+              onClick: (e) => {
+                if (p.unlockTower(id)) {
+                  refreshAmber();
+                  renderGrid();
+                  openSheet(id);
+                } else {
+                  shake(e.currentTarget as HTMLElement);
+                }
               },
+            },
+            h('span', { class: 'sheet-action-row' },
               h('span', { text: `${t('collection.unlock')} · ` }),
               h('span', { class: 'inline-ico', html: amberSvg }),
-              h('span', { text: t('collection.unlockAmber', { a: meta.unlockAmber }) }),
-            )
-            : h('div', { class: 'sheet-hint', text: t('collection.unlockStage') });
+              h('span', { text: t('collection.unlockAmber', { a: unlock.cost }) }),
+            ),
+            );
+          } else if (unlock.type === 'stage') {
+            action = h('div', { class: 'sheet-hint', text: t('collection.unlockStage', { n: unlock.stage }) });
+          } else {
+            // 'start'형은 프로필이 항상 해금 상태로 시작 — 도달 불가 방어 분기
+            action = h('div', { class: 'sheet-hint', text: t('collection.locked') });
+          }
         } else if (tp.stars >= 5) {
           action = h('div', { class: 'sheet-hint sheet-hint--max', text: t('collection.maxStar') });
         } else {
-          const cost = meta.starCosts[tp.stars];
-          const [s, a] = cost ?? [0, 0];
+          const [s, a] = def.starCosts[tp.stars] ?? [0, 0];
           const afford = tp.shards >= s && p.data.amber >= a;
           action = h('button', {
             class: `btn btn--primary sheet-action${afford ? '' : ' is-disabled'}`,
             attrs: { type: 'button' },
-            onClick: () => {
+            onClick: (e) => {
               if (p.starUp(id)) {
                 refreshAmber();
                 renderGrid();
                 openSheet(id);
+              } else {
+                shake(e.currentTarget as HTMLElement);
               }
             },
           },
@@ -152,6 +169,9 @@ export function createCollectionScreen(): Screen<GameFacade> {
           );
         }
 
+        const hasAttack = (tier0?.dmg ?? 0) > 0;
+        const bonus = bonusSummary(def);
+        const fx = fxSummary(def);
         const sheet = h(
           'div',
           { class: 'sheet' },
@@ -164,24 +184,34 @@ export function createCollectionScreen(): Screen<GameFacade> {
           h('div', { class: 'sheet-head' },
             h('div', { class: 'sheet-ico', html: towerIconSvg(id) }),
             h('div', { class: 'sheet-head-txt' },
-              h('div', { class: 'sheet-name', text: t(`tower.${id}.name`) }),
+              h('div', { class: 'sheet-name', text: t(def.nameKey) }),
               starsRow(tp.stars, 'sheet-stars'),
             ),
           ),
-          h('div', { class: 'sheet-desc', text: t(`tower.${id}.desc`) }),
+          h('div', { class: 'sheet-desc', text: t(def.descKey) }),
           h('div', { class: 'sheet-stats' },
-            statRow(t('collection.statDmg'), meta.dmg > 0 ? String(meta.dmg) : '—'),
-            statRow(t('collection.statRate'), meta.rate > 0 ? t('collection.statRateUnit', { n: meta.rate }) : '—'),
-            statRow(t('collection.statRange'), String(meta.range)),
-            statRow(t('collection.statCost'), String(meta.cost)),
+            statRow(t('collection.statDmg'), hasAttack && tier0 ? String(tier0.dmg) : '—'),
+            statRow(
+              t('collection.statRate'),
+              hasAttack && tier0
+                ? t('collection.statRateUnit', { n: (TICK_RATE / tier0.cooldownTicks).toFixed(1) })
+                : '—',
+            ),
+            statRow(t('collection.statRange'), tier0 ? String(tier0.range) : '—'),
+            statRow(t('collection.statCost'), tier0 ? String(tier0.cost) : '—'),
           ),
-          h('div', { class: 'sheet-bonus' },
-            h('span', { class: 'sheet-bonus-k', text: t('collection.starBonusTitle') }),
-            h('span', {
-              class: 'sheet-bonus-v',
-              text: t('collection.starBonus', { d: meta.starBonus.dmgPct, r: meta.starBonus.ratePct }),
-            }),
-          ),
+          bonus
+            ? h('div', { class: 'sheet-bonus' },
+                h('span', { class: 'sheet-bonus-k', text: t('collection.starBonusTitle') }),
+                h('span', { class: 'sheet-bonus-v', text: bonus }),
+              )
+            : null,
+          fx
+            ? h('div', { class: 'sheet-bonus sheet-bonus--fx' },
+                h('span', { class: 'sheet-bonus-k', text: t('collection.fxTitle') }),
+                h('span', { class: 'sheet-bonus-v', text: fx }),
+              )
+            : null,
           action,
         );
         sheetHost.appendChild(

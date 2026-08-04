@@ -22,6 +22,11 @@ export interface EnemySim extends EnemyState {
   stunImmuneUntil: number;
 }
 
+/** 투사체 내부 확장 — 상태이상 소스별 스택을 위해 발사 타워 id를 들고 다닌다 */
+export interface ProjectileSim extends ProjectileState {
+  sourceTowerId: number;
+}
+
 function makeEnemy(): EnemySim {
   return {
     id: 0,
@@ -56,11 +61,12 @@ function resetEnemy(e: EnemySim): void {
   e.shieldHitsLeft = 0;
 }
 
-function makeProjectile(): ProjectileState {
+function makeProjectile(): ProjectileSim {
   return {
     id: 0,
     kind: 'homing',
     towerDefId: 'spear',
+    sourceTowerId: -1,
     x: 0,
     y: 0,
     z: 0,
@@ -82,9 +88,10 @@ function makeProjectile(): ProjectileState {
   };
 }
 
-function resetProjectile(p: ProjectileState): void {
+function resetProjectile(p: ProjectileSim): void {
   p.alive = true;
   p.targetId = -1;
+  p.sourceTowerId = -1;
   p.flightTicks = 0;
   p.elapsedTicks = 0;
   p.splash = undefined;
@@ -94,11 +101,11 @@ function resetProjectile(p: ProjectileState): void {
 export class World {
   readonly enemies = new DenseList<EnemySim>();
   readonly towers = new DenseList<TowerState>();
-  readonly projectiles = new DenseList<ProjectileState>();
+  readonly projectiles = new DenseList<ProjectileSim>();
   private readonly enemyById = new Map<number, EnemySim>();
   private nextId = 1;
   private readonly enemyPool = new Pool<EnemySim>(makeEnemy, resetEnemy, 32);
-  private readonly projPool = new Pool<ProjectileState>(makeProjectile, resetProjectile, 32);
+  private readonly projPool = new Pool<ProjectileSim>(makeProjectile, resetProjectile, 32);
 
   newId(): number {
     return this.nextId++;
@@ -122,7 +129,7 @@ export class World {
     return this.enemyById.get(id);
   }
 
-  acquireProjectile(): ProjectileState {
+  acquireProjectile(): ProjectileSim {
     const p = this.projPool.acquire();
     p.id = this.newId();
     this.projectiles.add(p);

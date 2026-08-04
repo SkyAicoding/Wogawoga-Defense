@@ -9,7 +9,6 @@ import { h, fmt, mount, unmount, uiRoot } from '../dom';
 import { t } from '../i18n';
 import { amberSvg, starSvg, towerIconSvg } from '../widgets/card';
 
-const MAX_STAGE = 6;
 const COUNTUP_SECS = 1.2;
 
 export function createResultScreen(): Screen<GameFacade> {
@@ -56,7 +55,10 @@ export function createResultScreen(): Screen<GameFacade> {
       );
 
       const nextOk =
-        r.won && !r.endless && r.stageId < MAX_STAGE && facade.profile.isStageUnlocked(r.stageId + 1);
+        r.won &&
+        !r.endless &&
+        r.stageId < facade.stages.length &&
+        facade.profile.isStageUnlocked(r.stageId + 1);
 
       const buttons = h('div', { class: 'res-btns' },
         h('button', {

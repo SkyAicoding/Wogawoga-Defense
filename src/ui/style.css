@@ -220,9 +220,13 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .sheet-stat { display: flex; justify-content: space-between; background: rgba(0, 0, 0, 0.28); border-radius: var(--r-sm); padding: 8px 12px; }
 .sheet-stat-k { opacity: 0.75; font-size: 0.9rem; }
 .sheet-stat-v { font-weight: 900; }
-.sheet-bonus { display: flex; justify-content: space-between; align-items: center; background: rgba(255, 208, 74, 0.12); border: 2px dashed rgba(255, 208, 74, 0.5); border-radius: var(--r-sm); padding: 8px 12px; font-size: 0.9rem; }
-.sheet-bonus-v { font-weight: 900; color: var(--gold); }
+.sheet-bonus { display: flex; justify-content: space-between; align-items: center; gap: 10px; background: rgba(255, 208, 74, 0.12); border: 2px dashed rgba(255, 208, 74, 0.5); border-radius: var(--r-sm); padding: 8px 12px; font-size: 0.9rem; }
+.sheet-bonus-v { font-weight: 900; color: var(--gold); text-align: right; }
+.sheet-bonus--fx { background: rgba(159, 220, 247, 0.1); border-color: rgba(159, 220, 247, 0.5); }
+.sheet-bonus--fx .sheet-bonus-v { color: #9fdcf7; }
 .sheet-action { width: 100%; flex-direction: column; gap: 2px; }
+.sheet-action-row { display: inline-flex; align-items: center; gap: 4px; }
+.sheet-action.is-shake { animation: btn-shake 0.3s ease; }
 .sheet-action-cost { font-size: 0.82rem; font-weight: 700; opacity: 0.85; }
 .sheet-hint { text-align: center; padding: 12px; font-weight: 700; opacity: 0.75; }
 .sheet-hint--max { color: var(--gold); opacity: 1; }
@@ -275,7 +279,7 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .hp-fill.is-low { background: linear-gradient(180deg, #ff7a63, #e04f3f); animation: hp-blink 0.8s ease-in-out infinite; }
 .hp-num { font-weight: 900; min-width: 40px; text-align: right; text-shadow: 0 2px 0 rgba(0, 0, 0, 0.5); }
 .hud-side {
-  position: absolute; right: 2px; top: 36%;
+  position: absolute; right: calc(var(--safe-right) + 2px); top: 36%;
   display: flex; flex-direction: column; gap: 10px;
 }
 .side-btn {
@@ -423,6 +427,7 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   100% { transform: scale(0.9); opacity: 0; }
 }
 @keyframes boss-shake { 0%, 100% { translate: 0 0; } 25% { translate: -4px 0; } 75% { translate: 4px 0; } }
+@keyframes btn-shake { 0%, 100% { translate: 0 0; } 20%, 60% { translate: -6px 0; } 40%, 80% { translate: 6px 0; } }
 @keyframes star-pop { from { transform: scale(0) rotate(-30deg); } to { transform: scale(1) rotate(0); } }
 @keyframes burst-spin { from { transform: translateX(-50%) rotate(0); } to { transform: translateX(-50%) rotate(360deg); } }
 @keyframes dmg-rise {
@@ -465,8 +470,8 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   .banner-host { top: 20%; }
   .hud-side { top: 27%; flex-direction: row; gap: 8px; }
 
-  /* 결과: 스크롤 허용 + 축소 */
-  .res-col { overflow-y: auto; justify-content: flex-start; gap: 8px; }
+  /* 결과: 스크롤 허용 + 축소. 별 행(팝 스케일/음수 마진)이 위로 잘리지 않게 상단 여백 보강 */
+  .res-col { overflow-y: auto; justify-content: flex-start; gap: 8px; padding-top: calc(var(--safe-top) + 18px); }
   .res-star { width: 42px; height: 42px; }
   .res-stars.is-won .res-star:nth-child(2) { width: 54px; height: 54px; margin-top: -8px; }
   .res-title { font-size: 1.9rem; }

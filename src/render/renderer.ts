@@ -15,17 +15,24 @@ const SLOW_MS = 18;
 const FAST_MS = 12;
 const SLOW_HOLD = 2;
 const FAST_HOLD = 5;
+/** 해상도 스케일 바닥 도달 후에도 느리면 품질 강등 요청까지 걸리는 시간(초)/재요청 쿨다운(ms) */
+const PERSIST_SLOW_HOLD = 4;
+const PERSIST_SLOW_COOLDOWN_MS = 10000;
 
 export class GameRenderer {
   readonly gl: THREE.WebGLRenderer;
   /** 콘텍스트 복구 시 씬/지오메트리 재구축 요청 */
   onContextRestored: (() => void) | null = null;
   onContextLost: (() => void) | null = null;
+  /** 해상도 스케일이 바닥(0.7)인데도 EMA>18ms가 4초 지속 — 상위 레이어의 품질 강등 훅 */
+  onPersistentlySlow: (() => void) | null = null;
 
   private scale = 1;
   private emaMs = 16;
   private slowFor = 0;
   private fastFor = 0;
+  private persistSlowFor = 0;
+  private lastPersistSlowMs = -Infinity;
   private lastTime = -1;
   private width = 1;
   private height = 1;
@@ -100,9 +107,24 @@ export class GameRenderer {
           this.slowFor = 0;
           this.applyPixelRatio();
         }
+        // 스케일 바닥에서도 계속 느리면 상위 레이어에 품질 강등 요청 (쿨다운 포함)
+        if (this.scale <= SCALE_MIN) {
+          this.persistSlowFor += dt;
+          if (
+            this.persistSlowFor >= PERSIST_SLOW_HOLD &&
+            now - this.lastPersistSlowMs >= PERSIST_SLOW_COOLDOWN_MS
+          ) {
+            this.lastPersistSlowMs = now;
+            this.persistSlowFor = 0;
+            this.onPersistentlySlow?.();
+          }
+        } else {
+          this.persistSlowFor = 0;
+        }
       } else if (this.emaMs < FAST_MS) {
         this.fastFor += dt;
         this.slowFor = 0;
+        this.persistSlowFor = 0;
         if (this.fastFor >= FAST_HOLD && this.scale < 1) {
           this.scale = Math.min(1, this.scale + SCALE_STEP);
           this.fastFor = 0;
@@ -111,6 +133,7 @@ export class GameRenderer {
       } else {
         this.slowFor = 0;
         this.fastFor = 0;
+        this.persistSlowFor = 0;
       }
     }
     this.lastTime = now;

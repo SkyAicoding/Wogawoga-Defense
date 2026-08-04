@@ -40,7 +40,9 @@ export const stage01: StageDef = {
     budgetBase: 20,
     budgetGrowth: 1.1,
     hpBase: 1.0,
-    hpGrowth: 1.022,
+    // 1.022 → 1.020: 배치 지가 상승(PLACEMENT_TAX) 도입 후 난이도 봉투 회복
+    // (autoplay 실측: CI 시드 5개 전부 클리어, budgetGrowth는 봇 수입원이라 유지)
+    hpGrowth: 1.02,
     seed: 1013,
     allowedEnemies: ['raptor', 'compy', 'boar', 'trike'],
     bossOverrides: {
@@ -52,7 +54,8 @@ export const stage01: StageDef = {
         g('boar', 8, 15, 120),
         g('raptor', 8, 12, 330),
       ),
-      50: bossWave(g('trex', 1, 0, 30, 1.15), g('raptor', 16, 13, 210)),
+      // 클라이맥스 보정: w49 대비 총 HP ≥1.15× (앤티클라이맥스 방지)
+      50: bossWave(g('trex', 1, 0, 30, 1.38), g('raptor', 16, 13, 210, 1.2)),
     },
   },
   firstClearAmber: 120,

@@ -1,23 +1,12 @@
 /**
  * 로비 — 상단 재화/설정, 중앙 스테이지 캐러셀(스와이프+화살표), 하단 전투/도감.
- * 스테이지 메타(바이옴/웨이브 수)는 data 트랙 소유라 GameFacade로 접근 불가 →
- * 표시용 로컬 테이블 사용 (contractIssues 보고 대상).
+ * 스테이지 메타(이름/바이옴/웨이브 수)는 facade.stages(StageDef 실데이터)에서 읽는다.
  */
 import type { BiomeId, GameFacade } from '@/data/types';
 import type { Screen } from '@/core/fsm';
 import { h, cls, fmt, mount, unmount, uiRoot, clearChildren } from '../dom';
 import { t } from '../i18n';
 import { amberSvg, lockSvg } from '../widgets/card';
-
-/** 표시용 스테이지 메타 — 통합 시 facade가 StageDef 목록을 노출하면 대체 */
-const STAGE_META: readonly { id: number; biome: BiomeId; waveCount: number }[] = [
-  { id: 1, biome: 'grassland', waveCount: 50 },
-  { id: 2, biome: 'jungle', waveCount: 50 },
-  { id: 3, biome: 'desert', waveCount: 50 },
-  { id: 4, biome: 'snow', waveCount: 50 },
-  { id: 5, biome: 'swamp', waveCount: 50 },
-  { id: 6, biome: 'volcano', waveCount: 50 },
-];
 
 const B = (body: string, sky: string): string =>
   `<svg viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -85,29 +74,30 @@ export function createLobbyScreen(): Screen<GameFacade> {
   return {
     enter(facade) {
       const p = facade.profile;
+      const stages = facade.stages;
 
       // --- 스테이지 카드들 -------------------------------------------------
-      const cards = STAGE_META.map((meta) => {
-        const unlocked = p.isStageUnlocked(meta.id);
-        const prog = p.stageProgress(meta.id);
+      const cards = stages.map((stage) => {
+        const unlocked = p.isStageUnlocked(stage.id);
+        const prog = p.stageProgress(stage.id);
         const progressText = prog.cleared
           ? t('lobby.cleared')
           : prog.bestWave > 0
-            ? t('lobby.progress', { n: prog.bestWave, m: meta.waveCount })
+            ? t('lobby.progress', { n: prog.bestWave, m: stage.waveCount })
             : t('lobby.notStarted');
         return h(
           'div',
-          { class: `stage-card biome--${meta.biome}${unlocked ? '' : ' is-locked'}` },
-          h('div', { class: 'stage-card-no', text: t('lobby.stageNo', { n: meta.id }) }),
-          h('div', { class: 'stage-card-art', html: biomeSvg(meta.biome) }),
-          h('div', { class: 'stage-card-name', text: t(`stage.${meta.id}.name`) }),
+          { class: `stage-card biome--${stage.biome}${unlocked ? '' : ' is-locked'}` },
+          h('div', { class: 'stage-card-no', text: t('lobby.stageNo', { n: stage.id }) }),
+          h('div', { class: 'stage-card-art', html: biomeSvg(stage.biome) }),
+          h('div', { class: 'stage-card-name', text: t(stage.nameKey) }),
           unlocked
             ? h('div', { class: `stage-card-prog${prog.cleared ? ' is-cleared' : ''}`, text: progressText })
             : h(
                 'div',
                 { class: 'stage-card-lock' },
                 h('span', { class: 'stage-lock-ico', html: lockSvg }),
-                h('span', { text: t('lobby.locked', { n: meta.id - 1 }) }),
+                h('span', { text: t('lobby.locked', { n: stage.id - 1 }) }),
               ),
           prog.endlessBest > 0
             ? h('div', { class: 'stage-card-endless', text: `∞ ${t('lobby.endlessBest', { n: prog.endlessBest })}` })
@@ -116,7 +106,7 @@ export function createLobbyScreen(): Screen<GameFacade> {
       });
 
       const carousel = h('div', { class: 'carousel' }, ...cards);
-      const dots = STAGE_META.map((_, i) => h('span', { class: `dot${i === 0 ? ' is-on' : ''}` }));
+      const dots = stages.map((_, i) => h('span', { class: `dot${i === 0 ? ' is-on' : ''}` }));
 
       // --- 하단 버튼/무한 토글 --------------------------------------------
       const battleLabel = h('span', { text: t('lobby.battle') });
@@ -126,9 +116,9 @@ export function createLobbyScreen(): Screen<GameFacade> {
           class: 'btn btn--primary btn--battle',
           attrs: { type: 'button' },
           onClick: () => {
-            const meta = STAGE_META[selectedIdx];
-            if (!meta || !p.isStageUnlocked(meta.id)) return;
-            facade.startBattle(meta.id, endlessOn && p.stageProgress(meta.id).cleared);
+            const stage = stages[selectedIdx];
+            if (!stage || !p.isStageUnlocked(stage.id)) return;
+            facade.startBattle(stage.id, endlessOn && p.stageProgress(stage.id).cleared);
           },
         },
         battleLabel,
@@ -145,10 +135,10 @@ export function createLobbyScreen(): Screen<GameFacade> {
       });
 
       const syncButtons = (): void => {
-        const meta = STAGE_META[selectedIdx];
-        if (!meta) return;
-        const unlocked = p.isStageUnlocked(meta.id);
-        const cleared = p.stageProgress(meta.id).cleared;
+        const stage = stages[selectedIdx];
+        if (!stage) return;
+        const unlocked = p.isStageUnlocked(stage.id);
+        const cleared = p.stageProgress(stage.id).cleared;
         cls(battleBtn, 'is-disabled', !unlocked);
         // 무한 토글: 무한 해금 && 해당 스테이지 클리어 시에만 노출/활성
         endlessBtn.style.display = p.isEndlessUnlocked() ? '' : 'none';

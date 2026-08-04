@@ -27,14 +27,21 @@ import { settleBattle } from '@/meta/rewards';
 import { FxRouter } from './fx';
 import { PlacementController } from './placement';
 
-/** 자동 웨이브: prep 진입 후 1초(30틱) 지나면 자동 호출 */
+/** 자동 웨이브: prep 진입 후 2초(60틱) 지나면 자동 호출 */
 const AUTO_CALL_AT_TICKS = 60;
+/** prep 총 틱 — sim/battle.ts의 PREP_TICKS_FIRST/LATER와 일치해야 한다 */
+const PREP_TICKS_FIRST = 150;
+const PREP_TICKS_LATER = 90;
 /** 승패 연출 후 결과 화면 전환 지연 */
 const END_DELAY_MS = 1500;
-/** HUD 예약 영역 (카메라 플레이필드 fit용, CSS와 대략 일치) */
+/** HUD 예약 영역 (카메라 플레이필드 fit용, CSS와 대략 일치) — 세로 레이아웃 */
 const HUD_TOP_PX = 118;
 const HUD_BOTTOM_RATIO = 0.27;
 const HUD_BOTTOM_MIN_PX = 208;
+/** 가로모드(style.css: max-height 560px 압축 HUD)가 실제 차지하는 높이 근사 */
+const LANDSCAPE_MAX_CSS_H = 560;
+const HUD_TOP_LANDSCAPE_PX = 64;
+const HUD_BOTTOM_LANDSCAPE_PX = 84;
 
 export class BattleController {
   readonly api: BattleUiApi;
@@ -96,6 +103,7 @@ export class BattleController {
       this.camera,
       canvas,
       () => this.sim.state.waveCount,
+      endless,
       profile.data.settings.vibration,
     );
     this.fx.baseHpMax = stage.baseHp;
@@ -166,19 +174,44 @@ export class BattleController {
       lastDragY = i.y;
     });
     input.events.on('drag', (i) => {
-      this.camera.panByPixels(i.x - lastDragX, i.y - lastDragY);
+      const dx = i.x - lastDragX;
+      const dy = i.y - lastDragY;
       lastDragX = i.x;
       lastDragY = i.y;
+      // 카드 선택 중 드래그는 배치 조준 — 카메라 팬과 충돌하지 않게 스킵
+      if (this.placement.selectedCard() !== null) return;
+      this.camera.panByPixels(dx, dy);
     });
 
     audio.music.setBiome(stage.biome);
     audio.music.setIntensity(1);
     if (!audio.music.isPlaying) audio.music.start();
-    void requestWakeLock().then((wl) => {
-      this.wakeLock = wl;
-    });
+    this.acquireWakeLock();
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
     this.installTestHooks();
   }
+
+  /** 화면 꺼짐 방지 — dispose 이후 도착한 락은 즉시 반납 */
+  private acquireWakeLock(): void {
+    void requestWakeLock().then((wl) => {
+      if (!wl) return;
+      if (this.disposed) {
+        void wl.release().catch(() => undefined);
+        return;
+      }
+      this.wakeLock = wl;
+    });
+  }
+
+  /** 백그라운드 전환 시 브라우저가 락을 해제한다 — 복귀하면 재요청 */
+  private onVisibilityChange = (): void => {
+    if (
+      document.visibilityState === 'visible' &&
+      (this.wakeLock === null || this.wakeLock.released)
+    ) {
+      this.acquireWakeLock();
+    }
+  };
 
   /** 매 rAF 호출 (nowSec = performance.now()/1000) */
   frame(nowSec: number): void {
@@ -186,12 +219,13 @@ export class BattleController {
     const { ticks, alpha } = this.loop.update(nowSec);
     const st = this.sim.state;
 
-    // 자동 웨이브: prep 1초 경과 시 자동 호출
+    // 자동 웨이브: prep 2초 경과 시 자동 호출
     if (
       this.api.autoWave &&
       st.phase === 'prep' &&
       st.prepTicksLeft > 0 &&
-      st.prepTicksLeft <= (this.sim.state.waveIndex === 1 ? 150 : 90) - AUTO_CALL_AT_TICKS
+      st.prepTicksLeft <=
+        (st.waveIndex === 1 ? PREP_TICKS_FIRST : PREP_TICKS_LATER) - AUTO_CALL_AT_TICKS
     ) {
       this.sim.applyCommand({ type: 'callWave' });
     }
@@ -214,12 +248,18 @@ export class BattleController {
   private fitBox = new THREE.Box3();
 
   resize(cssW: number, cssH: number): void {
-    const bottom = Math.max(HUD_BOTTOM_MIN_PX, cssH * HUD_BOTTOM_RATIO);
+    // 낮은 높이(가로모드)에서는 세로형 예약값(118/27%/208)이 화면 대부분을 잡아먹어
+    // 섬이 손톱만 해진다 — 압축 HUD 실측 근사값으로 전환
+    const landscape = cssH <= LANDSCAPE_MAX_CSS_H;
+    const top = landscape ? HUD_TOP_LANDSCAPE_PX : HUD_TOP_PX;
+    const bottom = landscape
+      ? HUD_BOTTOM_LANDSCAPE_PX
+      : Math.max(HUD_BOTTOM_MIN_PX, cssH * HUD_BOTTOM_RATIO);
     const rect: ViewportRect = {
       x: 8,
-      y: HUD_TOP_PX,
+      y: top,
       w: Math.max(1, cssW - 16),
-      h: Math.max(1, cssH - HUD_TOP_PX - bottom),
+      h: Math.max(1, cssH - top - bottom),
     };
     // 절벽 스커트/수중 바위는 프레이밍에서 제외 — 지표면 기준으로 크게 잡는다
     this.fitBox.copy(this.stage3d.aabb);
@@ -247,6 +287,8 @@ export class BattleController {
     this.endTimer = setTimeout(() => {
       if (this.disposed) return;
       const st = this.sim.state;
+      // settleBattle이 프로필을 저장하므로 플레이타임을 먼저 반영해야 유실되지 않는다
+      this.trackPlaytime();
       const result = settleBattle(this.profile, this.stage, {
         won,
         wave: st.waveIndex,
@@ -255,7 +297,6 @@ export class BattleController {
         kills: this.fx.kills,
         bossKills: this.fx.bossKills,
       });
-      this.trackPlaytime();
       this.onEnded(result);
     }, END_DELAY_MS);
   }
@@ -265,6 +306,7 @@ export class BattleController {
     this.ended = true;
     // 중도 포기 — 진행한 웨이브까지 정산 (패배 취급)
     const st = this.sim.state;
+    this.trackPlaytime();
     const result = settleBattle(this.profile, this.stage, {
       won: false,
       wave: st.waveIndex,
@@ -274,8 +316,12 @@ export class BattleController {
       bossKills: this.fx.bossKills,
     });
     void result;
-    this.trackPlaytime();
     this.onQuit();
+  }
+
+  /** 외부 강제 종료(WebGL 컨텍스트 복구 등) — quit 경로 재사용, 이미 종료면 no-op */
+  forceQuit(): void {
+    this.quit();
   }
 
   private trackPlaytime(): void {
@@ -294,12 +340,26 @@ export class BattleController {
         this.sim.applyCommand({ type: 'placeTower', handIndex, cellX: x, cellZ: z }),
       callWave: (): boolean => this.sim.applyCommand({ type: 'callWave' }),
       drawCalls: (): number => this.renderer.gl.info.render.calls,
+      // 입력/뷰포트 검증용 (모바일 e2e)
+      selectCard: (i: number | null): void => this.api.selectCard(i),
+      selectedCard: (): number | null => this.api.selectedCard(),
+      cellToScreen: (x: number, z: number): { x: number; y: number } => {
+        const v = new THREE.Vector3();
+        this.stage3d.cellToWorld(x, z, v);
+        v.project(this.camera.camera);
+        const r = this.canvas.getBoundingClientRect();
+        return {
+          x: r.left + (v.x * 0.5 + 0.5) * r.width,
+          y: r.top + (-v.y * 0.5 + 0.5) * r.height,
+        };
+      },
     };
   }
 
   dispose(): void {
     this.disposed = true;
     if (this.endTimer) clearTimeout(this.endTimer);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.placement.dispose();
     this.stage3d.dispose();
     void this.wakeLock?.release().catch(() => undefined);

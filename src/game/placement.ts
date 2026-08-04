@@ -34,6 +34,9 @@ export class PlacementController {
     this.input = new InputManager(canvas);
     this.input.events.on('tap', (p) => this.onTap(p.x, p.y));
     this.input.events.on('move', (p) => this.onMove(p.x, p.y));
+    // 모바일 드래그 배치: 카드 선택 중 드래그는 조준(고스트는 move로 갱신),
+    // 릴리즈 지점에 배치. battlecontroller는 카드 선택 중 카메라 팬을 스킵한다.
+    this.input.events.on('dragEnd', (p) => this.onDragEnd(p.x, p.y));
   }
 
   /** 화면 좌표 → 그리드 셀 (지면 밖이면 null) */
@@ -62,6 +65,20 @@ export class PlacementController {
     this.ghostCell = cell;
     const ok = this.sim.canPlaceAt(cell.x, cell.z) && this.sim.state.gold >= card.cost;
     this.stage3d.towers.setGhost(card.towerId, cell.x, cell.z, ok);
+  }
+
+  /** 카드 선택 상태에서 드래그 릴리즈 → 마지막 고스트 셀에 배치 시도 */
+  private onDragEnd(px: number, py: number): void {
+    if (this.selectedCardIndex === null) return;
+    const idx = this.selectedCardIndex;
+    const cell = this.cellAt(px, py) ?? this.ghostCell;
+    if (
+      cell &&
+      this.sim.applyCommand({ type: 'placeTower', handIndex: idx, cellX: cell.x, cellZ: cell.z })
+    ) {
+      this.selectCard(null);
+    }
+    // 불가 셀이면 배치 모드 유지 — 다시 조준할 수 있게 취소하지 않는다
   }
 
   private onTap(px: number, py: number): void {

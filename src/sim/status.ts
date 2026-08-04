@@ -1,5 +1,6 @@
 /**
- * 상태이상 — slow(최대 magnitude 우선)/burn·poison(3스택, 초과 시 가장 오래된 것 갱신)/
+ * 상태이상 — slow(최대 magnitude 우선)/burn·poison(소스(타워 id)별 스택: 같은 소스 재적용은
+ * 자기 스택 갱신, 다른 소스는 새 스택, kind당 최대 3스택 — 초과 시 가장 오래된 것 교체)/
  * stun(보스는 지속 1/5 + 종료 후 60틱 면역). DoT는 인스턴스별 acc가 STATUS_TICK_INTERVAL에
  * 도달할 때마다 적용되며 poison은 armor를 무시한다.
  */
@@ -13,8 +14,17 @@ const MAX_DOT_STACKS = 3;
 const BOSS_STUN_DIVISOR = 5;
 const BOSS_STUN_IMMUNE_TICKS = 60;
 
-/** 확률 판정 포함 상태 부여. 성공 시 statusApplied 이벤트. */
-export function tryApplyStatus(ctx: SimCtx, e: EnemySim, spec: StatusApplySpec): boolean {
+/**
+ * 확률 판정 포함 상태 부여. 성공 시 statusApplied 이벤트.
+ * sourceId = 부여한 타워 id — burn/poison은 소스별 스택 (다중 타워 유효화).
+ * sourceId 미지정 적용은 항상 새 스택으로 취급한다.
+ */
+export function tryApplyStatus(
+  ctx: SimCtx,
+  e: EnemySim,
+  spec: StatusApplySpec,
+  sourceId?: number,
+): boolean {
   if (!e.alive) return false;
   if (spec.chance < 1 && !ctx.rng.chance(spec.chance)) return false;
   let applied = false;
@@ -34,19 +44,34 @@ export function tryApplyStatus(ctx: SimCtx, e: EnemySim, spec: StatusApplySpec):
       applied = true;
     } // 더 약한 감속은 무시
   } else if (spec.kind === 'burn' || spec.kind === 'poison') {
+    // 소스별 스택 — 같은 소스는 자기 스택 갱신, 다른 소스는 새 스택 (kind당 최대 3)
     let count = 0;
+    let own: StatusInstance | null = null;
     let oldest: StatusInstance | null = null;
     for (const s of st) {
       if (s.kind !== spec.kind) continue;
       count++;
+      if (sourceId !== undefined && s.sourceId === sourceId) own = s;
       if (!oldest || s.remainingTicks < oldest.remainingTicks) oldest = s;
     }
-    if (count < MAX_DOT_STACKS) {
-      st.push({ kind: spec.kind, magnitude: spec.magnitude, remainingTicks: spec.durationTicks, acc: 0 });
+    if (own) {
+      // 같은 소스 재적용 — 갱신 (acc 유지: DoT 리듬은 끊기지 않는다)
+      own.magnitude = spec.magnitude;
+      own.remainingTicks = spec.durationTicks;
+    } else if (count < MAX_DOT_STACKS) {
+      st.push({
+        kind: spec.kind,
+        magnitude: spec.magnitude,
+        remainingTicks: spec.durationTicks,
+        acc: 0,
+        sourceId,
+      });
     } else if (oldest) {
+      // 캡 초과 — 가장 오래된(잔여 최소) 스택을 새 소스로 교체
       oldest.magnitude = spec.magnitude;
       oldest.remainingTicks = spec.durationTicks;
       oldest.acc = 0;
+      oldest.sourceId = sourceId;
     }
     applied = true;
   } else {
@@ -108,7 +133,10 @@ export function tickEnemyStatuses(ctx: SimCtx, e: EnemySim): void {
   }
 }
 
-/** 주술사 힐 오라 — STATUS_TICK_INTERVAL 경계마다 호출. 회복은 이벤트 없이 hp만 (자신 제외). */
+/**
+ * 주술사 힐 오라 — STATUS_TICK_INTERVAL 경계마다 호출. 회복은 이벤트 없이 hp만 (자신 제외).
+ * 회복량은 시전자의 hpMul로 스케일 — 중후반 웨이브에서도 힐러 메커니크가 유효하다.
+ */
 export function processHealAuras(ctx: SimCtx): void {
   const items = ctx.world.enemies.items;
   for (let i = 0; i < items.length; i++) {
@@ -116,13 +144,14 @@ export function processHealAuras(ctx: SimCtx): void {
     if (!healer.alive) continue;
     const aura = healer.def.healAura;
     if (!aura || isStunned(healer)) continue;
+    const heal = aura.hpPerStatusTick * healer.hpMul;
     const r2 = aura.radius * aura.radius;
     for (let j = 0; j < items.length; j++) {
       if (j === i) continue;
       const ally = items[j] as EnemySim;
       if (!ally.alive || ally.hp >= ally.maxHp) continue;
       if (dist2(healer.x, healer.z, ally.x, ally.z) > r2) continue;
-      ally.hp = Math.min(ally.maxHp, ally.hp + aura.hpPerStatusTick);
+      ally.hp = Math.min(ally.maxHp, ally.hp + heal);
     }
   }
 }

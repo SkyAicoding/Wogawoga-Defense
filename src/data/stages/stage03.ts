@@ -44,15 +44,25 @@ export const stage03: StageDef = {
     seed: 3041,
     allowedEnemies: ['raptor', 'compy', 'boar', 'trike', 'ptera', 'warrior', 'shaman', 'ankylo'],
     bossOverrides: {
-      10: bossWave(g('spino', 1, 0, 30, 0.8), g('shaman', 2, 45, 120), g('warrior', 4, 25, 180)),
+      // w10 첫 보스 벽 완화: 전체 ×0.6 (w9 대비 총 HP ~6.8배 → ~4.1배)
+      10: bossWave(
+        g('spino', 1, 0, 30, 0.48),
+        g('shaman', 2, 45, 120, 0.6),
+        g('warrior', 4, 25, 180, 0.6),
+      ),
       20: bossWave(g('spino', 1, 0, 30, 1.1), g('ankylo', 3, 55, 150), g('shaman', 2, 45, 240)),
       30: bossWave(g('spino', 2, 240, 30, 1.0), g('shaman', 3, 45, 150), g('boar', 8, 15, 120)),
+      // 클라이맥스 보정: 직전 웨이브 대비 총 HP ≥1.15×
       40: bossWave(
-        g('spino', 2, 240, 30, 1.3),
-        g('ankylo', 4, 50, 150),
-        g('shaman', 3, 45, 330),
+        g('spino', 2, 240, 30, 1.63),
+        g('ankylo', 4, 50, 150, 1.25),
+        g('shaman', 3, 45, 330, 1.25),
       ),
-      50: bossWave(g('trex', 1, 0, 30, 1.3), g('shaman', 3, 45, 240), g('warrior', 6, 22, 150)),
+      50: bossWave(
+        g('trex', 1, 0, 30, 1.5),
+        g('shaman', 3, 45, 240, 1.15),
+        g('warrior', 6, 22, 150, 1.15),
+      ),
     },
   },
   firstClearAmber: 200,

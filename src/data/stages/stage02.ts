@@ -44,7 +44,8 @@ export const stage02: StageDef = {
     seed: 2027,
     allowedEnemies: ['raptor', 'compy', 'boar', 'trike', 'ptera', 'warrior'],
     bossOverrides: {
-      10: bossWave(g('spino', 1, 0, 30, 0.75), g('warrior', 5, 25, 150)),
+      // w10 첫 보스 벽 완화: 전체 ×0.55 (w9 대비 총 HP ~7.3배 → ~4.0배)
+      10: bossWave(g('spino', 1, 0, 30, 0.41), g('warrior', 5, 25, 150, 0.55)),
       20: bossWave(g('spino', 1, 0, 30, 1.05), g('ptera', 6, 20, 120), g('boar', 6, 18, 210)),
       30: bossWave(g('spino', 2, 240, 30, 1.0), g('warrior', 6, 25, 150)),
       40: bossWave(
@@ -52,7 +53,8 @@ export const stage02: StageDef = {
         g('ptera', 8, 18, 120),
         g('trike', 4, 50, 300),
       ),
-      50: bossWave(g('trex', 1, 0, 30, 1.2), g('raptor', 10, 15, 240)),
+      // 클라이맥스 보정: w49 대비 총 HP ≥1.15×
+      50: bossWave(g('trex', 1, 0, 30, 1.38), g('raptor', 10, 15, 240, 1.15)),
     },
   },
   firstClearAmber: 160,

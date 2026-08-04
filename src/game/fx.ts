@@ -61,6 +61,8 @@ export class FxRouter {
     private camera: DioramaCamera,
     private canvas: HTMLCanvasElement,
     private getWaveCount: () => number,
+    /** 무한 모드에는 '마지막 웨이브'가 없다 — 배너 오표시 방지 */
+    private endless: boolean,
     vibrationOn: boolean,
   ) {
     this.vibrationOn = vibrationOn;
@@ -84,7 +86,7 @@ export class FxRouter {
     for (const ev of events) {
       switch (ev.type) {
         case 'waveStarted': {
-          showWaveBanner(ev.wave, ev.wave === this.getWaveCount());
+          showWaveBanner(ev.wave, !this.endless && ev.wave === this.getWaveCount());
           audio.play('waveStart');
           audio.music.setIntensity(ev.wave % 10 === 0 ? 3 : 2);
           s3.decals.pulseChevrons(2.0);

@@ -224,6 +224,8 @@ export interface StatusInstance {
   remainingTicks: number;
   /** DoT 누적기 */
   acc: number;
+  /** 부여한 타워 id — 같은 소스는 자기 스택 갱신, 다른 소스는 별도 스택 (독 다중 타워 유효화) */
+  sourceId?: number;
 }
 
 export interface EnemyState {

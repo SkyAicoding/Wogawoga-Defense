@@ -1,7 +1,10 @@
 /**
  * 자동플레이 밸런스 하네스 — 난이도 봉투를 CI에 고정한다.
- * 봇 전략(평범한 플레이 근사): 슬롯 6개까지 배치 → 최다투자 타워 집중 업그레이드
+ * 봇 전략(평범한 플레이 근사): 타워 8기까지 배치 → 최다투자 타워 집중 업그레이드
  * → 여유골드 1.5배면 추가 배치. 새로고침/판매/타게팅 미사용 (사람은 이보다 잘한다).
+ * 배치 8기 상한 근거(지가 상승 시대): 7~8기째 배치 비용은 기본가 ×1.6~1.7로
+ * 티어 업그레이드(비용 ×2, DPS ×1.65)와 비슷한 효율이라 소수 정예+업그레이드가
+ * 합리적 플레이 — 실측에서도 6기 상한보다 8기 상한이 우세했다 (스팸 20기는 ×2.9로 비효율).
  *
  * 봉투:
  *  - 스테이지1, 별 0: 시드 5개 중 3개 이상 클리어, 전부 웨이브 45+ 도달 (초심자 클리어 보장)
@@ -13,6 +16,9 @@ import { createBattle } from '@/sim/battle';
 import { ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
 import { rasterizePathCells } from '@/data/grid';
 import type { BattleSim, StageDef, TowerId } from '@/data/types';
+
+/** 봇 배치 상한 — 지가 상승으로 8기 이후는 업그레이드가 우세 (헤더 주석 참조) */
+const PLACEMENT_CAP = 8;
 
 const STAGE1_DECK: TowerId[] = ['spear', 'catapult', 'frost'];
 const ALL_DECK: TowerId[] = [
@@ -69,7 +75,7 @@ function runBot(sim: BattleSim, stage: StageDef, maxIters = 900): BotResult {
   while (sim.state.phase !== 'won' && sim.state.phase !== 'lost' && guard < maxIters) {
     guard++;
     const st = sim.state;
-    if (st.towers.length < 6) {
+    if (st.towers.length < PLACEMENT_CAP) {
       for (let h = 0; h < st.hand.length; h++) {
         const card = st.hand[h];
         if (!card || st.gold < card.cost) continue;
@@ -87,7 +93,7 @@ function runBot(sim: BattleSim, stage: StageDef, maxIters = 900): BotResult {
       }
     }
     if (best) sim.applyCommand({ type: 'upgradeTower', towerId: best.id });
-    else if (st.towers.length >= 6) {
+    else if (st.towers.length >= PLACEMENT_CAP) {
       for (let h = 0; h < st.hand.length; h++) {
         const card = st.hand[h];
         if (!card || st.gold < card.cost * 1.5) continue;

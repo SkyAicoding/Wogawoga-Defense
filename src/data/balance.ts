@@ -13,6 +13,13 @@
 
 /** 판매 환급률 (invested × 0.6 내림) */
 export const SELL_REFUND_RATE = 0.6;
+/**
+ * 배치 지가 상승 — 타워 n기 배치 상태에서 새 배치 비용
+ * = round(tiers[0].cost × (1 + PLACEMENT_TAX × n)).
+ * T1 도배가 업그레이드를 지배하지 않도록 스팸 20기째 비용을 ≈3배로 올린다.
+ * (sim/economy.ts가 임포트해 적용 — 핸드 CardState.cost는 항상 '지금 배치 시 실비용')
+ */
+export const PLACEMENT_TAX = 0.1;
 /** 핸드 새로고침: 웨이브당 1회 무료, 이후 20 × 1.6^n 반올림 */
 export const REFRESH_BASE_COST = 20;
 export const REFRESH_COST_GROWTH = 1.6;
