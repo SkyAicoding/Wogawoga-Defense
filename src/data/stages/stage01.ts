@@ -52,7 +52,7 @@ export const stage01: StageDef = {
         g('boar', 8, 15, 120),
         g('raptor', 8, 12, 330),
       ),
-      50: bossWave(g('trex', 1, 0, 30, 1.15), g('raptor', 14, 14, 220)),
+      50: bossWave(g('trex', 1, 0, 30, 1.15), g('raptor', 16, 13, 210)),
     },
   },
   firstClearAmber: 120,
