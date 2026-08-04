@@ -158,8 +158,11 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .stage-card-prog.is-cleared { color: #8be36a; }
 .stage-card-endless { font-size: 0.85rem; font-weight: 700; color: #9fdcf7; }
 .stage-card.is-locked .stage-card-name { filter: grayscale(0.9) brightness(0.55); }
-/* 잠금 아트: 원본이 어두운 바이옴(화산)도 형태가 남도록 살짝 덜 어둡게 + 대비 보정 */
+/* 잠금 아트: 회색조 + 어둡게 */
 .stage-card.is-locked .stage-card-art { filter: grayscale(0.92) brightness(0.7) contrast(0.92); }
+/* 원본이 이미 어두운 바이옴(늪지/화산)은 덜 어둡게 + 대비를 올려 형태가 남도록 */
+.stage-card.is-locked.biome--swamp .stage-card-art,
+.stage-card.is-locked.biome--volcano .stage-card-art { filter: grayscale(0.92) brightness(1.05) contrast(1.12); }
 .stage-card-lock { display: flex; align-items: center; gap: 8px; font-weight: 700; color: #cdbfa8; }
 .stage-lock-ico { width: 26px; height: 26px; display: inline-flex; }
 .stage-lock-ico svg, .coll-lock-ico svg { width: 100%; height: 100%; }
