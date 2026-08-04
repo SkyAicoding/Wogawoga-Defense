@@ -1,16 +1,37 @@
 /**
- * 타워 카드 위젯 + 공용 아이콘 SVG.
- * 아이콘은 전부 코드 생성 인라인 SVG — 8종 타워가 서로 확실히 구분되도록 형태/색을 달리한다.
+ * 타워 카드 위젯 + 공용 아이콘.
+ * 타워 아이콘은 src/assets/towers 의 일러스트를 쓰고, 없으면 인라인 SVG로 폴백한다
+ * (SVG 폴백은 8종이 형태/색으로 확실히 구분되도록 유지).
  */
 import type { TowerId } from '@/data/types';
 import { h, cls, fmt, setText } from '../dom';
 import { t } from '../i18n';
 
+/** 번들된 타워 일러스트 (파일명 = TowerId) */
+const TOWER_ART = import.meta.glob<string>('../../assets/towers/*.webp', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+});
+
+function towerArtUrl(id: TowerId): string | null {
+  for (const [path, url] of Object.entries(TOWER_ART)) {
+    if (path.endsWith(`/${id}.webp`)) return url;
+  }
+  return null;
+}
+
 const SVG = (body: string): string =>
   `<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${body}</svg>`;
 
-/** 타워별 상징 아이콘 — viewBox 48×48 */
+/** 타워별 상징 아이콘 — 일러스트 우선, 없으면 viewBox 48×48 SVG 폴백 */
 export function towerIconSvg(id: TowerId): string {
+  const art = towerArtUrl(id);
+  if (art) return `<img class="tw-art" src="${art}" alt="" draggable="false" />`;
+  return towerFallbackSvg(id);
+}
+
+function towerFallbackSvg(id: TowerId): string {
   switch (id) {
     case 'spear': // 창 + 짚 움막 지붕
       return SVG(
