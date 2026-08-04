@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Rng } from '@/core/rng';
 import { clamp01 } from '@/core/mathx';
+import { LIMB_ATTR } from './gait';
 
 export interface PartSpec {
   kind: 'box' | 'cyl' | 'cone' | 'ico' | 'sphere';
@@ -22,6 +23,12 @@ export interface PartSpec {
   hueJitter?: number;
   /** cyl/cone 원주 분할 수 (기본 6) */
   seg?: number;
+  /**
+   * 버텍스 셰이더 보행 리그의 사지 그룹 id (1-base, gait.ts RigBuilder 가 발급).
+   * 미지정/0 = 고정(몸통). 한 파트라도 지정되면 병합 지오메트리에 aLimb 어트리뷰트가 생긴다.
+   * 태그가 하나도 없으면 어트리뷰트를 아예 만들지 않아 기존 동작과 동일하다.
+   */
+  limb?: number;
 }
 
 export interface BuildOpts {
@@ -62,6 +69,11 @@ export function buildParts(parts: readonly PartSpec[], opts: BuildOpts = {}): TH
   const ao = opts.ao ?? 0.15;
   const faceJitter = opts.faceJitter ?? 0.045;
   const geos: THREE.BufferGeometry[] = [];
+  // 사지 태그가 하나라도 있으면 병합 뒤에 aLimb 을 한 번에 깐다.
+  // (파트마다 어트리뷰트를 달아 mergeGeometries 로 합치면 작은 배열 수십 개 할당 +
+  //  병합 복사가 그대로 콜드 빌드 비용이 된다 — 파트별 버텍스 수만 기억했다 나중에 채운다)
+  const useLimb = parts.some((p) => (p.limb ?? 0) > 0);
+  const limbRuns: number[] = []; // [버텍스 수, limb id, ...]
 
   for (const part of parts) {
     const base = primitive(part.kind, part.seg ?? 6);
@@ -93,6 +105,7 @@ export function buildParts(parts: readonly PartSpec[], opts: BuildOpts = {}): TH
       }
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    if (useLimb) limbRuns.push(count, part.limb ?? 0);
     geo.deleteAttribute('normal');
     geo.deleteAttribute('uv');
     geos.push(geo);
@@ -101,6 +114,21 @@ export function buildParts(parts: readonly PartSpec[], opts: BuildOpts = {}): TH
   const merged = mergeGeometries(geos, false);
   for (const g of geos) g.dispose();
   if (!merged) throw new Error('mergeGeometries 실패');
+
+  // 사지 태그: 병합 결과는 파트 순서대로 이어붙인 것이므로 구간을 그대로 칠하면 된다
+  if (useLimb) {
+    const total = merged.getAttribute('position').count;
+    const limbs = new Float32Array(total);
+    let o = 0;
+    for (let i = 0; i < limbRuns.length; i += 2) {
+      const n = limbRuns[i]!;
+      const id = limbRuns[i + 1]!;
+      if (id > 0) limbs.fill(id, o, o + n);
+      o += n;
+    }
+    if (o !== total) throw new Error('aLimb 구간 합이 병합 버텍스 수와 다르다');
+    merged.setAttribute(LIMB_ATTR, new THREE.BufferAttribute(limbs, 1));
+  }
 
   // 바닥 AO: y가 낮을수록 최대 ao만큼 어둡게
   if (ao > 0) applyHeightAo(merged, ao);

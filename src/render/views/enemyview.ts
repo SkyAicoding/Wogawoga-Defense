@@ -1,21 +1,53 @@
 /**
  * 적 렌더 뷰 — 타입별 InstancedMesh (보스 2종은 개별 Mesh).
- * prev→cur 보간, 걷기 바운스, 히트 플래시(instanceColor), 스폰 팝을 처리한다.
+ * prev→cur 보간, 보행 리그(버텍스 셰이더), 히트 플래시(instanceColor), 스폰 팝을 처리한다.
  * sim 상태는 EnemyState 배열로만 받는다 (sim 모듈 임포트 금지).
+ *
+ * 보행 위상은 시간이 아니라 이동거리(e.dist)에서 뽑는다 —
+ * 그래야 발이 일정 보폭으로 꽂히고, 둔화/배속에서 걸음이 자동으로 맞는다.
  */
 import * as THREE from 'three';
 import type { EnemyId, EnemyState } from '@/data/types';
-import { easeOutBack, lerp, lerpAngle } from '@/core/mathx';
+import { easeOutBack, lerp } from '@/core/mathx';
 import { flatMat } from '../palette';
-import { ALL_ENEMY_IDS, BOSS_ENEMIES, buildEnemy } from '../meshlib/enemies';
+import { ALL_ENEMY_IDS, BOSS_ENEMIES, buildEnemy, enemyRig } from '../meshlib/enemies';
+import { GAIT_ATTR, cachedGaitMaterials, groundLiftAt, wrapGait, type GaitMaterials } from '../meshlib/gait';
 import type { CellToWorld } from '../meshlib/terrain';
 
 const CAPACITY = 100;
 const FLY_ALTITUDE = 1.6;
+const TAU = Math.PI * 2;
+/**
+ * 보스 머티리얼 예열 프레임 수.
+ * three 는 머티리얼을 **처음 그릴 때** GL 프로그램을 링크한다. 보스는 비인스턴스 변종이라
+ * 인스턴스용과 프로그램을 공유하지 못해, 그냥 두면 하필 보스 등장 프레임에 링크 스톨이 걸린다.
+ * 그래서 전투 시작 직후 몇 프레임 동안 보스 메시를 0에 가까운 스케일로 그려 미리 링크시킨다.
+ */
+const BOSS_WARM_FRAMES = 2;
+const WARM_SCALE = 1e-4;
+/**
+ * 종당 미리 만들어 두는 보스 슬롯 수.
+ * 머티리얼 인스턴스마다 GL 프로그램을 따로 잡으므로(같은 소스라도) 동시에 나올 수 있는
+ * 만큼 예열해야 한다 — 스테이지6 웨이브20 은 spino 를 두 마리 같이 내보낸다.
+ */
+const BOSS_WARM_SLOTS = 2;
 
 interface Anim {
   age: number;
   flash: number;
+}
+
+/**
+ * 개체별 보행 위상 오프셋 (0..1).
+ * id 에 상수를 곱하면 같은 웨이브에서 연속 id 로 스폰된 무리가 **등간격 위상**이 되어
+ * 흩어지는 게 아니라 물결처럼 파도타기를 한다 — 정수 해시로 흩뿌린다.
+ */
+function phaseOffset01(id: number): number {
+  let h = Math.imul(id ^ 0x9e3779b9, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
 }
 
 const _pos = new THREE.Vector3();
@@ -28,21 +60,61 @@ const AXIS_Y = new THREE.Vector3(0, 1, 0);
 const AXIS_Z = new THREE.Vector3(0, 0, 1);
 const AXIS_X = new THREE.Vector3(1, 0, 0);
 
+/** 인스턴스 어트리뷰트를 앞에서 count 개 요소만 업로드하도록 예약 */
+function uploadRange(attr: THREE.BufferAttribute | THREE.InstancedBufferAttribute, count: number): void {
+  attr.clearUpdateRanges();
+  attr.addUpdateRange(0, count);
+  attr.needsUpdate = true;
+}
+
 export class EnemyView {
   private meshes = new Map<EnemyId, THREE.InstancedMesh>();
+  private gaitAttrs = new Map<EnemyId, THREE.InstancedBufferAttribute>();
   private bossPool = new Map<EnemyId, THREE.Mesh[]>();
+  private bossGait = new Map<THREE.Mesh, GaitMaterials>();
   private anims = new Map<number, Anim>();
   private group = new THREE.Group();
   private time = 0;
+  private warm = BOSS_WARM_FRAMES;
 
   constructor(scene: THREE.Scene) {
     this.group.name = 'enemies';
     for (const id of ALL_ENEMY_IDS) {
       if (BOSS_ENEMIES.has(id)) {
         this.bossPool.set(id, []);
+        // 프로그램 링크를 보스 등장 프레임에서 전투 시작 프레임으로 앞당긴다.
+        // 첫 슬롯을 미리 만들어 두면 실제 등장 때 그대로 재사용된다.
+        for (let i = 0; i < BOSS_WARM_SLOTS; i++) {
+          const warm = this.makeBoss(id);
+          warm.scale.setScalar(WARM_SCALE);
+          warm.position.set(0, -40, 0); // 어떤 시야에도 안 걸리는 지면 한참 아래
+          // 컬링을 끄지 않으면 그림자 카메라 밖이라 depth 머티리얼이 컴파일되지 않는다
+          // (프로그램 링크는 setProgram 시점이라 정점이 잘려도 예열은 된다)
+          warm.frustumCulled = false;
+        }
         continue;
       }
-      const mesh = new THREE.InstancedMesh(buildEnemy(id), flatMat(), CAPACITY);
+      const geo = buildEnemy(id);
+      const rig = enemyRig(id);
+      let mesh: THREE.InstancedMesh;
+      if (rig.limbs.length > 0) {
+        // 인스턴스별 보행 위상. 지오메트리는 캐시 공유물이지만 이 어트리뷰트를
+        // 참조하는 건 적 전용 머티리얼뿐이라(meshlab은 개별 Mesh + flatMat) 무해하다.
+        // 전투를 다시 열어도 같은 버퍼를 재사용해 GPU 버퍼가 쌓이지 않게 한다.
+        let gait = geo.getAttribute(GAIT_ATTR) as THREE.InstancedBufferAttribute | undefined;
+        if (!gait) {
+          gait = new THREE.InstancedBufferAttribute(new Float32Array(CAPACITY), 1);
+          gait.setUsage(THREE.DynamicDrawUsage);
+          geo.setAttribute(GAIT_ATTR, gait);
+        }
+        this.gaitAttrs.set(id, gait);
+        const gm = cachedGaitMaterials(id, rig);
+        mesh = new THREE.InstancedMesh(geo, gm.color, CAPACITY);
+        // 그림자 패스에도 같은 정점 변형을 넣지 않으면 그림자만 다리가 굳는다
+        mesh.customDepthMaterial = gm.depth;
+      } else {
+        mesh = new THREE.InstancedMesh(geo, flatMat(), CAPACITY);
+      }
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       // instanceColor 초기화 (히트 플래시용)
       for (let i = 0; i < CAPACITY; i++) mesh.setColorAt(i, _col.setRGB(1, 1, 1));
@@ -75,31 +147,56 @@ export class EnemyView {
         anim = { age: 0, flash: 0 };
         this.anims.set(e.id, anim);
       }
-      anim.age += dt;
-      anim.flash = Math.max(0, anim.flash - dt * 5);
+      // 일시정지 프레임은 dt 로 0 대신 0.0001 이 들어온다(battlecontroller).
+      // 그대로 누적하면 정지 중에도 스폰 팝이 프레임마다 조금씩 기어간다.
+      if (dt > 1e-3) {
+        anim.age += dt;
+        anim.flash = Math.max(0, anim.flash - dt * 5);
+      }
 
       // 보간 위치 (셀 연속 좌표 → 월드)
       const sx = lerp(e.prevX, e.x, alpha);
       const sz = lerp(e.prevZ, e.z, alpha);
       cellToWorld(sx, sz, _pos);
 
-      // 걷기 바운스: 진행거리 기반 sin — 높이 + 앞뒤 기울기
-      const stride = Math.max(0.5, e.radius * 3.2);
-      const phase = ((e.dist + e.id * 0.37) / stride) * Math.PI * 2;
-      let pitch = 0;
-      let roll = 0;
-      if (e.flying) {
-        _pos.y = FLY_ALTITUDE + Math.sin(this.time * 5 + e.id) * 0.12;
-        roll = Math.sin(this.time * 9 + e.id * 2) * 0.16; // 날갯짓 롤
-      } else {
-        _pos.y = Math.abs(Math.sin(phase)) * Math.min(0.09, e.radius * 0.22);
-        pitch = Math.sin(phase * 2) * 0.05;
-      }
+      const rig = enemyRig(e.defId);
+      const rigged = rig.limbs.length > 0;
+      // 보행 위상도 위치와 **같은 alpha 로 보간**해야 한다.
+      // e.dist 는 틱 경계값이라 그대로 쓰면 틱이 없는 렌더 프레임에서 몸통만 나아가고
+      // 다리는 멈춰 있어, 디딤발이 한 틱 이동거리만큼 밀렸다 되돌아온다(30Hz 톱니).
+      const step = Math.hypot(e.x - e.prevX, e.z - e.prevZ);
+      const travel = e.dist - step * (1 - alpha);
+      // 개체마다 위상을 어긋내 무리가 한 몸처럼 걷지 않게 한다
+      const off = phaseOffset01(e.id) * TAU;
+      const gait = rigged
+        ? wrapGait(travel * rig.gaitPerDist + off)
+        : (travel / Math.max(0.5, e.radius * 3.2)) * TAU + off;
 
-      // 스폰 팝 스케일
+      // 스폰 팝 스케일 (접지 보정보다 먼저 — 보정은 모델 단위라 스케일을 먹여야 한다)
       const pop = anim.age < 0.28 ? easeOutBack(anim.age / 0.28) : 1;
       const boss = BOSS_ENEMIES.has(e.defId);
       const scale = pop * (boss ? 1.15 : 1);
+
+      let pitch = 0;
+      let roll = 0;
+      if (e.flying) {
+        if (rigged) {
+          // 내려치기(위상 π/2 부근)에서 몸이 떠오른다 — 날갯짓과 위상을 맞춘 보브
+          _pos.y = FLY_ALTITUDE - Math.cos(gait) * 0.085;
+        } else {
+          _pos.y = FLY_ALTITUDE + Math.sin(this.time * 5 + e.id) * 0.12;
+          roll = Math.sin(this.time * 9 + e.id * 2) * 0.16; // 날갯짓 롤
+        }
+      } else if (rigged) {
+        // 접지 보정 = 걸음 바운스. 다리가 벌어질수록 몸이 떠오른다(발이 파묻히지 않게).
+        // 최고점/최저점이 발 딛는 순간과 자동으로 맞으므로 따로 위상을 맞출 필요가 없다.
+        // 표는 **모델 단위**라 메시 스케일(보스 1.15배·스폰 팝)을 그대로 곱해야
+        // 발이 지면을 파고들거나 뜨지 않는다.
+        _pos.y = groundLiftAt(rig, Math.abs(Math.sin(gait))) * scale;
+      } else {
+        _pos.y = Math.abs(Math.sin(gait)) * Math.min(0.09, e.radius * 0.22) * scale;
+        pitch = Math.sin(gait * 2) * 0.05;
+      }
 
       _quat.setFromAxisAngle(AXIS_Y, -e.heading);
       _quat2.setFromAxisAngle(AXIS_Z, pitch);
@@ -110,7 +207,7 @@ export class EnemyView {
       }
 
       if (boss) {
-        this.updateBoss(e, bossUsed, scale, anim);
+        this.updateBoss(e, bossUsed, scale, anim, gait);
         continue;
       }
 
@@ -121,24 +218,59 @@ export class EnemyView {
       counts.set(e.defId, idx + 1);
       _mat.compose(_pos, _quat, _scl.setScalar(scale));
       mesh.setMatrixAt(idx, _mat);
+      this.gaitAttrs.get(e.defId)?.setX(idx, gait);
       // 플래시: 값을 크게 줘 톤매핑 후 흰색 포화
       const f = 1 + anim.flash * anim.flash * 7;
       mesh.setColorAt(idx, _col.setRGB(f, f, f));
     }
 
     for (const [id, mesh] of this.meshes) {
-      mesh.count = counts.get(id) ?? 0;
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      const n = counts.get(id) ?? 0;
+      mesh.count = n;
+      // 빈 타입은 아예 숨긴다. count=0 이어도 frustumCulled=false 라 렌더 리스트에는 올라가
+      // 그리지도 않을 메시의 프로그램/유니폼(사지 테이블 36 vec4)이 컬러·그림자 두 패스에서
+      // 매 프레임 올라간다.
+      mesh.visible = n > 0;
+      if (n === 0) continue;
+      // 살아 있는 인스턴스 구간만 올린다 (CAPACITY 100칸 전체를 매 프레임 재업로드하지 않게)
+      uploadRange(mesh.instanceMatrix, n * 16);
+      if (mesh.instanceColor) uploadRange(mesh.instanceColor, n * 3);
+      const gait = this.gaitAttrs.get(id);
+      if (gait) uploadRange(gait, n);
     }
     // 사라진 적의 애니 상태/보스 메시 정리
     for (const key of this.anims.keys()) {
       if (!seen.has(key)) this.anims.delete(key);
     }
+    if (this.warm > 0) this.warm--;
     for (const [id, pool] of this.bossPool) {
       const used = bossUsed.get(id) ?? 0;
-      pool.forEach((m, i) => (m.visible = i < used));
+      // 예열 프레임 동안은 첫 슬롯을 보이게 둬 프로그램을 링크시킨다(스케일 1e-4, 지면 아래)
+      pool.forEach((m, i) => {
+        m.visible = i < used || (this.warm > 0 && i < BOSS_WARM_SLOTS);
+        if (this.warm === 0) m.frustumCulled = true; // 예열 끝 — 컬링 복구
+      });
     }
+  }
+
+  /** 보스 개체 메시 1개 생성 (풀에 넣고 그룹에 붙인다) */
+  private makeBoss(id: EnemyId): THREE.Mesh {
+    const pool = this.bossPool.get(id)!;
+    const rig = enemyRig(id);
+    let mesh: THREE.Mesh;
+    if (rig.limbs.length > 0) {
+      // 보스 전용: 머티리얼 인스턴스를 개체마다 따로 (플래시는 emissive, 보행 위상은 유니폼)
+      const gm = cachedGaitMaterials(`${id}#${pool.length}`, rig);
+      mesh = new THREE.Mesh(buildEnemy(id), gm.color);
+      mesh.customDepthMaterial = gm.depth;
+      this.bossGait.set(mesh, gm);
+    } else {
+      mesh = new THREE.Mesh(buildEnemy(id), flatMat().clone());
+    }
+    mesh.castShadow = true;
+    pool.push(mesh);
+    this.group.add(mesh);
+    return mesh;
   }
 
   /** 보스는 개별 Mesh (동시 ≤2 전제) — 이미 계산된 _pos/_quat 사용 */
@@ -147,24 +279,19 @@ export class EnemyView {
     bossUsed: Map<EnemyId, number>,
     scale: number,
     anim: Anim,
+    gait: number,
   ): void {
     const pool = this.bossPool.get(e.defId);
     if (!pool) return;
     const idx = bossUsed.get(e.defId) ?? 0;
     bossUsed.set(e.defId, idx + 1);
-    let mesh = pool[idx];
-    if (!mesh) {
-      // 보스 전용: 머티리얼 클론(플래시를 emissive로)
-      const mat = flatMat().clone();
-      mesh = new THREE.Mesh(buildEnemy(e.defId), mat);
-      mesh.castShadow = true;
-      pool.push(mesh);
-      this.group.add(mesh);
-    }
+    const mesh = pool[idx] ?? this.makeBoss(e.defId);
     mesh.visible = true;
     mesh.position.copy(_pos);
     mesh.quaternion.copy(_quat);
     mesh.scale.setScalar(scale);
+    // 개별 Mesh 는 인스턴스 어트리뷰트가 없으므로 유니폼으로 위상을 넣는다
+    this.bossGait.get(mesh)?.setGait(gait);
     const mat = mesh.material as THREE.MeshLambertMaterial;
     mat.emissive.setScalar(anim.flash * 0.9);
   }
@@ -173,9 +300,15 @@ export class EnemyView {
     this.group.parent?.remove(this.group);
     for (const mesh of this.meshes.values()) mesh.dispose();
     for (const pool of this.bossPool.values()) {
-      for (const m of pool) (m.material as THREE.Material).dispose();
+      for (const m of pool) {
+        // gait 머티리얼은 캐시 소유물이라 여기서 파기하지 않는다.
+        // (파기하면 GL 프로그램 참조가 0이 되어 해제되고, 전투 재진입 때 다시 링크된다)
+        if (!this.bossGait.has(m)) (m.material as THREE.Material).dispose();
+      }
     }
     this.meshes.clear();
+    this.gaitAttrs.clear();
+    this.bossGait.clear();
     this.bossPool.clear();
     this.anims.clear();
   }
