@@ -57,6 +57,7 @@ export function damageEnemy(
       x: e.x,
       z: e.z,
       bounty: e.bounty,
+      maxHp: e.maxHp,
     });
   }
   return dealt;

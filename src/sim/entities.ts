@@ -22,9 +22,15 @@ export interface EnemySim extends EnemyState {
   stunImmuneUntil: number;
 }
 
-/** 투사체 내부 확장 — 상태이상 소스별 스택을 위해 발사 타워 id를 들고 다닌다 */
+/**
+ * 투사체 내부 확장 — 상태이상 소스별 스택을 위해 발사 타워 id를,
+ * 착탄 연출 강도 산정을 위해 발사 시점의 타워 티어를 들고 다닌다.
+ * (공개 ProjectileState에는 노출하지 않는다)
+ */
 export interface ProjectileSim extends ProjectileState {
   sourceTowerId: number;
+  /** 발사 타워의 0-base 티어 (0~4) */
+  tier: number;
 }
 
 function makeEnemy(): EnemySim {
@@ -67,6 +73,7 @@ function makeProjectile(): ProjectileSim {
     kind: 'homing',
     towerDefId: 'spear',
     sourceTowerId: -1,
+    tier: 0,
     x: 0,
     y: 0,
     z: 0,
@@ -92,6 +99,7 @@ function resetProjectile(p: ProjectileSim): void {
   p.alive = true;
   p.targetId = -1;
   p.sourceTowerId = -1;
+  p.tier = 0;
   p.flightTicks = 0;
   p.elapsedTicks = 0;
   p.splash = undefined;

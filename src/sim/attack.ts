@@ -49,7 +49,10 @@ function splashScale(d: number, splash: SplashSpec): number {
   return 1 - (1 - splash.falloff) * clamp01(d / splash.radius);
 }
 
-/** 스플래시 피해 — 지상 적 전용 (공중 면제), excludeId는 직격 대상 제외용 */
+/**
+ * 스플래시 피해 — 지상 적 전용 (공중 면제), excludeId는 직격 대상 제외용.
+ * 반환값은 실제로 가한 피해 합 (연출 강도 산정용, 밸런스에는 영향 없음).
+ */
 function applyArea(
   ctx: SimCtx,
   x: number,
@@ -60,14 +63,16 @@ function applyArea(
   sourceTowerId: number,
   status: StatusApplySpec | undefined,
   excludeId: number,
-): void {
+): number {
+  let dealt = 0;
   for (const e of ctx.world.enemies.items) {
     if (!e.alive || e.flying || e.id === excludeId) continue;
     const d = dist(x, z, e.x, e.z);
     if (d > splash.radius + e.radius) continue;
-    damageEnemy(ctx, e, dmg * splashScale(d, splash), source);
+    dealt += damageEnemy(ctx, e, dmg * splashScale(d, splash), source);
     if (status && e.alive) tryApplyStatus(ctx, e, status, sourceTowerId);
   }
+  return dealt;
 }
 
 /** drum 버프 — 5틱마다 호출. 반경 내 타워의 buff%를 갱신 (중첩 시 최대값만, 자신 제외). */
@@ -145,6 +150,7 @@ function fireHoming(
   p.kind = 'homing';
   p.towerDefId = def.id;
   p.sourceTowerId = t.id;
+  p.tier = t.tier;
   p.x = p.prevX = p.startX = t.cellX;
   p.z = p.prevZ = p.startZ = t.cellZ;
   p.y = p.prevY = 0.6;
@@ -182,6 +188,7 @@ function fireBallistic(
   p.kind = 'ballistic';
   p.towerDefId = def.id;
   p.sourceTowerId = t.id;
+  p.tier = t.tier;
   p.x = p.prevX = p.startX = t.cellX;
   p.z = p.prevZ = p.startZ = t.cellZ;
   p.y = p.prevY = 0.6;
@@ -218,8 +225,9 @@ function fireBeam(
   const hitIds: number[] = [];
   let cur: EnemySim | null = target;
   let mult = 1;
+  let chainDmg = 0;
   while (cur) {
-    damageEnemy(ctx, cur, baseDmg * mult, def.id);
+    chainDmg += damageEnemy(ctx, cur, baseDmg * mult, def.id);
     if (tier.status && cur.alive) tryApplyStatus(ctx, cur, tier.status, t.id);
     points.push({ x: cur.x, z: cur.z, flying: cur.flying });
     hitIds.push(cur.id);
@@ -239,7 +247,15 @@ function fireBeam(
     cur = next;
   }
   ctx.events.push({ type: 'towerFired', towerId: t.id, defId: def.id, targetId: target.id });
-  ctx.events.push({ type: 'beamFired', towerId: t.id, defId: def.id, points });
+  ctx.events.push({
+    type: 'beamFired',
+    towerId: t.id,
+    defId: def.id,
+    points,
+    // 방패에 전부 막혀도 연출은 무기 위력을 반영해야 한다 — baseDmg를 하한으로
+    dmg: Math.max(baseDmg, chainDmg),
+    tier: t.tier,
+  });
 }
 
 /** 투사체 이동/명중 — 역순 순회로 제거 안전 */
@@ -287,23 +303,43 @@ export function updateProjectiles(ctx: SimCtx): void {
   }
 }
 
+/**
+ * 착탄 이벤트 — 연출 강도용 dmg/tier/splashRadius를 실어 보낸다.
+ * dmg는 "무기 1발 위력(p.dmg)"을 하한으로 두고 스플래시 부가 피해를 더한 근사값이다.
+ * (빗나가거나 방패에 막혀도 폭발이 사라지지 않게)
+ */
+function pushHit(ctx: SimCtx, p: ProjectileSim, extraDmg: number): void {
+  ctx.events.push({
+    type: 'projectileHit',
+    towerDefId: p.towerDefId,
+    x: p.x,
+    z: p.z,
+    splash: !!p.splash,
+    dmg: p.dmg + extraDmg,
+    tier: p.tier,
+    ...(p.splash ? { splashRadius: p.splash.radius } : {}),
+  });
+}
+
 function impactHoming(ctx: SimCtx, p: ProjectileSim, primary: EnemySim | null): void {
   if (primary) {
     damageEnemy(ctx, primary, p.dmg, p.towerDefId);
     if (p.status && primary.alive) tryApplyStatus(ctx, primary, p.status, p.sourceTowerId);
   }
+  let area = 0;
   if (p.splash) {
-    applyArea(
+    area = applyArea(
       ctx, p.x, p.z, p.dmg, p.splash, p.towerDefId, p.sourceTowerId, p.status,
       primary ? primary.id : -1,
     );
   }
-  ctx.events.push({ type: 'projectileHit', towerDefId: p.towerDefId, x: p.x, z: p.z, splash: !!p.splash });
+  pushHit(ctx, p, area);
 }
 
 function impactBallistic(ctx: SimCtx, p: ProjectileSim): void {
+  let area = 0;
   if (p.splash) {
-    applyArea(ctx, p.x, p.z, p.dmg, p.splash, p.towerDefId, p.sourceTowerId, p.status, -1);
+    area = applyArea(ctx, p.x, p.z, p.dmg, p.splash, p.towerDefId, p.sourceTowerId, p.status, -1);
   } else {
     // 스플래시가 없으면 착탄점 최근접 단일 타격
     let hit: EnemySim | null = null;
@@ -321,5 +357,5 @@ function impactBallistic(ctx: SimCtx, p: ProjectileSim): void {
       if (p.status && hit.alive) tryApplyStatus(ctx, hit, p.status, p.sourceTowerId);
     }
   }
-  ctx.events.push({ type: 'projectileHit', towerDefId: p.towerDefId, x: p.x, z: p.z, splash: !!p.splash });
+  pushHit(ctx, p, area);
 }

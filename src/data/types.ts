@@ -359,7 +359,16 @@ export type SimEvent =
       source: TowerId | StatusKind;
       shielded: boolean;
     }
-  | { type: 'enemyDied'; enemyId: number; defId: EnemyId; x: number; z: number; bounty: number }
+  | {
+      type: 'enemyDied';
+      enemyId: number;
+      defId: EnemyId;
+      x: number;
+      z: number;
+      bounty: number;
+      /** 최대 체력 (웨이브 스케일 포함) — 대형/후반 적일수록 사망 폭발을 크게 */
+      maxHp: number;
+    }
   | { type: 'enemyLeaked'; enemyId: number; defId: EnemyId; baseDamage: number }
   | { type: 'bossSpawned'; enemyId: number; defId: EnemyId }
   | { type: 'towerPlaced'; towerId: number; defId: TowerId; cellX: number; cellZ: number }
@@ -372,6 +381,12 @@ export type SimEvent =
       x: number;
       z: number;
       splash: boolean;
+      /** 이번 착탄으로 가한 총 피해 근사 (직격 + 스플래시 합) */
+      dmg: number;
+      /** 발사 타워 티어 (0~4) */
+      tier: number;
+      /** 스플래시면 실제 반경 (타일) */
+      splashRadius?: number;
     }
   | {
       type: 'beamFired';
@@ -379,6 +394,10 @@ export type SimEvent =
       defId: TowerId;
       /** 체인 경유점 (타워 → 적1 → 적2 ...) */
       points: { x: number; z: number; flying: boolean }[];
+      /** 체인 전체 피해 합 근사 */
+      dmg: number;
+      /** 발사 타워 티어 (0~4) */
+      tier: number;
     }
   | { type: 'statusApplied'; enemyId: number; kind: StatusKind }
   | { type: 'baseDamaged'; amount: number; hpLeft: number }

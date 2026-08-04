@@ -122,13 +122,20 @@ export class ProjectileView {
   /**
    * 지그재그 번개 빔 — points: 타워→적1→적2… (sim 좌표, y는 flying에 따름).
    * 세그먼트마다 수직 교차 리본 2장으로 볼륨감을 낸다.
+   * @param intensity 연출 강도 배수 (1 = 기본). 굵기/지그재그 진폭이 함께 커진다.
    */
-  addBeam(points: readonly { x: number; z: number; flying?: boolean }[], startY = 1.1): void {
+  addBeam(
+    points: readonly { x: number; z: number; flying?: boolean }[],
+    startY = 1.1,
+    intensity = 1,
+  ): void {
     if (points.length < 2) return;
     const beam = this.acquireBeam();
     const verts: number[] = [];
     const cols: number[] = [];
-    const w = 0.055;
+    const k = Math.max(0.5, Math.min(3.4, intensity));
+    const w = 0.055 * (0.85 + 0.55 * k);
+    const jitter = 0.28 * (0.7 + 0.45 * k);
     const cMain = new THREE.Color(0xaef2ff);
     const cCore = new THREE.Color(0xffffff);
 
@@ -149,9 +156,9 @@ export class ProjectileView {
         const t = s / segs;
         const p = a.clone().lerp(b, t);
         if (s < segs) {
-          p.x += (Math.random() - 0.5) * 0.28;
-          p.y += (Math.random() - 0.5) * 0.24;
-          p.z += (Math.random() - 0.5) * 0.28;
+          p.x += (Math.random() - 0.5) * jitter;
+          p.y += (Math.random() - 0.5) * jitter * 0.86;
+          p.z += (Math.random() - 0.5) * jitter;
         }
         this.pushRibbon(verts, cols, prev, p, w, cMain);
         this.pushRibbon(verts, cols, prev, p, w * 0.4, cCore);
