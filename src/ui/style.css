@@ -103,11 +103,12 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .chip.is-on { background: linear-gradient(180deg, #9fdcf7, #58b7dd); color: var(--ink); border-color: var(--ink); box-shadow: var(--pop); }
 
 /* --- 타이틀 -------------------------------------------------------------- */
+/* 반투명 스크림 — 뒤에서 회전하는 3D 디오라마가 비쳐 보인다 */
 .screen--title {
   background:
-    radial-gradient(120% 65% at 50% 108%, rgba(255, 122, 47, 0.55), transparent 60%),
-    radial-gradient(90% 60% at 50% -8%, #35543a, transparent 70%),
-    linear-gradient(180deg, #16281c, #0e1a12 55%, #241610);
+    radial-gradient(120% 65% at 50% 108%, rgba(255, 122, 47, 0.45), transparent 60%),
+    radial-gradient(90% 60% at 50% -8%, rgba(53, 84, 58, 0.55), transparent 70%),
+    linear-gradient(180deg, rgba(22, 40, 28, 0.72), rgba(14, 26, 18, 0.55) 55%, rgba(36, 22, 16, 0.72));
 }
 .title-col { align-items: center; justify-content: center; gap: 12px; text-align: center; }
 .title-spacer { flex: 1; }
@@ -127,7 +128,9 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .title-version { font-size: 0.8rem; opacity: 0.55; padding-bottom: 6px; }
 
 /* --- 로비 ---------------------------------------------------------------- */
-.screen--lobby { background: linear-gradient(180deg, #1c3322, #0e1a12 60%, #1c130c); }
+.screen--lobby {
+  background: linear-gradient(180deg, rgba(28, 51, 34, 0.82), rgba(14, 26, 18, 0.62) 60%, rgba(28, 19, 12, 0.85));
+}
 .lobby-col { gap: 10px; }
 .carousel-wrap { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; }
 .carousel {

@@ -2,6 +2,7 @@
  * 전투 컨트롤러 — 고정 30Hz 시뮬레이션 + 보간 렌더 + BattleUiApi 구현.
  * 프레임 순서: 틱 진행 → 이벤트 연출 → 뷰 보간 갱신 → 렌더.
  */
+import * as THREE from 'three';
 import type {
   BattleSim,
   BattleUiApi,
@@ -189,6 +190,8 @@ export class BattleController {
     this.renderer.render(s3.scene, this.camera.camera);
   }
 
+  private fitBox = new THREE.Box3();
+
   resize(cssW: number, cssH: number): void {
     const bottom = Math.max(HUD_BOTTOM_MIN_PX, cssH * HUD_BOTTOM_RATIO);
     const rect: ViewportRect = {
@@ -197,7 +200,11 @@ export class BattleController {
       w: Math.max(1, cssW - 16),
       h: Math.max(1, cssH - HUD_TOP_PX - bottom),
     };
-    this.camera.fitToPlayfield(this.stage3d.aabb, rect, cssW, cssH);
+    // 절벽 스커트/수중 바위는 프레이밍에서 제외 — 지표면 기준으로 크게 잡는다
+    this.fitBox.copy(this.stage3d.aabb);
+    this.fitBox.min.y = Math.max(this.fitBox.min.y, -0.9);
+    this.fitBox.max.y = Math.max(this.fitBox.max.y, 1.4);
+    this.camera.fitToPlayfield(this.fitBox, rect, cssW, cssH);
   }
 
   /** 이벤트 소비 — frame()과 테스트 훅 ff()가 같은 경로를 쓴다 */

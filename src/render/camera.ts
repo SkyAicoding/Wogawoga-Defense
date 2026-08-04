@@ -7,8 +7,8 @@
 import * as THREE from 'three';
 
 const DEG = Math.PI / 180;
-/** 8% 마진 → 사용 가능 비율 */
-const FIT_USABLE = 1 - 0.08 * 2;
+/** 5% 마진 → 사용 가능 비율 */
+const FIT_USABLE = 1 - 0.05 * 2;
 
 export interface ViewportRect {
   x: number;

@@ -8,6 +8,11 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:4173',
     screenshot: 'only-on-failure',
+    launchOptions: {
+      // 로컬 컨테이너에선 PW_CHROMIUM으로 시스템 크로미움 지정 (CI는 playwright install 사용)
+      executablePath: process.env['PW_CHROMIUM'] || undefined,
+      args: ['--use-gl=angle', '--use-angle=swiftshader', '--no-sandbox'],
+    },
   },
   projects: [
     {

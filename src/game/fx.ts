@@ -109,7 +109,7 @@ export class FxRouter {
               ev.source in STATUS_KIND
                 ? (STATUS_KIND[ev.source as StatusKind] ?? 'normal')
                 : 'normal';
-            spawnDamageNumber(p.sx, p.sy, ev.shielded ? '⛨' : String(ev.amount), kind);
+            spawnDamageNumber(p.sx, p.sy, ev.shielded ? '⛨' : String(Math.max(1, Math.round(ev.amount))), kind);
           }
           if (!ev.shielded) audio.play('enemyHit');
           break;
