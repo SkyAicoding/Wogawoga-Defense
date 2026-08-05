@@ -12,6 +12,7 @@ export type SfxName =
   | 'spearThrow' | 'catapultLaunch' | 'boulderImpact' | 'lightningZap'
   | 'fireWhoosh' | 'frostCast' | 'poisonSpit' | 'drumBuff'
   | 'enemyHit' | 'enemyDie' | 'bossRoar' | 'baseHit'
+  | 'towerFall'
   | 'waveStart' | 'waveClear' | 'earlyCall'
   | 'victory' | 'defeat' | 'starUp' | 'amberGain';
 
@@ -264,6 +265,27 @@ const RECIPES: Record<SfxName, Recipe> = {
       mod.start(t0);
       mod.stop(t0 + 1.2);
       noiseSrc(ctx, filt(ctx, env(ctx, dest, t0, 0.35, 0.1, 0.9), 'lowpass', 300), t0, 1.0, rng, true);
+    },
+  },
+  /**
+   * 타워 붕괴 — **파괴 전용 소리**. 예전에는 boulderImpact를 그대로 썼는데,
+   * 그 샘플은 창잡이가 타워를 그냥 때릴 때와 투석기 착탄마다(시작 덱!) 울려서
+   * "타워를 잃었다"는 사건에 고유한 청각 신호가 없었다.
+   * 구성: 나무 기둥이 갈라지는 삐걱 하강(사각파 320→90Hz) + 무너져 내리는
+   * 브라운 노이즈 롤 + 낮은 쿵(70→38Hz). 하강 음정이라 '무너짐'으로 읽힌다.
+   */
+  towerFall: {
+    dur: 1.15,
+    build(ctx, dest, t0, rng) {
+      // 기둥이 부러지는 삐걱 — 사각파 하강 + 밴드패스로 나무 울림
+      const bp = filt(ctx, env(ctx, dest, t0, 0.42, 0.006, 0.42), 'bandpass', 700, 2.2);
+      tone(ctx, bp, 'square', 320 * j(rng), t0, 0.38, 90);
+      // 무너져 내리는 잔해 — 느리게 닫히는 로우패스 브라운 노이즈
+      const lp = filt(ctx, env(ctx, dest, t0 + 0.05, 0.6, 0.05, 0.85), 'lowpass', 1800);
+      sweep(lp.frequency, t0 + 0.05, 1800, 220, 0.7);
+      noiseSrc(ctx, lp, t0 + 0.05, 0.9, rng, true);
+      // 바닥에 닿는 쿵
+      tone(ctx, env(ctx, dest, t0 + 0.2, 0.9, 0.006, 0.55), 'sine', 70 * j(rng), t0 + 0.2, 0.5, 38);
     },
   },
   // 둔탁한 쿵(120→50Hz) + 경보 2연 비프(740Hz) — 기지 피격

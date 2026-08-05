@@ -16,6 +16,7 @@ import { TowerView } from './views/towerview';
 import { ProjectileView } from './views/projectileview';
 import { HealthBarView } from './views/healthbars';
 import { Decals } from './views/decals';
+import { TowerMarksView } from './views/towerstatus';
 import { ParticleSystem } from './particles';
 import { flagsFor, type QualityFlags } from './quality';
 
@@ -30,6 +31,8 @@ export interface Stage3D {
   projectiles: ProjectileView;
   healthbars: HealthBarView;
   decals: Decals;
+  /** 파괴 잔해 + 침묵 룬 지속 표식 (그리기는 healthbars 메시가 맡는다 — 드로우콜 1) */
+  towerStatus: TowerMarksView;
   particles: ParticleSystem;
   basecamp: Basecamp;
   /** 기지 피해 외형 0=온전/1=파손/2=반파 */
@@ -153,6 +156,7 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
   const projectiles = new ProjectileView(scene, terrain.cellToWorld);
   const healthbars = new HealthBarView(scene);
   const decals = new Decals(scene, terrain.cellToWorld);
+  const towerStatus = new TowerMarksView();
   // 자유 배치: 배치 모드 하이라이트는 건설 가능한 셀(소품 제외)에
   decals.init(
     terrain.buildableCells.filter((c) => !scenery.has(cellKey(stage, c.x, c.z))),
@@ -174,18 +178,22 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
     projectiles,
     healthbars,
     decals,
+    towerStatus,
     particles,
     basecamp,
     setBaseDamageLevel: (level) => basecamp.setDamageLevel(level),
     clearScenery(cellX: number, cellZ: number): boolean {
       if (!props.removeCell(cellX, cellZ)) return false;
       decals.addSlotCell(cellX, cellZ);
+      towerStatus.clearCell(cellX, cellZ);
       return true;
     },
     sceneryOffset: (cellX: number, cellZ: number) => props.offsetOf(cellX, cellZ),
     update(dt: number): void {
       time += dt;
       towers.update(dt);
+      towerStatus.tick(dt);
+      healthbars.tick(dt);
       decals.update(dt);
       particles.update(dt);
       // 기지 모닥불 연기/불티 (피해 클수록 검은 연기)
@@ -213,6 +221,7 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
       projectiles.dispose();
       healthbars.dispose();
       decals.dispose();
+      towerStatus.dispose();
       particles.dispose();
       terrain.dispose();
       props.dispose();

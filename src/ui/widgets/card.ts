@@ -95,6 +95,16 @@ function towerFallbackSvg(id: TowerId): string {
   }
 }
 
+/**
+ * 서 있는 타워 수 아이콘 (HUD) — 통나무 움막 실루엣.
+ * '타워를 잃었다'는 사건이 3D 파티클 말고는 어디에도 안 남던 문제의 UI 층이다.
+ */
+export const towerCountSvg = SVG(
+  `<path d="M24 5 L42 20 L38 20 L38 43 L10 43 L10 20 L6 20 Z"
+     fill="#c49a5e" stroke="#4a3018" stroke-width="3" stroke-linejoin="round"/>
+   <rect x="19" y="28" width="10" height="15" fill="#6b4a2f" stroke="#3a2512" stroke-width="2.5"/>`,
+);
+
 /** 골드(조개 화폐) 아이콘 */
 export const goldSvg = SVG(
   `<circle cx="24" cy="24" r="17" fill="#ffd04a" stroke="#a56a00" stroke-width="3"/>

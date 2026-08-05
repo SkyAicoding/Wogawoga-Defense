@@ -39,10 +39,41 @@ const HP_EXP = 0.3;
 /** 한 프레임(=한 handle 배치)에서 허용하는 총 셰이크 — 4배속 다중 착탄 멀미 방지 */
 const SHAKE_BUDGET = 0.5;
 
+/** 한 배치에서 허용하는 타워 피격 연출(파편+숫자) 수 — 부족 무리의 난타 스팸 방지 */
+const TOWER_HIT_FX_MAX = 4;
+
 export function fxStrength(dmg: number, tier: number): number {
   const d = Math.max(1, dmg);
   return clamp(Math.pow(d / REF_DMG, DMG_EXP) * (1 + tier * TIER_GAIN), S_MIN, S_MAX);
 }
+
+/**
+ * 적 부족의 타워 타격 연출 사양 — 무기별로 소리와 파편이 달라야 "누가 때리는지"가 들린다.
+ * 기존 SFX/파티클 자산만 조합한다(새 레시피 없음).
+ *  · 근접(칼/창/곤봉): 나무·돌 파편이 튀는 둔탁한 타격. trail 없음.
+ *  · 원거리(화살): 날아온 궤적을 점선으로 그리고 뼈색 파편이 튄다.
+ *  · 저주(주술): 마젠타 룬이 타워를 감싸며 올라온다.
+ */
+interface RaidHitStyle {
+  sfx: SfxName;
+  /** 파편 색 */
+  chip: number;
+  /** 파편 수 배율 */
+  chips: number;
+  /** 날아오는 궤적을 그릴 것인가 (원거리 전용) */
+  trail: boolean;
+}
+const RAID_HIT_DEFAULT: RaidHitStyle = { sfx: 'enemyHit', chip: 0xc8b189, chips: 1, trail: false };
+const RAID_HIT: Partial<Record<string, RaidHitStyle>> = {
+  // 돌칼 난타 — 가볍고 빠르다
+  blade: { sfx: 'enemyHit', chip: 0xd9c8a0, chips: 1, trail: false },
+  // 창 찌르기 — 한 방이 무거워 파편이 크게 튄다
+  lancer: { sfx: 'boulderImpact', chip: 0xc8b189, chips: 1.5, trail: false },
+  // 화살 — 궤적 + 뼈색 파편
+  archer: { sfx: 'spearThrow', chip: 0xece0c4, chips: 0.8, trail: true },
+  // 저주 — 마젠타. 피해 자체는 작아 파편도 적다
+  hexer: { sfx: 'poisonSpit', chip: 0xd94ad0, chips: 0.6, trail: true },
+};
 
 const FIRE_SFX: Record<TowerId, SfxName> = {
   spear: 'spearThrow',
@@ -252,6 +283,8 @@ export class FxRouter {
   private shakeSpent = 0;
   /** 오라 불티 스팸 방지 — 배치당 상한 */
   private auraFlecks = 0;
+  /** 타워 피격 파편/숫자 스팸 방지 — 무리가 동시에 두들기면 금방 찬다 */
+  private towerHits = 0;
 
   constructor(
     private stage3d: Stage3D,
@@ -292,6 +325,7 @@ export class FxRouter {
     const s3 = this.stage3d;
     this.shakeSpent = 0;
     this.auraFlecks = 0;
+    this.towerHits = 0;
     for (const ev of events) {
       switch (ev.type) {
         case 'waveStarted': {
@@ -372,6 +406,7 @@ export class FxRouter {
         }
         case 'towerPlaced': {
           s3.towers.add(ev.towerId, ev.defId, 0, ev.cellX, ev.cellZ);
+          s3.towerStatus.clearCell(ev.cellX, ev.cellZ); // 재건설 = 잔해 정리
           const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
           s3.particles.ring(w.x, w.z, 0xd9c8a0, 0.7);
           audio.play('towerPlace');
@@ -411,6 +446,86 @@ export class FxRouter {
           s3.towers.remove(ev.towerId);
           audio.play('towerSell');
           break;
+        case 'towerDamaged': {
+          s3.towers.hit(ev.towerId);
+          // 타격 지점에 나무/돌 파편 몇 점 — 무리가 두들기면 배치당 상한에 걸린다
+          if (this.towerHits < TOWER_HIT_FX_MAX) {
+            this.towerHits++;
+            const st = RAID_HIT[ev.attackerDefId] ?? RAID_HIT_DEFAULT;
+            const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
+            // 원거리는 날아온 궤적을 점선으로 — 어디서 날아왔는지가 보여야
+            // "뒤에 있는 궁수를 먼저 칠 것인가"라는 판단이 생긴다
+            if (st.trail && ev.ranged) this.raidShot(ev.attackerX, ev.attackerZ, ev.cellX, ev.cellZ, st.chip);
+            s3.particles.burst(w.x, 0.55, w.z, st.chip, Math.round(4 * st.chips), 1.5, 0.055, 0.4, {
+              gravity: 9,
+              drag: 1.4,
+              upBias: 0.7,
+              sizeVar: 0.6,
+            });
+            const p = this.worldToScreen(ev.cellX, 1.35, ev.cellZ);
+            // "-14" — 적 피해(흰색)와 **다른 종류**로 띄운다. 부호만으로는 숫자가
+            // 겹쳤을 때 판독이 안 됐다 (적의 '12'와 타워의 '-15'가 포개진다)
+            if (p) spawnDamageNumber(p.sx, p.sy, `-${Math.round(ev.amount)}`, 'tower', 1);
+            audio.play(st.sfx);
+          }
+          // 체력이 1/3 밑으로 떨어지는 순간에만 한 번 흔든다 (매 타격 셰이크는 멀미)
+          if (ev.hpLeft > 0 && ev.hpLeft < ev.maxHp / 3 && ev.hpLeft + ev.amount >= ev.maxHp / 3) {
+            this.shake(0.14);
+            this.buzz(25);
+          }
+          break;
+        }
+        case 'towerSilenced': {
+          // 저주는 "타워가 조용해진다"는 **부재**로 표현되는 상태라 그것만으로는 안 보인다.
+          // 걸리는 순간 마젠타 룬이 타워를 감싸 올라가게 해 원인을 눈에 보이게 만든다.
+          // (저주는 주술사가 재타격할 때마다 갱신되므로 이 연출이 주기적으로 반복된다)
+          if (this.towerHits < TOWER_HIT_FX_MAX) {
+            const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
+            s3.particles.ring(w.x, w.z, 0xd94ad0, 0.5, 10);
+            s3.particles.burst(w.x, 0.75, w.z, 0xe86ad0, 6, 0.9, 0.07, 0.75, {
+              gravity: -1.2,
+              drag: 1.5,
+              upBias: 1,
+              sizeVar: 0.5,
+              glow: true,
+            });
+            audio.play('frostCast'); // 기존 자산 — 짧고 차가운 '주문 걸림' 소리
+          }
+          break;
+        }
+        case 'towerDestroyed': {
+          s3.towers.remove(ev.towerId);
+          // 지속 신호 — 그 칸에 잔해가 남는다(다시 지을 때까지). 파티클은 2초면
+          // 사라지므로, 시선을 뗀 사이에 잃으면 무엇이 없어졌는지 되짚을 수 없었다.
+          s3.towerStatus.markDestroyed(ev.cellX, ev.cellZ, ev.tier);
+          const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
+          // 티어가 높을수록 큰 잔해 — 목재 파편 + 흙먼지.
+          // 구조물이 무너지는 사건이라 소품 제거(1.5)보다 크게 잡는다
+          const s = 2.0 + ev.tier * 0.4;
+          s3.particles.explosion(w.x, 0.45 * towerTierScale(ev.tier) + 0.2, w.z, {
+            strength: s,
+            core: 0xffe0a8,
+            debris: 0x8d6b46,
+            smoke: 0x9a8f7a,
+            shock: 0xd8c096,
+            gravity: 13,
+            debrisMul: 2.2,
+            smokeMul: 1.7,
+            shockMul: 1.25,
+            sizeMul: 1.35,
+            flashMul: 1.2,
+            spreadMul: 1.3,
+            smokeLifeMul: 1.7,
+            shockRadius: 0.72,
+          });
+          s3.particles.ring(w.x, w.z, 0xb08a5a, 0.7);
+          // 파괴 전용 소리 — boulderImpact는 창잡이의 평타와 투석기 착탄에도 쓰여
+          // "타워를 잃었다"에 고유한 청각 신호가 없었다
+          audio.play('towerFall');
+          this.shake(clamp(0.1 * s, 0.12, 0.3));
+          this.buzz([30, 40, 60]);
+          break;
+        }
         case 'sceneryCleared': {
           // 소품 메시를 먼저 지우고(재병합) 그 자리에 먼지+파편을 터뜨린다.
           // 렌더가 스스로 판단하지 않고 sim 이벤트에만 반응한다 (진실의 원천 = sim)
@@ -576,6 +691,27 @@ export class FxRouter {
       0.45 + 0.35 * s,
       { gravity: fire ? -1.6 : -0.8, drag: 1.6, upBias: 0.9, sizeVar: 0.6, glow: fire, grow: 0.06 },
     );
+  }
+
+  /**
+   * 부족 원거리 타격의 날아온 궤적 — 실제 투사체를 만들지 않고 점선으로만 그린다.
+   * (sim에는 이 투사체가 없다. 피해는 이미 적용된 뒤라 궤적은 순수 사후 연출이고,
+   *  투사체 풀·명중 판정을 늘리지 않으면서 "어디서 날아왔는지"만 전달한다)
+   */
+  private raidShot(fromX: number, fromZ: number, toX: number, toZ: number, color: number): void {
+    const s3 = this.stage3d;
+    if (s3.particles.load > 0.8) return; // 파티클 예산 포화 시 궤적부터 포기
+    const a = s3.cellToWorld(fromX, fromZ, this.v);
+    const ax = a.x;
+    const az = a.z;
+    const b = s3.cellToWorld(toX, toZ, this.v);
+    const N = 5;
+    for (let i = 1; i <= N; i++) {
+      const t = i / (N + 1);
+      // 살짝 포물선 — 직선이면 지면 데칼처럼 보인다
+      const y = 0.45 + Math.sin(t * Math.PI) * 0.28;
+      s3.particles.trail(ax + (b.x - ax) * t, y, az + (b.z - az) * t, color, 0.055);
+    }
   }
 
   /** baseDamaged 비율 계산용 (컨트롤러가 주입) */

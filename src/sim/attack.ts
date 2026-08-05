@@ -83,6 +83,9 @@ export function recomputeBuffs(ctx: SimCtx): void {
     t.buffRatePct = 0;
   }
   for (const d of towers) {
+    // 침묵한 전쟁북은 버프도 멈춘다 — "입을 막는다"가 화력에만 적용되면 규칙이 반쪽이다.
+    // (5틱 주기라 저주가 걸린 뒤 최대 5틱 늦게 반영되지만 drum 버프는 원래 그 지연을 갖는다)
+    if (d.silenceLeft > 0) continue;
     const def = ctx.opts.towerDefs[d.defId];
     const tier = def.tiers[d.tier] as TowerTier;
     const aura = tier.aura;
@@ -103,6 +106,17 @@ export function updateTowers(ctx: SimCtx): void {
   for (const t of ctx.world.towers.items) {
     const def = ctx.opts.towerDefs[t.defId];
     const tier = def.tiers[t.tier] as TowerTier;
+    /**
+     * 침묵(hexer의 저주) — 발사·오라 피해가 멈추고 **쿨다운도 함께 얼어붙는다**.
+     * 쿨다운만 계속 돌게 하면 타워가 침묵 중에 재장전을 끝내 놓고 풀리는 순간
+     * 곧바로 쏘기 때문에, 장기 발사 횟수가 거의 줄지 않아 저주가 "발사 지연"밖에 안 된다
+     * (실측: 300틱에 10발 → 10발). 함께 얼려야 잃는 화력이 곧 침묵 시간과 같아져
+     * "주술사가 붙어 있으면 그 타워는 절반만 일한다"가 계산으로도 화면으로도 성립한다.
+     */
+    if (t.silenceLeft > 0) {
+      t.silenceLeft--;
+      continue;
+    }
     if (t.cooldownLeft > 0) t.cooldownLeft--;
     if (def.attackKind === 'pulse' || def.attackKind === 'aura') {
       pulseTick(ctx, t, def, tier);

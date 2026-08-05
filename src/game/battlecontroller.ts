@@ -104,6 +104,9 @@ export class BattleController {
     });
 
     this.stage3d = build(stage, quality);
+    // 지속 상태 표식(파괴 잔해 + 침묵 룬)은 sim 타워 배열을 직접 읽는다.
+    // stage3d.update(dt)에서 돌아가므로 테스트 훅 stepFx()로도 시간이 흐른다.
+    this.stage3d.towerStatus.setTowers(this.sim.state.towers);
     this.placement = new PlacementController(
       canvas,
       this.camera,
@@ -282,7 +285,8 @@ export class BattleController {
     const dt = Math.min(0.1, ticks * TICK_DT + 0.0001);
     const s3 = this.stage3d;
     s3.enemies.update(st.enemies, alpha, s3.cellToWorld, dt);
-    s3.healthbars.update(st.enemies, alpha, s3.cellToWorld);
+    // 오버레이 인스턴스 한 메시 — 적/타워 체력바 + 파괴 잔해 + 침묵 룬 (드로우콜 1)
+    s3.healthbars.update(st.enemies, st.towers, alpha, s3.cellToWorld, s3.towerStatus.marks());
     s3.projectiles.update(st.projectiles, alpha, dt);
     s3.towers.aim(st.towers, st.enemies, alpha);
     s3.update(dt);
@@ -320,7 +324,12 @@ export class BattleController {
     this.fx.handle(events);
     for (const ev of events) {
       if (ev.type === 'battleEnded') this.scheduleEnd(ev.won);
-      else if (ev.type === 'towerSold' || ev.type === 'towerUpgraded') {
+      else if (
+        ev.type === 'towerSold' ||
+        ev.type === 'towerUpgraded' ||
+        // 파괴된 타워가 선택 중이었다면 패널/사거리 링을 정리해야 한다
+        ev.type === 'towerDestroyed'
+      ) {
         this.placement.refreshSelection();
       } else if (ev.type === 'sceneryCleared') {
         this.placement.refreshScenerySelection();
@@ -412,6 +421,8 @@ export class BattleController {
       // 입력/뷰포트 검증용 (모바일 e2e)
       selectCard: (i: number | null): void => this.api.selectCard(i),
       selectedCard: (): number | null => this.api.selectedCard(),
+      // 타워 파괴 시 선택 패널/사거리 링이 정리되는지 검증용
+      selectedTower: (): number | null => this.api.selectedTower(),
       // 지형지물 제거 검증용
       selectedScenery: (): { x: number; z: number } | null => this.api.selectedScenery(),
       sceneryList: (): { x: number; z: number }[] => {
@@ -429,6 +440,13 @@ export class BattleController {
         const ok = this.sim.applyCommand({ type: 'clearScenery', cellX: x, cellZ: z });
         this.processEvents();
         return ok;
+      },
+      // 지속 표식(파괴 잔해)을 타워 구성을 바꾸지 않고 얹는다 — 드로우콜 A/B 통제용
+      markRubble: (x: number, z: number, tier = 0): void => {
+        this.stage3d.towerStatus.markDestroyed(x, z, tier);
+      },
+      clearRubble: (x: number, z: number): void => {
+        this.stage3d.towerStatus.clearCell(x, z);
       },
       setGold: (g: number): void => {
         // 골드 부족/충분 분기 검증용 — 테스트 모드에서만 노출된다

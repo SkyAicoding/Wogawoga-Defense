@@ -1,0 +1,133 @@
+/**
+ * 부족 습격대 4종의 **드로우콜 묶음**과 삼각형 예산 회귀 테스트.
+ *
+ * 이 4종은 종마다 InstancedMesh 를 두면 컬러+그림자로 드로우콜이 +8 이 되어
+ * 프레임 예산(60콜)을 넘긴다. 그래서 지오메트리를 공유하고 장비만 정점 태그로
+ * 골라 그린다 — 그 계약이 깨지면(예: 누가 단품 지오메트리로 되돌리면) 여기서 걸린다.
+ */
+import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
+import type { EnemyId, EnemyState } from '@/data/types';
+import { ENEMY_DEFS } from '@/data/enemies';
+import { EnemyView } from '@/render/views/enemyview';
+import {
+  ALL_ENEMY_IDS,
+  RAIDER_GEO_KEY,
+  buildEnemy,
+  buildEnemySolo,
+  enemyGeoKey,
+  enemyRig,
+  enemyVariant,
+} from '@/render/meshlib/enemies';
+import { VARIANT_ATTR, VARIANT_SEL_ATTR } from '@/render/meshlib/gait';
+
+const RAIDERS: EnemyId[] = ['blade', 'lancer', 'archer', 'hexer'];
+
+/** 비인덱스 지오메트리라 삼각형 = 정점/3 */
+function tris(geo: THREE.BufferGeometry): number {
+  return geo.getAttribute('position').count / 3;
+}
+
+const cellToWorld = (x: number, z: number, out?: THREE.Vector3): THREE.Vector3 =>
+  (out ?? new THREE.Vector3()).set(x, 0, z);
+
+function enemy(id: EnemyId, o: Partial<EnemyState> = {}): EnemyState {
+  return {
+    id: 1,
+    defId: id,
+    hp: 10,
+    maxHp: 10,
+    shieldHitsLeft: 0,
+    dist: 2,
+    pathIndex: 0,
+    attackCdLeft: 0,
+    towerTargetId: -1,
+    flying: false,
+    x: 2,
+    z: 2,
+    prevX: 2,
+    prevZ: 2,
+    heading: 0,
+    statuses: [],
+    bounty: 1,
+    baseDamage: 1,
+    radius: ENEMY_DEFS[id].radius,
+    alive: true,
+    hpMul: 1,
+    ...o,
+  };
+}
+
+describe('부족 습격대 렌더', () => {
+  it('4종이 지오메트리와 리그를 공유한다 (드로우콜 1묶음)', () => {
+    const geo = buildEnemy('blade');
+    const rig = enemyRig('blade');
+    for (const id of RAIDERS) {
+      expect(enemyGeoKey(id), id).toBe(RAIDER_GEO_KEY);
+      expect(buildEnemy(id), id).toBe(geo); // 같은 객체여야 뷰가 한 메시로 묶는다
+      expect(enemyRig(id), id).toBe(rig);
+    }
+    // 변형 번호는 1..4 로 서로 달라야 한다 (겹치면 두 종이 같은 장비를 낀다)
+    expect(new Set(RAIDERS.map(enemyVariant))).toEqual(new Set([1, 2, 3, 4]));
+    // 나머지 종은 공유 대상이 아니다
+    for (const id of ALL_ENEMY_IDS) {
+      if (!RAIDERS.includes(id)) expect(enemyVariant(id), id).toBe(0);
+    }
+  });
+
+  it('공유 지오메트리에 변형 태그가 구워져 있고 4종 장비가 모두 들어 있다', () => {
+    const attr = buildEnemy('blade').getAttribute(VARIANT_ATTR);
+    expect(attr).toBeTruthy();
+    const seen = new Set<number>();
+    for (let i = 0; i < attr!.count; i++) seen.add(Math.round(attr!.getX(i)));
+    expect(seen).toEqual(new Set([0, 1, 2, 3, 4])); // 0 = 공용 몸통
+  });
+
+  it('EnemyView 가 4종을 메시 하나로 묶는다', () => {
+    const view = new EnemyView(new THREE.Scene());
+    const meshes = (view as unknown as { meshes: Map<string, THREE.InstancedMesh> }).meshes;
+    // 습격대 몫으로 늘어난 메시는 정확히 1개다 (종마다 만들면 4개가 된다)
+    expect(meshes.has(RAIDER_GEO_KEY)).toBe(true);
+    for (const id of RAIDERS) expect(meshes.has(id), id).toBe(false);
+
+    // 4종을 한 프레임에 함께 그려도 인스턴스가 한 메시에 쌓인다
+    const list = RAIDERS.map((id, i) => enemy(id, { id: 10 + i, x: 2 + i }));
+    view.update(list, 1, cellToWorld, 0.0333);
+    const mesh = meshes.get(RAIDER_GEO_KEY)!;
+    expect(mesh.count).toBe(4);
+    expect(mesh.visible).toBe(true);
+    // 인스턴스마다 자기 변형 번호가 실려야 장비가 갈린다
+    const sel = (view as unknown as { varAttrs: Map<string, THREE.BufferAttribute> }).varAttrs.get(
+      RAIDER_GEO_KEY,
+    )!;
+    expect(RAIDERS.map((_, i) => sel.getX(i))).toEqual(RAIDERS.map(enemyVariant));
+    expect(mesh.geometry.getAttribute(VARIANT_SEL_ATTR)).toBe(sel);
+    view.dispose();
+  });
+
+  it('삼각형 예산: 단품 400~700, 공유본은 4종 합보다 훨씬 작다', () => {
+    let soloSum = 0;
+    for (const id of RAIDERS) {
+      const n = tris(buildEnemySolo(id));
+      expect(n, `${id} 단품 삼각형`).toBeGreaterThanOrEqual(400);
+      expect(n, `${id} 단품 삼각형`).toBeLessThanOrEqual(700);
+      soloSum += n;
+    }
+    const shared = tris(buildEnemy('blade'));
+    // 공유본은 몸통 1벌 + 장비 4벌이라 단품 4개 합(몸통 4벌)보다 확실히 작아야 한다.
+    // 이 여유가 곧 "인스턴스마다 축퇴 삼각형을 조금 더 그리는" 비용의 상한이다.
+    expect(shared).toBeLessThan(soloSum * 0.62);
+    expect(shared, '공유 지오메트리 삼각형').toBeLessThan(1000);
+  });
+
+  it('작고 귀엽다: 키가 부족 전사의 3/4 미만이고 머리가 크다', () => {
+    const geo = buildEnemySolo('blade');
+    geo.computeBoundingBox();
+    const h = geo.boundingBox!.max.y;
+    const warrior = buildEnemy('warrior');
+    warrior.computeBoundingBox();
+    expect(h).toBeLessThan(warrior.boundingBox!.max.y * 0.75);
+    // 발바닥은 정확히 y=0 (전 종 공통 규약)
+    expect(geo.boundingBox!.min.y).toBeCloseTo(0, 2);
+  });
+});

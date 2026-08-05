@@ -20,6 +20,18 @@ export interface EnemySim extends EnemyState {
   def: EnemyDef;
   /** 보스 스턴 종료 후 면역이 끝나는 틱 */
   stunImmuneUntil: number;
+  /**
+   * 공성 피해 배율 — **무한 모드 초과분(1.06^n)만** 반영한다. 6개 스테이지의
+   * 정규 웨이브(wave <= waveCount)에서는 항상 정확히 1이라 밸런스가 바뀌지 않는다.
+   *
+   * 왜 필요한가: towerAttack.dmg는 상수인데 적 HP는 무한 모드에서 1.06^n으로 커진다.
+   * w100이면 archer 실HP가 24,740인데 타워에 넣는 피해는 여전히 11이라
+   * 만렙 T5(1,316)를 혼자 부수는 데 159.5초가 걸린다 — 즉 무한 모드에서는
+   * "타워를 부수는 적"이라는 기능이 사실상 사라진다(실측: 도달 웨이브 차이 0.3%).
+   * 웨이브 곡선 hpMul까지 곱하면 정규 스테이지가 통째로 흔들리므로
+   * (stage6은 hpBase만 2.2다) **초과분에만** 건다.
+   */
+  siegeMul: number;
 }
 
 /**
@@ -54,8 +66,11 @@ function makeEnemy(): EnemySim {
     radius: 0.3,
     alive: true,
     hpMul: 1,
+    attackCdLeft: 0,
+    towerTargetId: -1,
     def: null as unknown as EnemyDef, // 스폰 시 반드시 채워짐
     stunImmuneUntil: -1,
+    siegeMul: 1,
   };
 }
 
@@ -65,6 +80,10 @@ function resetEnemy(e: EnemySim): void {
   e.stunImmuneUntil = -1;
   e.dist = 0;
   e.shieldHitsLeft = 0;
+  // 풀 재사용 시 이전 개체의 공성 상태가 새어 나가면 결정론이 깨진다
+  e.attackCdLeft = 0;
+  e.towerTargetId = -1;
+  e.siegeMul = 1;
 }
 
 function makeProjectile(): ProjectileSim {

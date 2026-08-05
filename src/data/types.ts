@@ -33,6 +33,11 @@ export type EnemyId =
   | 'boar' // 원시 멧돼지 (격노)
   | 'warrior' // 적 부족 전사 (방패)
   | 'shaman' // 적 부족 주술사 (힐러)
+  // --- 부족 습격대 (작고 귀여운 사람 무리 — 타워를 부수러 온다) -------------
+  | 'blade' // 칼잡이 (근접 속공)
+  | 'lancer' // 창잡이 (한 칸 밖에서 찌르는 방어형)
+  | 'archer' // 궁수 (뒤에서 쏘는 유리대포)
+  | 'hexer' // 주술사 (저주로 타워를 침묵시킨다)
   | 'mammoth' // 매머드 (대형 탱커)
   | 'spino' // 스피노사우루스 (미니보스)
   | 'trex' // 티라노사우루스 (보스)
@@ -117,6 +122,12 @@ export interface TowerDef {
   canTargetAir: boolean;
   /** 정확히 5개 티어 (전투 내 Lv1~5) */
   tiers: TowerTier[];
+  /**
+   * 구조물 내구도 배율 (생략 = 1). 최대 HP = towerMaxHpFor(tier, stars) × toughness.
+   * 돌·통나무로 짠 구조는 단단하게, 크리스탈·식물은 무르게 — 적 부족의 공격 대상 선호를
+   * 데이터로 조절하는 유일한 손잡이다 (@/data/balance.ts towerMaxHpFor).
+   */
+  toughness?: number;
   /** 메타 별 1개당 보너스 (별 0~5) */
   starBonus: { dmgPct: number; ratePct: number; rangePct?: number };
   unlock: TowerUnlock;
@@ -127,6 +138,37 @@ export interface TowerDef {
 // ---------------------------------------------------------------------------
 // 적 정의
 // ---------------------------------------------------------------------------
+/**
+ * 적의 타워 공격 능력 (적 부족 유닛 전용). 이 필드가 없는 적은 타워를 완전히 무시하고
+ * 기지로 직행한다 — 기존 공룡/짐승 12종의 동작은 그대로다.
+ * 행동 규칙 전문은 src/sim/siege.ts 헤더 주석 참조.
+ */
+export interface TowerAttackSpec {
+  /** 1회 타격 피해 (타워 HP 기준, 감쇠·방어 없음) */
+  dmg: number;
+  /** 타격 사거리 (타일) — 적 중심 ↔ 타워 셀 중심 거리로 판정 */
+  range: number;
+  /** 타격 간격 틱 (30 = 1초) */
+  cooldownTicks: number;
+  /**
+   * 때리는 동안 전진을 멈추는가.
+   * 규약: 근접(칼·창)은 true — 멈춰 서서 두들긴다. 원거리(활·주술)는 false — 걸으며 쏜다.
+   */
+  stopToAttack: boolean;
+  /**
+   * 원거리 공격인가 (연출 분기용 — 투척물/주문 궤적 유무).
+   * 시뮬레이션 판정에는 쓰이지 않고 towerDamaged 이벤트에 그대로 실려 나간다.
+   */
+  ranged: boolean;
+  /**
+   * 타격이 대상 타워를 이만큼 **침묵**시킨다 (틱). 생략/0 = 침묵 없음.
+   * 침묵한 타워는 발사·오라 피해·버프 방출을 전부 멈춘다(조준은 유지).
+   * 중첩되지 않고 남은 시간을 max로 갱신한다 — 무리로 몰려와도 영구 봉쇄가 되지 않게.
+   * 부족 주술사(hexer) 전용 능력이며, "부수기 전에 입을 막는다"가 습격대의 조합이다.
+   */
+  silenceTicks?: number;
+}
+
 export interface EnemyDef {
   id: EnemyId;
   nameKey: string;
@@ -150,6 +192,8 @@ export interface EnemyDef {
   enrage?: { hpPct: number; speedMul: number };
   /** 주변 힐: 반경 내 아군에게 0.5초마다 회복 */
   healAura?: { radius: number; hpPerStatusTick: number };
+  /** 타워 공격 능력 (없으면 타워를 무시하고 기지로 직행) */
+  towerAttack?: TowerAttackSpec;
   /** 웨이브젠 예산 비용 (전투력 지표) */
   cost: number;
 }
@@ -166,6 +210,12 @@ export interface SpawnGroup {
   pathIndex: number;
   /** 웨이브 스케일 후 추가 배율 */
   hpMul: number;
+  /**
+   * 처치 보상 배율 (생략 = 1). **웨이브가 예산이 산 것보다 많은 골드를 주지 않게** 하는
+   * 유일한 손잡이다 — 근거는 wavegen.ts capBounty 주석.
+   * 마릿수가 예산을 넘겨 부풀 때(습격대 최소 인원 보장)만 1 미만이 된다.
+   */
+  bountyMul?: number;
 }
 
 export interface WaveDef {
@@ -252,6 +302,16 @@ export interface EnemyState {
   hpMul: number;
   /** 보스 여부 (연출 강조용, def.boss 복사) */
   boss?: boolean;
+  /**
+   * 타워 타격 쿨다운 잔여 틱. towerAttack이 없는 적은 항상 0.
+   * 스턴 중에는 감소하지 않는다(스턴 = 완전 무력화).
+   */
+  attackCdLeft: number;
+  /**
+   * 지금 때리고 있는 타워 id (-1 = 없음). 렌더가 공격 모션/방향에 쓴다.
+   * stopToAttack 유닛은 이 값이 0 이상인 동안 전진을 멈춘다.
+   */
+  towerTargetId: number;
 }
 
 export interface TowerState {
@@ -259,6 +319,17 @@ export interface TowerState {
   defId: TowerId;
   /** 0-base 티어 (0~4) */
   tier: number;
+  /**
+   * 구조물 체력 — 적 부족의 공격으로 깎이고 0이 되면 타워가 파괴되어 칸이 빈다(환불 없음).
+   * 준비 단계(prep)에는 자동 수리된다. 업그레이드는 늘어난 최대치만큼만 즉시 회복한다.
+   */
+  hp: number;
+  maxHp: number;
+  /**
+   * 침묵 잔여 틱 (0 = 정상). 부족 주술사(hexer)의 저주로 붙고 매 틱 1씩 준다.
+   * 0보다 크면 발사/오라/버프 방출이 멈춘다 — 파괴와 달리 되돌아온다.
+   */
+  silenceLeft: number;
   cellX: number;
   cellZ: number;
   cooldownLeft: number;
@@ -375,6 +446,53 @@ export type SimEvent =
   | { type: 'towerPlaced'; towerId: number; defId: TowerId; cellX: number; cellZ: number }
   | { type: 'towerUpgraded'; towerId: number; defId: TowerId; tier: number }
   | { type: 'towerSold'; towerId: number; refund: number }
+  | {
+      /** 적 부족이 타워를 때렸다 — 체력바/피격 연출 */
+      type: 'towerDamaged';
+      towerId: number;
+      defId: TowerId;
+      /** 타워 셀 (연출 위치) */
+      cellX: number;
+      cellZ: number;
+      /** 실제로 깎인 체력 */
+      amount: number;
+      /** 타격 후 남은 체력 (0 하한) */
+      hpLeft: number;
+      maxHp: number;
+      /** 때린 적 — 공격 모션 트리거용 */
+      attackerId: number;
+      attackerDefId: EnemyId;
+      /** 때린 적의 위치 (타격선/투척물 궤적 연출용) */
+      attackerX: number;
+      attackerZ: number;
+      /** 원거리 공격 여부 (TowerAttackSpec.ranged 그대로) */
+      ranged: boolean;
+    }
+  | {
+      /** 부족 주술사의 저주 — 타워가 잠시 침묵한다 (재적용 시마다 발행) */
+      type: 'towerSilenced';
+      towerId: number;
+      defId: TowerId;
+      cellX: number;
+      cellZ: number;
+      /** 이번 적용 후 남은 침묵 틱 */
+      ticksLeft: number;
+      /** 저주를 건 적 */
+      casterId: number;
+      casterDefId: EnemyId;
+    }
+  | {
+      /** 타워가 부서져 칸이 비었다 — 환불 없음(towerSold와 구분) */
+      type: 'towerDestroyed';
+      towerId: number;
+      defId: TowerId;
+      cellX: number;
+      cellZ: number;
+      /** 파괴 시점 티어 (0~4) — 잔해 연출 크기 */
+      tier: number;
+      /** 마지막 일격을 넣은 적 (없으면 -1) */
+      killerId: number;
+    }
   | {
       /** 소품(나무/바위) 제거 성공 — 연출/사운드 + 렌더 소품 병합 갱신 */
       type: 'sceneryCleared';

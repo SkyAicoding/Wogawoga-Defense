@@ -79,6 +79,12 @@ const DEMO_ENEMIES: readonly { defId: EnemyId; speed: number; flying: boolean; r
   { defId: 'ptera', speed: 1.8, flying: true, radius: 0.34 },
   { defId: 'ankylo', speed: 0.9, flying: false, radius: 0.4 },
   { defId: 'warrior', speed: 1.4, flying: false, radius: 0.26 },
+  // 부족 습격대 4종 — 지오메트리를 공유하므로 네 마리가 **한 메시**로 그려진다.
+  // 변형 마스킹(무기/염료)이 인스턴스마다 제대로 갈리는지 눈으로 확인하는 자리다.
+  { defId: 'blade', speed: 1.6, flying: false, radius: 0.26 },
+  { defId: 'lancer', speed: 1.6, flying: false, radius: 0.28 },
+  { defId: 'archer', speed: 1.6, flying: false, radius: 0.24 },
+  { defId: 'hexer', speed: 1.6, flying: false, radius: 0.26 },
   { defId: 'mammoth', speed: 0.75, flying: false, radius: 0.55 },
   { defId: 'trex', speed: 0.8, flying: false, radius: 0.6 },
 ];
@@ -108,6 +114,8 @@ export function run(): void {
       shieldHitsLeft: 0,
       dist: (i / DEMO_ENEMIES.length) * table.total,
       pathIndex: 0,
+      attackCdLeft: 0,
+      towerTargetId: -1,
       flying: d.flying,
       x: sample.x,
       z: sample.z,
@@ -259,7 +267,7 @@ export function run(): void {
     }
 
     stage3d.enemies.update(enemies, alpha, stage3d.cellToWorld, dt);
-    stage3d.healthbars.update(enemies, alpha, stage3d.cellToWorld);
+    stage3d.healthbars.update(enemies, [], alpha, stage3d.cellToWorld);
     stage3d.projectiles.update(projectiles, alpha, dt);
     stage3d.update(dt);
     cam.update(dt);

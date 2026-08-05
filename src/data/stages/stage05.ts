@@ -43,8 +43,10 @@ export const stage05: StageDef = {
     hpBase: 1.9,
     hpGrowth: 1.055,
     seed: 5077,
+    // 습격대 4종(스테이지3 완성) 유지 — 여기서는 매머드·힐러와 겹쳐 밀도가 올라간다
     allowedEnemies: [
       'raptor', 'compy', 'boar', 'trike', 'ptera', 'warrior', 'shaman', 'ankylo', 'mammoth',
+      'blade', 'lancer', 'archer', 'hexer',
     ],
     bossOverrides: {
       // w10 첫 보스 벽 완화: 전체 ×0.65 (w9 대비 총 HP ~5.9배 → ~3.8배)

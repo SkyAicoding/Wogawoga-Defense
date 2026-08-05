@@ -1,5 +1,5 @@
 /**
- * 적 12종 로우폴리 모델. 전방 = +x, 발바닥 y=0.
+ * 적 16종 로우폴리 모델. 전방 = +x, 발바닥 y=0.
  *
  * 스타일: 플랫 셰이딩 디오라마(각진 로우폴리). 폴리곤은 "매끈함"이 아니라
  * **실루엣·관절·종별 특징**에 쓴다 — 테이퍼 체인(tube)으로 몸통/목/꼬리를 마디로
@@ -140,6 +140,11 @@ function mirLimb(parts: readonly PartSpec[], idL: number, idR: number): PartSpec
 /** 파트 묶음에 사지 그룹 태그를 일괄 부여 (이미 태그된 파트는 그대로 둔다) */
 function tag(id: number, parts: readonly PartSpec[]): PartSpec[] {
   return parts.map((p) => (p.limb === undefined ? { ...p, limb: id } : p));
+}
+
+/** 파트 묶음에 변형(variant) 태그를 일괄 부여 — 0이면 태그하지 않는다(단품 빌드) */
+function tagVariant(v: number, parts: readonly PartSpec[]): PartSpec[] {
+  return v > 0 ? parts.map((p) => ({ ...p, variant: v })) : [...parts];
 }
 
 /** 지정 z를 기준으로 대칭 복제 (몸 중심이 아닌 소품 — 지팡이 해골 눈 등) */
@@ -305,7 +310,7 @@ function spines(pts: readonly V3[], h0: number, h1: number, w: number, color: nu
   return out;
 }
 
-// --- 적 12종 ---------------------------------------------------------------
+// --- 적 16종 ---------------------------------------------------------------
 
 function raptor(rig: RigBuilder): PartSpec[] {
   const body = 0xe8763a;
@@ -899,6 +904,245 @@ function shaman(rig: RigBuilder): PartSpec[] {
   return parts;
 }
 
+// --- 부족 습격대 4종 (blade / lancer / archer / hexer) -----------------------
+/**
+ * 작고 귀여운 사람 무리. 공룡들 사이에서 **한눈에 "작은 사람"** 으로 읽혀야 해서
+ * 키 0.68 (warrior 1.15, raptor 0.85 의 절반 남짓) · 2.5등신 (머리가 몸통보다 크다)로 잡았다.
+ *
+ * 4종은 **몸통·팔다리·머리를 공유**하고 (머리장식 / 무기 / 염료색)만 다르다.
+ * 이유는 두 가지다.
+ *  1) 성능: 종마다 InstancedMesh 를 두면 4종이 동시에 화면에 있을 때 컬러+그림자로
+ *     드로우콜이 +8 이 되어 예산(60)을 넘긴다. 공유 지오메트리 + 변형 마스킹으로
+ *     4종이 **한 메시 = +2 콜**로 끝난다 (factory.ts PartSpec.variant / gait.ts 참조).
+ *  2) 연출: 이들은 개별 몬스터가 아니라 **한 부족의 습격대**다. 같은 체형에 무기와
+ *     염료만 다른 편이 "같은 마을에서 몰려나온 무리"로 읽힌다.
+ *
+ * 구분은 전적으로 **머리 실루엣 + 무기 실루엣 + 염료색** 세 축이 맡는다:
+ *   blade  머리띠 · 세워 든 돌칼   · 붉은 염료
+ *   lancer 투구   · 긴 창 + 둥근 방패 · 청록 염료
+ *   archer 두건   · 활 + 등에 멘 화살통 · 이끼 초록
+ *   hexer  뼈가면+뿔 · 발광 지팡이   · 남보라 + 마젠타 발광
+ */
+const RAIDER_SKIN = 0xe0a878;
+const RAIDER_HIDE = 0xa8703f;
+const RAIDER_HIDE_D = 0x7d5230;
+const RAIDER_HAIR = 0x3a2a1c;
+
+interface RaiderIds {
+  armL: number;
+  armR: number;
+  head: number;
+}
+
+/** 4종 공용 몸통 — 다리·팔·머리 리그를 여기서 전부 등록한다 */
+function raiderBody(rig: RigBuilder): { parts: PartSpec[]; ids: RaiderIds } {
+  const skin = RAIDER_SKIN;
+  const hip: V3 = [0, 0.205, 0.072];
+  // 짧고 굵은 다리 = 짧은 보폭(1주기 0.35타일) = 총총거리는 걸음.
+  // 작고 귀여운 인상의 절반은 여기서 나온다 — 다리가 길면 곧바로 '작은 어른'이 된다.
+  const [legL, legR] = rig.leg(hip, { amp: 0.44 });
+  // 사람 걸음은 다리와 **반대쪽** 팔이 나간다. 좌측 다리가 위상 0 이므로 좌측 팔에 π 를 준다.
+  const [armL, armR] = rig.pair([0, 0.42, 0.105], [0, 0, 1], { phase: Math.PI, amp: 0.34 });
+  // 큰 머리가 걸음마다 까딱인다(2배 주파수) — 2.5등신에서 가장 눈에 띄는 2차 모션
+  const head = rig.add([0, 0.45, 0], [0, 0, 1], { phase: HALF_PI, amp2: 0.06 });
+  const parts: PartSpec[] = [
+    // 다리 (허벅지 가죽 / 맨 정강이 / 가죽신) — 굵고 짧게
+    ...mirLimb(
+      [
+        link([0, 0.205, 0.072], [0.006, 0.115, 0.078], 0.092, 0.092, RAIDER_HIDE, { kind: 'cyl', seg: 5, pad: 0.03 }),
+        link([0.006, 0.115, 0.078], [0, 0.045, 0.078], 0.076, 0.076, skin, { kind: 'cyl', seg: 5, pad: 0.03 }),
+        { kind: 'box', pos: [0.032, 0.023, 0.078], scale: [0.13, 0.046, 0.095], color: RAIDER_HIDE_D },
+      ],
+      legL,
+      legR,
+    ),
+    // 허리 가죽
+    { kind: 'cyl', pos: [0, 0.245, 0], scale: [0.225, 0.11, 0.235], color: RAIDER_HIDE, seg: 6, hueJitter: 0.015 },
+    // 몸통 (작게 — 머리를 크게 보이게 하는 건 몸통을 줄이는 쪽이다).
+    // 맨살로 두는 이유: 종별 kit 이 이 위에 자기 염료색 조끼를 덧입혀 색을 가져간다.
+    ...tubeW([[0, 0.285, 0], [0, 0.36, 0], [0, 0.44, 0]], [0.195, 0.205, 0.18], skin, {
+      flat: 0.95,
+      hueJitter: 0.012,
+    }),
+    { kind: 'box', pos: [0, 0.458, 0], scale: [0.085, 0.05, 0.09], color: skin },
+    // 머리 — 몸 전체의 1/3이 넘는 큰 두상 + 큰 눈
+    ...tag(head, [
+      { kind: 'box', pos: [0.008, 0.568, 0], scale: [0.245, 0.235, 0.235], color: skin, hueJitter: 0.01 },
+      { kind: 'box', pos: [0.133, 0.552, 0], scale: [0.062, 0.058, 0.065], color: skin },
+      { kind: 'box', pos: [0.125, 0.497, 0], scale: [0.052, 0.026, 0.095], color: 0x7a4530 },
+      ...eyes(0.115, 0.607, 0.07, 0.047),
+      { kind: 'box', pos: [-0.11, 0.578, 0], scale: [0.058, 0.21, 0.222], color: RAIDER_HAIR },
+    ]),
+    // 팔 (상박/하박/손) — 무기는 종별 kit 가 이 그룹에 얹는다
+    ...mirLimb(
+      [
+        link([0, 0.42, 0.105], [0.03, 0.335, 0.122], 0.062, 0.062, skin, { kind: 'cyl', seg: 4, pad: 0.025 }),
+        link([0.03, 0.335, 0.122], [0.08, 0.262, 0.118], 0.054, 0.054, skin, { kind: 'cyl', seg: 4, pad: 0.025 }),
+        { kind: 'box', pos: [0.1, 0.244, 0.118], scale: [0.066, 0.06, 0.066], color: skin },
+      ],
+      armL,
+      armR,
+    ),
+  ];
+  return { parts, ids: { armL, armR, head } };
+}
+
+/**
+ * 종별 염료 조끼 — 맨살 몸통 위에 덧입히는 한 겹.
+ * 게임 줌에서는 유닛이 20px 남짓이라 무기 실루엣보다 **몸통 색 덩어리**가 먼저 읽힌다.
+ * 4종을 색으로 갈라 주는 가장 싼 수단이고(파트 2개 = 24삼각형) 부족 특유의
+ * "염료 들인 가죽옷" 톤도 여기서 나온다.
+ */
+function raiderVest(dye: number): PartSpec[] {
+  return [
+    ...tubeW([[0, 0.3, 0], [0, 0.4, 0]], [0.215, 0.205], dye, { flat: 0.96, hueJitter: 0.02 }),
+    // 어깨선 — 위에서 내려다보는 카메라라 어깨 윗면이 색 면적을 가장 크게 벌어 준다
+    { kind: 'box', pos: [-0.005, 0.437, 0], scale: [0.2, 0.045, 0.245], color: dye, hueJitter: 0.02 },
+  ];
+}
+
+/** 칼잡이 — 붉은 머리띠 + 세워 든 돌칼 */
+function kitBlade(ids: RaiderIds): PartSpec[] {
+  const dye = 0xd2492f;
+  return [
+    ...tag(ids.head, [
+      { kind: 'box', pos: [0.008, 0.658, 0], scale: [0.258, 0.055, 0.25], color: dye, hueJitter: 0.02 },
+      { kind: 'cone', pos: [-0.09, 0.74, 0.05], rot: [0.35, 0, 0.6], scale: [0.034, 0.15, 0.024], color: C.gold, seg: 4 },
+      // 볼 전투 문양 — 좌우 대칭이라 어느 각도에서도 "칠한 얼굴"이 보인다
+      ...mirZ([{ kind: 'box', pos: [0.128, 0.578, 0.088], rot: [0, 0, 0.45], scale: [0.022, 0.075, 0.05], color: dye }]),
+    ]),
+    ...raiderVest(dye),
+    // 돌칼 — 세워 들되 앞으로 살짝 기울인다. 날 끝이 머리보다 위로 올라와야
+    // 위에서 내려다보는 카메라에서 '칼을 든 실루엣'으로 읽힌다.
+    ...tag(ids.armR, [
+      link([0.1, 0.225, -0.132], [0.114, 0.305, -0.132], 0.042, 0.042, C.wood, { kind: 'cyl', seg: 4 }),
+      { kind: 'box', pos: [0.116, 0.322, -0.132], scale: [0.062, 0.028, 0.15], color: C.boneDark },
+      { kind: 'box', pos: [0.142, 0.472, -0.132], rot: [0, 0, -0.18], scale: [0.072, 0.3, 0.036], color: 0xd9d4c6 },
+      { kind: 'cone', pos: [0.172, 0.638, -0.132], rot: [0, 0, -0.18], scale: [0.072, 0.085, 0.036], color: 0xd9d4c6, seg: 4 },
+    ]),
+  ];
+}
+
+/** 창잡이 — 투구 + 둥근 방패 + 긴 창 (한 걸음 뒤에서 찌른다) */
+function kitLancer(ids: RaiderIds): PartSpec[] {
+  const dye = 0x2f8a94;
+  return [
+    ...tag(ids.head, [
+      { kind: 'cyl', pos: [0.008, 0.672, 0], scale: [0.245, 0.085, 0.245], color: dye, seg: 5, hueJitter: 0.02 },
+      { kind: 'cone', pos: [0.008, 0.742, 0], scale: [0.1, 0.105, 0.1], color: C.boneDark, seg: 5 },
+      { kind: 'box', pos: [0.126, 0.638, 0], scale: [0.07, 0.05, 0.215], color: C.bone },
+    ]),
+    ...raiderVest(dye),
+    // 방패 (왼팔) — 나무판 + 염료 테 + 돌 보스
+    ...tag(ids.armL, [
+      { kind: 'cyl', pos: [0.148, 0.295, 0.158], rot: [0, 0, HALF_PI], scale: [0.32, 0.035, 0.32], color: C.woodDark, seg: 6 },
+      { kind: 'cyl', pos: [0.167, 0.295, 0.158], rot: [0, 0, HALF_PI], scale: [0.235, 0.032, 0.235], color: dye, seg: 6, hueJitter: 0.02 },
+      { kind: 'cone', pos: [0.188, 0.295, 0.158], rot: [0, 0, -HALF_PI], scale: [0.085, 0.065, 0.085], color: C.stone, seg: 5 },
+    ]),
+    // 창 (오른팔) — 앞으로 기울여 세운다. 실루엣에서 blade 와 즉시 갈린다.
+    ...tag(ids.armR, [
+      link([0.045, 0.075, -0.138], [0.21, 0.64, -0.138], 0.036, 0.036, C.wood, { kind: 'cyl', seg: 4 }),
+      { kind: 'box', pos: [0.163, 0.49, -0.138], scale: [0.05, 0.034, 0.055], color: C.rope },
+      { kind: 'cone', pos: [0.238, 0.725, -0.138], rot: [0, 0, -0.28], scale: [0.06, 0.18, 0.05], color: C.bone, seg: 4 },
+    ]),
+  ];
+}
+
+/** 궁수 — 두건 + 등에 멘 화살통 + 앞으로 든 활 */
+function kitArcher(ids: RaiderIds): PartSpec[] {
+  const dye = 0x5f8f3a;
+  return [
+    ...tag(ids.head, [
+      { kind: 'box', pos: [0.002, 0.672, 0], scale: [0.255, 0.07, 0.25], color: dye, hueJitter: 0.02 },
+      { kind: 'box', pos: [-0.118, 0.6, 0], scale: [0.065, 0.17, 0.215], color: dye, hueJitter: 0.02 },
+      ...mirZ([{ kind: 'cone', pos: [-0.06, 0.755, 0.048], rot: [0.4, 0, 0.7], scale: [0.03, 0.14, 0.022], color: C.bone, seg: 4 }]),
+    ]),
+    ...raiderVest(dye),
+    // 등에 비스듬히 멘 화살통 (몸통 고정 — 팔과 따로 논다)
+    { kind: 'cyl', pos: [-0.128, 0.375, -0.06], rot: [0, 0, 0.32], scale: [0.095, 0.24, 0.095], color: RAIDER_HIDE_D, seg: 5 },
+    ...mirZ([{ kind: 'cone', pos: [-0.165, 0.515, -0.035], rot: [0.15, 0, 0.32], scale: [0.03, 0.11, 0.03], color: C.bone, seg: 4 }]),
+    /**
+     * 활 (왼팔) — 앞으로 볼록한 호 + 시위 + 메긴 화살.
+     *
+     * **비스듬히 뉜(cant) 자세**가 핵심이다. 활을 수직으로 세워 들면 호가 놓인 평면이
+     * 카메라(내려다보는 55°)와 거의 나란해져 위에서는 호가 **직선 한 줄**로 붙어 버린다 —
+     * 실측에서 창(lancer)·지팡이(hexer)와 실루엣이 구분되지 않았다.
+     * 시위(A→B)를 z축으로 0.32 눕혀 약 39° 기울이면 호의 곡률이 위에서도 보이고,
+     * 몸통 바깥(z 0.03~0.35)으로 빠져 있어 큰 머리에 가려지지도 않는다.
+     * 화살은 활을 가로질러 +x(전방)로 뻗어 "쏘는 자세"를 한 번에 읽히게 한다.
+     *
+     * 최저점의 (x, y)는 예전 값(0.14, ~0.09)을 그대로 두거나 더 올렸다 —
+     * 팔 스윙은 z축 회전이라 y가 (x, y)에만 의존하므로 접지 여유가 나빠지지 않는다
+     * (tests/render/gait.test.ts 가 전 정점에 대해 잠근다).
+     */
+    ...tag(ids.armL, [
+      ...tube(arc([0.14, 0.1, 0.03], [0.3, 0.3, 0.19], [0.14, 0.5, 0.35], 3), 0.032, 0.026, C.wood, { flat: 1 }),
+      link([0.14, 0.1, 0.03], [0.14, 0.5, 0.35], 0.012, 0.012, C.bone, { kind: 'cyl', seg: 3 }),
+      link([0.13, 0.3, 0.19], [0.35, 0.3, 0.19], 0.013, 0.013, C.wood, { kind: 'cyl', seg: 3 }),
+      { kind: 'cone', pos: [0.383, 0.3, 0.19], rot: [0, 0, -HALF_PI], scale: [0.034, 0.07, 0.034], color: C.bone, seg: 3 },
+    ]),
+  ];
+}
+
+/** 주술사 — 뼈 가면 + 뿔 + 발광 지팡이 (저주를 거는 손) */
+function kitHexer(ids: RaiderIds): PartSpec[] {
+  /**
+   * 염료색 0x5b3a8c → 0xa8228c.
+   *
+   * 게임 줌(유닛 20~40px)에서는 **색이 식별의 주역**이고 무기 실루엣은 보조다.
+   * 예전 값(H≈264°)은 기존 shaman 로브 0x8a4a9e(H≈286°)와 색상환에서 22°밖에
+   * 안 떨어져 둘 다 그냥 '보라'로 읽혔다 — 화면에서 주술사 둘을 구분할 수 없었다.
+   * 0xa8228c는 H≈314°(마젠타 쪽)로 shaman과 28° 더 벌어지고, 무엇보다
+   * **자기가 거는 저주의 색(glow / 침묵 룬 0xd94ad0·0xdb1af2)과 같은 계열**이라
+   * "저 마젠타가 타워를 조용하게 만드는 놈"이라는 인과가 색으로 묶인다.
+   */
+  const dye = 0xa8228c;
+  const glow = 0xd94ad0;
+  return [
+    ...tag(ids.head, [
+      // 얼굴을 덮는 뼈 가면 — 눈이 가려져 다른 3종과 인상이 완전히 갈린다
+      { kind: 'box', pos: [0.128, 0.572, 0], scale: [0.055, 0.225, 0.225], color: C.bone },
+      { kind: 'box', pos: [0.16, 0.605, 0], scale: [0.022, 0.042, 0.145], color: C.black },
+      ...mirZ([link([0.03, 0.665, 0.082], [0.11, 0.82, 0.12], 0.04, 0.04, C.bone, { kind: 'cone', seg: 4, pad: 0.01 })]),
+    ]),
+    ...raiderVest(dye),
+    // 등에 드리운 자락 (어깨선은 조끼가 맡는다)
+    { kind: 'box', pos: [-0.115, 0.315, 0], scale: [0.05, 0.235, 0.245], color: dye, hueJitter: 0.02 },
+    // 지팡이 (오른팔) — 발광 구슬이 마젠타라 shaman(청록 해골 지팡이)과 섞이지 않는다
+    ...tag(ids.armR, [
+      // 지팡이 밑동은 y=0.055 위로 — 팔 스윙(±0.34rad)에 지팡이가 통째로 돌기 때문에
+      // 너무 낮게 잡으면 흔들 때 지면을 찍는다 (tests/render/gait.test.ts 가 잠근다)
+      link([0.06, 0.055, -0.145], [0.105, 0.665, -0.145], 0.036, 0.036, C.woodDark, { kind: 'cyl', seg: 4 }),
+      { kind: 'box', pos: [0.095, 0.545, -0.145], scale: [0.048, 0.034, 0.055], color: C.rope },
+      { kind: 'ico', pos: [0.112, 0.755, -0.145], scale: [0.13, 0.13, 0.12], color: glow },
+      { kind: 'cone', pos: [0.109, 0.69, -0.145], scale: [0.065, 0.065, 0.06], color: 0xe8a0e8, seg: 4 },
+      { kind: 'cone', pos: [0.055, 0.6, -0.16], rot: [0.5, 0, 2.6], scale: [0.028, 0.12, 0.02], color: C.gold, seg: 4 },
+    ]),
+  ];
+}
+
+const RAIDER_KITS: readonly ((ids: RaiderIds) => PartSpec[])[] = [
+  kitBlade,
+  kitLancer,
+  kitArcher,
+  kitHexer,
+];
+
+/** 전투용 공유 지오메트리 — 몸통 1벌 + 장비 4벌(각각 variant 태그) */
+function raiderShared(rig: RigBuilder): PartSpec[] {
+  const { parts, ids } = raiderBody(rig);
+  const out = [...parts];
+  RAIDER_KITS.forEach((kit, i) => out.push(...tagVariant(i + 1, kit(ids))));
+  return out;
+}
+
+/** 갤러리/단품용 — 그 종의 장비만 굽는다 (variant 태그 없음) */
+function raiderSolo(rig: RigBuilder, variant: number): PartSpec[] {
+  const { parts, ids } = raiderBody(rig);
+  const kit = RAIDER_KITS[variant - 1];
+  return kit ? [...parts, ...kit(ids)] : parts;
+}
+
 function mammoth(rig: RigBuilder): PartSpec[] {
   const fur = 0xa06a3a;
   const furDark = 0x7a4c28;
@@ -1231,6 +1475,10 @@ const BUILDERS: Record<EnemyId, (rig: RigBuilder) => PartSpec[]> = {
   boar,
   warrior,
   shaman,
+  blade: (rig) => raiderSolo(rig, 1),
+  lancer: (rig) => raiderSolo(rig, 2),
+  archer: (rig) => raiderSolo(rig, 3),
+  hexer: (rig) => raiderSolo(rig, 4),
   mammoth,
   spino,
   trex,
@@ -1240,35 +1488,76 @@ const BUILDERS: Record<EnemyId, (rig: RigBuilder) => PartSpec[]> = {
 /** 보스 계열 (개별 메시 + 스케일/색 강조 + 넓은 체력바) */
 export const BOSS_ENEMIES: ReadonlySet<EnemyId> = new Set(['spino', 'trex']);
 
+/**
+ * 지오메트리를 공유하는 종 → 변형 번호(1-base).
+ * 같은 지오메트리 키를 쓰므로 EnemyView 가 **하나의 InstancedMesh** 로 묶어 그린다.
+ */
+const RAIDER_VARIANTS: Readonly<Partial<Record<EnemyId, number>>> = {
+  blade: 1,
+  lancer: 2,
+  archer: 3,
+  hexer: 4,
+};
+
+/** 공유 지오메트리 키 (EnemyId 와 겹치지 않는 이름) */
+export const RAIDER_GEO_KEY = 'raider';
+
+/** 이 종이 어떤 지오메트리를 쓰는가 — 뷰가 메시를 묶는 기준 키 */
+export function enemyGeoKey(id: EnemyId): string {
+  return RAIDER_VARIANTS[id] !== undefined ? RAIDER_GEO_KEY : id;
+}
+
+/** 공유 지오메트리 안에서 이 종이 쓰는 변형 번호 (0 = 전용 지오메트리) */
+export function enemyVariant(id: EnemyId): number {
+  return RAIDER_VARIANTS[id] ?? 0;
+}
+
 interface EnemyAsset {
   geo: THREE.BufferGeometry;
   rig: EnemyRig;
 }
 
 /** 지오메트리와 사지 테이블은 같은 빌더 1회 실행에서 나오므로 함께 캐시한다 */
-const assets = new Map<EnemyId, EnemyAsset>();
+const assets = new Map<string, EnemyAsset>();
 
-function asset(id: EnemyId): EnemyAsset {
-  let a = assets.get(id);
+function asset(key: string, build: (rig: RigBuilder) => PartSpec[]): EnemyAsset {
+  let a = assets.get(key);
   if (!a) {
     const builder = new RigBuilder();
-    const parts = BUILDERS[id](builder);
-    const geo = cachedGeo(`enemy:${id}`, () => buildParts(parts, { seed: 77, ao: 0.12 }));
+    const parts = build(builder);
+    const geo = cachedGeo(`enemy:${key}`, () => buildParts(parts, { seed: 77, ao: 0.12 }));
     // 접지 보정 테이블은 실제 구운 버텍스에서 뽑는다 (발 모양을 손으로 재지 않게)
     a = { geo, rig: computeGroundLift(geo, builder.build()) };
-    assets.set(id, a);
+    assets.set(key, a);
   }
   return a;
 }
 
-/** 캐시된 적 지오메트리. 전방 +x, 발 y=0 */
+function assetOf(id: EnemyId): EnemyAsset {
+  const key = enemyGeoKey(id);
+  return asset(key, key === RAIDER_GEO_KEY ? raiderShared : BUILDERS[id]);
+}
+
+/**
+ * 캐시된 적 지오메트리 (전방 +x, 발 y=0).
+ * 부족 습격대 4종은 **같은 객체**를 돌려준다 — 장비는 variant 어트리뷰트로 골라 그린다.
+ */
 export function buildEnemy(id: EnemyId): THREE.BufferGeometry {
-  return asset(id).geo;
+  return assetOf(id).geo;
+}
+
+/**
+ * 그 종만 담은 단품 지오메트리 (갤러리/도감용).
+ * 전투 경로는 변형 마스킹 셰이더가 있지만 meshlab 은 공유 flatMat 을 쓰므로
+ * 공유 지오메트리를 그대로 주면 무기 4종이 한 몸에 다 붙어 나온다.
+ */
+export function buildEnemySolo(id: EnemyId): THREE.BufferGeometry {
+  return enemyVariant(id) > 0 ? asset(`solo:${id}`, BUILDERS[id]).geo : buildEnemy(id);
 }
 
 /** 종별 보행 리그(사지 테이블). limbs.length === 0 이면 아직 태깅 안 한 종 */
 export function enemyRig(id: EnemyId): EnemyRig {
-  return asset(id).rig;
+  return assetOf(id).rig;
 }
 
 export const ALL_ENEMY_IDS: readonly EnemyId[] = [
@@ -1280,6 +1569,10 @@ export const ALL_ENEMY_IDS: readonly EnemyId[] = [
   'boar',
   'warrior',
   'shaman',
+  'blade',
+  'lancer',
+  'archer',
+  'hexer',
   'mammoth',
   'spino',
   'trex',

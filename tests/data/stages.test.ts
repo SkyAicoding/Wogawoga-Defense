@@ -174,6 +174,24 @@ describe('stages', () => {
     expect(STAGES[5]!.wavePlan.hpBase).toBe(2.2);
   });
 
+  /**
+   * **적 해금 사다리는 역행하지 않는다** — 스테이지 n에서 나온 종은 n+1에도 나온다.
+   *
+   * 실제로 역행이 있었다: 습격대 4종이 stage3에서 완성됐는데 stage4에 hexer가 빠져
+   * (3 → 4에서 사라졌다가 5에서 복귀) stage4의 습격대 비율이 11.3%로 다른 스테이지
+   * (19~37%)의 절반 이하가 됐다. 스테이지 주석도 서로 다른 데뷔를 주장하고 있었다.
+   */
+  it('적 해금 사다리가 역행하지 않는다 (스테이지 n의 종은 n+1에도 있다)', () => {
+    for (let i = 1; i < STAGES.length; i++) {
+      const prev = STAGES[i - 1]!;
+      const cur = STAGES[i]!;
+      const lost = prev.wavePlan.allowedEnemies.filter(
+        (id) => !cur.wavePlan.allowedEnemies.includes(id),
+      );
+      expect(lost, `stage ${prev.id} → ${cur.id} 에서 사라진 적`).toEqual([]);
+    }
+  });
+
   it('unlockTowers가 타워 해금표와 일치', () => {
     const stageUnlocks = new Map<number, TowerId[]>();
     for (const stage of STAGES) {

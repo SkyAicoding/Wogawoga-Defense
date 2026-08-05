@@ -42,7 +42,12 @@ export const stage03: StageDef = {
     hpBase: 1.4,
     hpGrowth: 1.05,
     seed: 3041,
-    allowedEnemies: ['raptor', 'compy', 'boar', 'trike', 'ptera', 'warrior', 'shaman', 'ankylo'],
+    // 주술사(hexer) 합류 = **습격대 4종 완성**. '침묵 → 두들김' 콤보가 여기서 데뷔하고
+    // 이후 스테이지(4~6)는 이 해금을 그대로 유지한다 (해금 사다리는 역행하지 않는다)
+    allowedEnemies: [
+      'raptor', 'compy', 'boar', 'trike', 'ptera', 'warrior', 'shaman', 'ankylo',
+      'blade', 'lancer', 'archer', 'hexer',
+    ],
     bossOverrides: {
       // w10 첫 보스 벽 완화: 전체 ×0.6 (w9 대비 총 HP ~6.8배 → ~4.1배)
       10: bossWave(

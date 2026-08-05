@@ -32,7 +32,9 @@ export function placementCostFor(baseCost: number, towerCount: number): number {
 
 /**
  * 소품 제거 비용 — 이미 치운 개수(0-base)에 따라 지수적으로 오른다.
- * 80 / 128 / 205 / 328 / 524 / 839 … (상한 4000). 환불은 없다.
+ * 곡선은 balance.SCENERY_CLEAR_{BASE_COST,GROWTH,MAX_COST}가 유일한 출처다
+ * (여기에 수치를 복사해 두면 반드시 낡는다 — 실제로 BASE 80→120 상향 때 낡았다).
+ * 현재 값 기준 개별가는 balance.ts SCENERY_CLEAR_BASE_COST 주석에 적혀 있다.
  */
 export function sceneryClearCostFor(clearedCount: number): number {
   const raw = SCENERY_CLEAR_BASE_COST * SCENERY_CLEAR_GROWTH ** Math.max(0, clearedCount);

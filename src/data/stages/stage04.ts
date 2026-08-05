@@ -43,8 +43,12 @@ export const stage04: StageDef = {
     hpBase: 1.65,
     hpGrowth: 1.052,
     seed: 4057,
+    // 습격대 4종 전원 — 스테이지3에서 완성된 해금은 이후 스테이지에서 유지된다.
+    // (hexer 누락 수정: 3에서 나온 종이 4에서 사라졌다가 5에서 돌아오는 역행이었고,
+    //  그 탓에 이 스테이지의 습격대 비율이 11.3%로 다른 스테이지의 절반 이하였다)
     allowedEnemies: [
       'raptor', 'compy', 'boar', 'trike', 'ptera', 'warrior', 'shaman', 'ankylo', 'mammoth',
+      'blade', 'lancer', 'archer', 'hexer',
     ],
     bossOverrides: {
       // w10 첫 보스 벽 완화: 전체 ×0.6 (w9 대비 총 HP ~6.9배 → ~4.2배)

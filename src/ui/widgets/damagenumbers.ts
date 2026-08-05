@@ -4,7 +4,11 @@
  */
 import { h, uiRoot, unmount } from '../dom';
 
-export type DamageKind = 'normal' | 'crit' | 'poison' | 'burn' | 'heal' | 'gold';
+/**
+ * 'tower' = **내 타워가 깎이는** 피해. 적 피해('normal', 흰색)와 부호 하나로만
+ * 구분되던 것을 색·굵기·크기로 갈랐다 — 난전에서 숫자가 겹치면 부호는 못 읽는다.
+ */
+export type DamageKind = 'normal' | 'crit' | 'poison' | 'burn' | 'heal' | 'gold' | 'tower';
 
 const MAX_ACTIVE = 24;
 
@@ -16,6 +20,7 @@ const BASE_REM: Record<DamageKind, number> = {
   burn: 1.05,
   heal: 1.05,
   gold: 1.15,
+  tower: 1.25,
 };
 
 interface DmgItem {

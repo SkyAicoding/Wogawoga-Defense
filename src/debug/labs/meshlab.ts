@@ -1,6 +1,6 @@
 /**
  * 메시 갤러리 랩 — ?scene=meshlab
- * 적 12 + 타워 8×5티어 + 기지 + 소품 + 투사체를 격자 배치, 천천히 회전.
+ * 적 16 + 타워 8×5티어 + 기지 + 소품 + 투사체를 격자 배치, 천천히 회전.
  * ?model=raptor 로 단일 모델 확대. DOM 라벨로 이름 표시.
  * ?model=towers 로 타워만 8행(종) × 5열(티어) — 등급 성장 비교 전용 격자.
  * ?yaw=0.9 로 회전을 고정(라디안) — 개선 전/후 동일 앵글 비교 캡처용.
@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 import type { EnemyId, TowerId } from '@/data/types';
 import { flatMat, glowMat } from '@/render/palette';
-import { ALL_ENEMY_IDS, buildEnemy } from '@/render/meshlib/enemies';
+import { ALL_ENEMY_IDS, buildEnemySolo } from '@/render/meshlib/enemies';
 import { assembleTower, buildTower, towerTierScale } from '@/render/meshlib/towers';
 import { PROJECTILE_TOWERS, buildProjectile } from '@/render/meshlib/projectiles';
 import { createBasecamp } from '@/render/meshlib/basecamp';
@@ -40,7 +40,9 @@ function towerItem(id: TowerId, tier: number): Item {
 
 function enemyItem(id: EnemyId): Item {
   return makeItem(id, (g) => {
-    const mesh = new THREE.Mesh(buildEnemy(id), flatMat());
+    // 단품 지오메트리 — 부족 습격대는 전투에서 4종이 지오메트리를 공유하므로
+    // 공유본을 그대로 쓰면 무기 4개가 한 몸에 다 붙어 나온다 (마스킹은 적 전용 셰이더 담당)
+    const mesh = new THREE.Mesh(buildEnemySolo(id), flatMat());
     mesh.castShadow = true;
     g.add(mesh);
   });
@@ -49,6 +51,11 @@ function enemyItem(id: EnemyId): Item {
 /** 열 수를 강제하는 축약 갤러리 — 없으면 화면 비율로 자동 계산 */
 const GROUPS: Record<string, { cols: number; build: () => Item[] }> = {
   enemies: { cols: 0, build: () => ALL_ENEMY_IDS.map(enemyItem) },
+  // 부족 습격대 4종만 한 줄로 — 실루엣·무기·염료가 서로 구분되는지 나란히 비교한다
+  raiders: {
+    cols: 4,
+    build: () => (['blade', 'lancer', 'archer', 'hexer'] as EnemyId[]).map(enemyItem),
+  },
   // 한 행 = 한 종, 왼→오 = T1→T5. 등급 성장을 나란히 읽는 격자.
   towers: { cols: 5, build: () => TOWER_IDS.flatMap((id) => [0, 1, 2, 3, 4].map((t) => towerItem(id, t))) },
 };

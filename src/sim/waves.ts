@@ -52,15 +52,22 @@ export class WaveSpawner {
     e.hp = hp;
     e.maxHp = hp;
     e.hpMul = mul;
+    // 공성 피해는 **무한 모드 초과분만** 따라간다 (정규 웨이브에서는 항상 1)
+    e.siegeMul = this.extraHpMul;
     e.shieldHitsLeft = def.shieldHits ?? 0;
     e.dist = 0;
     e.pathIndex = g.pathIndex;
     e.flying = def.flying;
     e.statuses.length = 0;
     e.stunImmuneUntil = -1;
+    // 사거리에 들어서는 즉시 첫 타격 (siege.ts 규칙 6)
+    e.attackCdLeft = 0;
+    e.towerTargetId = -1;
     e.alive = true;
     e.boss = def.boss ?? false;
-    e.bounty = def.bounty;
+    // 보상 배율 — 예산을 넘겨 부푼 편성(습격대 최소 인원)에서만 1 미만이다.
+    // 정수로 굳혀 두면 처치 시점 계산이 없고 해시가 부동소수에 흔들리지 않는다.
+    e.bounty = Math.max(1, Math.round(def.bounty * (g.bountyMul ?? 1)));
     e.baseDamage = def.baseDamage;
     e.radius = def.radius;
     pathFor(ctx, e).sample(0, e);

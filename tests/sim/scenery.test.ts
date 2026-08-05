@@ -46,11 +46,18 @@ function cell(i: number): { x: number; z: number } {
 describe('소품 제거 — 비용 곡선', () => {
   it('제거 횟수에 따라 지수적으로 오르고 상한에서 멈춘다', () => {
     expect(sceneryClearCostFor(0)).toBe(SCENERY_CLEAR_BASE_COST);
+    // 상한에 닿기 전에는 GROWTH배로 오르고, 닿은 뒤에는 평평하다.
+    // (BASE가 오르면 8회 안에 상한에 닿을 수 있으므로 '항상 증가'로 잠그지 않는다)
+    let capped = false;
     for (let n = 0; n < 8; n++) {
       const cur = sceneryClearCostFor(n);
       const next = sceneryClearCostFor(n + 1);
-      expect(next, `${n}→${n + 1}번째`).toBeGreaterThan(cur);
-      if (next < SCENERY_CLEAR_MAX_COST) {
+      expect(next, `${n}→${n + 1}번째는 줄어들면 안 된다`).toBeGreaterThanOrEqual(cur);
+      if (next >= SCENERY_CLEAR_MAX_COST) capped = true;
+      if (capped) {
+        expect(next, `상한 후 ${n + 1}번째`).toBe(SCENERY_CLEAR_MAX_COST);
+      } else {
+        expect(next, `${n}→${n + 1}번째는 올라야 한다`).toBeGreaterThan(cur);
         expect(next / cur).toBeCloseTo(SCENERY_CLEAR_GROWTH, 1);
       }
     }

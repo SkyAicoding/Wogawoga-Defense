@@ -22,6 +22,8 @@ function enemy(o: Partial<EnemyState> = {}): EnemyState {
     shieldHitsLeft: 0,
     dist: 4,
     pathIndex: 0,
+    attackCdLeft: 0,
+    towerTargetId: -1,
     flying: false,
     x: 4,
     z: 2,

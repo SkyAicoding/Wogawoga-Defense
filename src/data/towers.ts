@@ -27,6 +27,8 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
     attackKind: 'homing',
     canTargetGround: true,
     canTargetAir: true,
+    // 통나무 움막 — 기준값
+    toughness: 1.00,
     tiers: [
       { dmg: 12, cooldownTicks: 15, range: 2.6, cost: 100, projectileSpeed: 13 },
       { dmg: 18, cooldownTicks: 14, range: 2.7, cost: 200, projectileSpeed: 13 },
@@ -46,6 +48,8 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
     attackKind: 'ballistic',
     canTargetGround: true,
     canTargetAir: false,
+    // 통나무 프레임 + 돌 추 — 가장 단단하다
+    toughness: 1.25,
     tiers: [
       {
         dmg: 30, cooldownTicks: 45, range: 3.2, cost: 120, projectileSpeed: 7,
@@ -80,6 +84,8 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
     attackKind: 'beam',
     canTargetGround: true,
     canTargetAir: true,
+    // 토템에 박은 수정 — 충격에 약하다
+    toughness: 0.90,
     tiers: [
       { dmg: 16, cooldownTicks: 30, range: 2.8, cost: 140, chain: { jumps: 3, decay: 0.7, jumpRange: 2.0 } },
       { dmg: 24, cooldownTicks: 28, range: 2.9, cost: 280, chain: { jumps: 3, decay: 0.7, jumpRange: 2.0 } },
@@ -99,6 +105,8 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
     attackKind: 'aura',
     canTargetGround: true,
     canTargetAir: false,
+    // 돌을 쌓은 화덕
+    toughness: 1.05,
     tiers: [
       {
         dmg: 8, cooldownTicks: 15, range: 1.8, cost: 110,
@@ -148,6 +156,8 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
     attackKind: 'homing',
     canTargetGround: true,
     canTargetAir: true,
+    // 얼음 결정 — 가장 무르다
+    toughness: 0.80,
     tiers: [
       {
         dmg: 7, cooldownTicks: 20, range: 2.4, cost: 90, projectileSpeed: 11,
@@ -182,6 +192,8 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
     attackKind: 'homing',
     canTargetGround: true,
     canTargetAir: true,
+    // 살아 있는 식물
+    toughness: 0.85,
     tiers: [
       {
         dmg: 6, cooldownTicks: 24, range: 2.7, cost: 130, projectileSpeed: 12,
@@ -216,6 +228,8 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
     attackKind: 'homing',
     canTargetGround: true,
     canTargetAir: true,
+    // 상아·힘줄 기계
+    toughness: 1.15,
     tiers: [
       { dmg: 55, cooldownTicks: 60, range: 5.5, cost: 150, projectileSpeed: 18 },
       { dmg: 88, cooldownTicks: 58, range: 5.5, cost: 300, projectileSpeed: 18 },
@@ -235,6 +249,8 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
     attackKind: 'aura',
     canTargetGround: false,
     canTargetAir: false,
+    // 가죽 북 + 두꺼운 나무 틀
+    toughness: 1.10,
     tiers: [
       { dmg: 0, cooldownTicks: 30, range: 2.0, cost: 130, aura: { radius: 2.0, dmgPct: 0.15, ratePct: 0.15 } },
       { dmg: 0, cooldownTicks: 30, range: 2.1, cost: 260, aura: { radius: 2.1, dmgPct: 0.21, ratePct: 0.21 } },

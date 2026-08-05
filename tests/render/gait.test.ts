@@ -1,7 +1,8 @@
 /**
  * 보행 리그 회귀 테스트.
  * 셰이더가 하는 정점 변형을 CPU에서 그대로 재현해 **발이 지면을 뚫지 않는지** 검사한다.
- * 2단계에서 나머지 종에 리그를 붙일 때 피벗/위상을 잘못 잡으면 여기서 걸린다.
+ * 종을 추가할 때 피벗/위상을 잘못 잡으면 여기서 걸린다.
+ * 부족 습격대 4종은 지오메트리를 공유하므로 무기(팔에 매달린 파트)의 지면 충돌까지 함께 검사된다.
  */
 import { describe, expect, it } from 'vitest';
 import { ALL_ENEMY_IDS, buildEnemy, enemyRig } from '@/render/meshlib/enemies';
@@ -25,7 +26,7 @@ function limbY(rig: EnemyRig, li: number, x: number, y: number, z: number, gait:
 }
 
 describe('보행 리그', () => {
-  it('12종 전부 리그가 붙어 있다', () => {
+  it('16종 전부 리그가 붙어 있다', () => {
     for (const id of ALL_ENEMY_IDS) {
       const rig = enemyRig(id);
       expect(rig.limbs.length, id).toBeGreaterThan(0);

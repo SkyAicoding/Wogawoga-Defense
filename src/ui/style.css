@@ -92,6 +92,14 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .inline-ico { width: 22px; height: 22px; display: inline-flex; vertical-align: -4px; }
 .pill--gold .pill-num { color: var(--gold); }
 .pill--amber .pill-num { color: var(--amber); }
+/* 서 있는 타워 수 — 줄면 붉게 한 번 튄다 (타워를 잃은 순간의 유일한 HUD 신호) */
+.pill--tower .pill-num { color: #ffe3c2; }
+.pill--tower-drop { animation: tower-drop 0.7s ease-out 1; }
+@keyframes tower-drop {
+  0% { transform: scale(1); border-color: var(--ink); }
+  18% { transform: scale(1.22); border-color: #ff6a52; background: rgba(120, 24, 12, 0.85); }
+  100% { transform: scale(1); border-color: var(--ink); }
+}
 
 .chip {
   display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 18px;
@@ -440,6 +448,9 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .dmg--burn { color: #ff7a2f; }
 .dmg--heal { color: #6ee7a0; }
 .dmg--gold { color: var(--gold); font-size: 1.15rem; }
+/* 내 타워가 깎이는 피해 — 적 피해(흰색)와 색·외곽선·크기 모두 다르게.
+   부호('-')만으로는 적 숫자와 겹쳤을 때 판독이 안 됐다. */
+.dmg--tower { color: #ff6a52; font-size: 1.25rem; -webkit-text-stroke: 1.2px #40100a; }
 
 /* --- 키프레임 ------------------------------------------------------------ */
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }

@@ -16,6 +16,7 @@ import {
   goldSvg,
   heartSvg,
   sceneryIconSvg,
+  towerCountSvg,
   towerIconSvg,
 } from '../widgets/card';
 import type { TowerCard } from '../widgets/card';
@@ -67,6 +68,10 @@ export function createBattleHud(): Screen<GameFacade> {
   let goldNum!: HTMLElement;
   let amberNum!: HTMLElement;
   let hpNum!: HTMLElement;
+  let towerNum!: HTMLElement;
+  let towerPill!: HTMLElement;
+  /** 직전 프레임의 타워 수 — 줄어든 순간에만 경보 클래스를 붙인다 */
+  let lastTowerCount = -1;
   let hpFill!: HTMLElement;
   let speedBtn!: HTMLElement;
   let autoBtn!: HTMLElement;
@@ -132,6 +137,7 @@ export function createBattleHud(): Screen<GameFacade> {
       goldNum = h('span', { class: 'pill-num' });
       amberNum = h('span', { class: 'pill-num' });
       hpNum = h('span', { class: 'hp-num' });
+      towerNum = h('span', { class: 'pill-num' });
       hpFill = h('div', { class: 'hp-fill' });
 
       const top = h('div', { class: 'hud-top' },
@@ -145,6 +151,10 @@ export function createBattleHud(): Screen<GameFacade> {
           h('div', { class: 'wave-badge hud-item' },
             h('span', { class: 'wave-label', text: t('battle.wave') }), waveNum),
           h('div', { class: 'hud-top-spacer' }),
+          // 서 있는 타워 수 — 파괴가 3D 파티클로만 표현돼 시선을 뗀 사이에 잃으면
+          // 알 방법이 없었다. 줄어드는 순간 붉게 튄다(pill--tower-drop).
+          (towerPill = h('div', { class: 'pill pill--tower hud-item' },
+            h('span', { class: 'pill-ico', html: towerCountSvg }), towerNum)),
           h('div', { class: 'pill pill--gold hud-item' },
             h('span', { class: 'pill-ico', html: goldSvg }), goldNum),
           h('div', { class: 'pill pill--amber hud-item' },
@@ -320,6 +330,16 @@ export function createBattleHud(): Screen<GameFacade> {
       setText(goldNum, fmt(s.gold));
       setText(amberNum, fmt(s.amberEarned));
       setText(hpNum, `${s.baseHp}`);
+      const towerCount = s.towers.length;
+      if (towerCount !== lastTowerCount) {
+        setText(towerNum, `${towerCount}`);
+        if (lastTowerCount >= 0 && towerCount < lastTowerCount) {
+          towerPill.classList.remove('pill--tower-drop');
+          void towerPill.offsetWidth; // 애니 재시작
+          towerPill.classList.add('pill--tower-drop');
+        }
+        lastTowerCount = towerCount;
+      }
       const pct = s.baseHpMax > 0 ? (s.baseHp / s.baseHpMax) * 100 : 0;
       hpFill.style.width = `${pct}%`;
       cls(hpFill, 'is-low', pct <= 30);

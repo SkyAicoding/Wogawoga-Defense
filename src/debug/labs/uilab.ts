@@ -110,7 +110,8 @@ export function run(): void {
   };
 
   const mockTower: TowerState = {
-    id: 1, defId: 'lightning', tier: 2, cellX: 4, cellZ: 6, cooldownLeft: 0,
+    id: 1, defId: 'lightning', tier: 2, hp: 585, maxHp: 585, silenceLeft: 0,
+    cellX: 4, cellZ: 6, cooldownLeft: 0,
     targetId: -1, targeting: 'first', invested: 260, buffDmgPct: 0, buffRatePct: 0,
   };
 

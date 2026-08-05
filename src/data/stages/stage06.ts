@@ -47,6 +47,7 @@ export const stage06: StageDef = {
     seed: 6091,
     allowedEnemies: [
       'raptor', 'compy', 'boar', 'trike', 'ptera', 'warrior', 'shaman', 'ankylo', 'mammoth', 'golem',
+      'blade', 'lancer', 'archer', 'hexer',
     ],
     bossOverrides: {
       10: bossWave(

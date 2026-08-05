@@ -37,6 +37,17 @@ export const GAIT_ATTR = 'aGait';
 /** 버텍스별 사지 그룹 태그 어트리뷰트 이름 (factory.ts 가 굽는다) */
 export const LIMB_ATTR = 'aLimb';
 
+/**
+ * 버텍스별 변형(variant) 태그 어트리뷰트 (factory.ts 가 굽는다). 0 = 공통.
+ * 인스턴스별 선택값(GAIT_SEL_ATTR)과 다르면 셰이더가 그 정점을 원점으로 접어
+ * 축퇴 삼각형(면적 0)으로 만든다 — 래스터라이즈되지 않으므로 픽셀 비용은 0이고,
+ * 여러 종이 **하나의 InstancedMesh** 로 그려진다(드로우콜 1).
+ */
+export const VARIANT_ATTR = 'aVarTag';
+
+/** 인스턴스별 변형 선택 어트리뷰트 이름 */
+export const VARIANT_SEL_ATTR = 'aVarSel';
+
 export interface LimbSpec {
   /** 회전 피벗 (모델 로컬 좌표) */
   pivot: V3;
@@ -279,6 +290,30 @@ export function groundLiftAt(rig: EnemyRig, t: number): number {
 const CACHE_KEY_COLOR = 'wgd-gait-color-1';
 const CACHE_KEY_DEPTH = 'wgd-gait-depth-1';
 
+/**
+ * 변형 마스킹 코드는 **소스가 다르므로 캐시 키도 달라야 한다**.
+ * (three 는 onBeforeCompile 로 바뀐 소스를 프로그램 캐시 키에 넣지 않는다 —
+ *  같은 키를 주면 마스킹 없는 프로그램을 그대로 재사용해 무기가 전부 겹쳐 보인다)
+ */
+const VARIANT_PARS = /* glsl */ `
+attribute float ${VARIANT_ATTR};
+#ifdef USE_INSTANCING
+attribute float ${VARIANT_SEL_ATTR};
+#else
+uniform float uVarSel;
+#endif
+float wgdHidden;
+void wgdVariantSetup() {
+#ifdef USE_INSTANCING
+  float sel = ${VARIANT_SEL_ATTR};
+#else
+  float sel = uVarSel;
+#endif
+  // 태그 0 = 공통 파트라 항상 보인다. 그 외에는 선택된 변형만 남긴다.
+  wgdHidden = (${VARIANT_ATTR} > 0.5 && abs(${VARIANT_ATTR} - sel) > 0.5) ? 1.0 : 0.0;
+}
+`;
+
 const PARS = /* glsl */ `
 uniform vec4 uLimbA[${MAX_LIMBS}]; // pivot.xyz, phase
 uniform vec4 uLimbB[${MAX_LIMBS}]; // axis.xyz, amp
@@ -346,23 +381,28 @@ function inject(
   mat: THREE.Material,
   uniforms: Record<string, THREE.IUniform>,
   withNormal: boolean,
+  variants: boolean,
 ): void {
+  const pars = variants ? `${PARS}\n${VARIANT_PARS}` : PARS;
+  const setup = variants ? 'wgdSetup();\n\twgdVariantSetup();' : 'wgdSetup();';
+  // 접기는 사지 회전 **뒤에** 해야 한다 — 먼저 접으면 피벗 회전이 원점을 다시 밀어낸다
+  const pos = variants
+    ? 'transformed = mix(wgdPos(transformed), vec3(0.0), wgdHidden);'
+    : 'transformed = wgdPos(transformed);';
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
-    let v = shader.vertexShader.replace('#include <common>', `#include <common>\n${PARS}`);
+    let v = shader.vertexShader.replace('#include <common>', `#include <common>\n${pars}`);
     if (withNormal) {
       v = v
-        .replace(
-          HOOK_NORMAL,
-          `${HOOK_NORMAL}\n\twgdSetup();\n\tobjectNormal = wgdNormal(objectNormal);`,
-        )
-        .replace(HOOK_POS, `${HOOK_POS}\n\ttransformed = wgdPos(transformed);`);
+        .replace(HOOK_NORMAL, `${HOOK_NORMAL}\n\t${setup}\n\tobjectNormal = wgdNormal(objectNormal);`)
+        .replace(HOOK_POS, `${HOOK_POS}\n\t${pos}`);
     } else {
-      v = v.replace(HOOK_POS, `${HOOK_POS}\n\twgdSetup();\n\ttransformed = wgdPos(transformed);`);
+      v = v.replace(HOOK_POS, `${HOOK_POS}\n\t${setup}\n\t${pos}`);
     }
     shader.vertexShader = v;
   };
-  mat.customProgramCacheKey = () => (withNormal ? CACHE_KEY_COLOR : CACHE_KEY_DEPTH);
+  const base = withNormal ? CACHE_KEY_COLOR : CACHE_KEY_DEPTH;
+  mat.customProgramCacheKey = () => (variants ? `${base}-var` : base);
 }
 
 export interface GaitMaterials {
@@ -372,11 +412,17 @@ export interface GaitMaterials {
   depth: THREE.MeshDepthMaterial;
   /** 보스(개별 Mesh) 폴백: 인스턴스 어트리뷰트가 없어 위상을 유니폼으로 넣는다 */
   setGait(g: number): void;
+  /** 변형 마스킹 머티리얼의 비인스턴스 폴백 (개별 Mesh 로 한 변형만 그릴 때) */
+  setVariant(v: number): void;
   dispose(): void;
 }
 
-/** 종별 사지 테이블을 uniform 으로 굳힌 적 전용 머티리얼 쌍 */
-export function makeGaitMaterials(rig: EnemyRig): GaitMaterials {
+/**
+ * 종별 사지 테이블을 uniform 으로 굳힌 적 전용 머티리얼 쌍.
+ * variants=true 면 변형 마스킹 코드까지 주입한다 (부족 습격대처럼 여러 종이
+ * 한 지오메트리를 공유하는 경우).
+ */
+export function makeGaitMaterials(rig: EnemyRig, variants = false): GaitMaterials {
   const a = new Float32Array(MAX_LIMBS * 4);
   const b = new Float32Array(MAX_LIMBS * 4);
   const c = new Float32Array(MAX_LIMBS * 4);
@@ -387,24 +433,29 @@ export function makeGaitMaterials(rig: EnemyRig): GaitMaterials {
     c.set([s.lift, s.amp2, 0, 0], i * 4);
   }
   const gait: THREE.IUniform<number> = { value: 0 };
+  const varSel: THREE.IUniform<number> = { value: 1 };
   const uniforms: Record<string, THREE.IUniform> = {
     uLimbA: { value: a },
     uLimbB: { value: b },
     uLimbC: { value: c },
     uGait: gait,
+    uVarSel: varSel,
   };
 
   const color = new THREE.MeshLambertMaterial({ vertexColors: true });
-  inject(color, uniforms, true);
+  inject(color, uniforms, true, variants);
   // 그림자 패스는 three 내부 _depthMaterial 과 같은 기본값(BasicDepthPacking)이어야 한다
   const depth = new THREE.MeshDepthMaterial();
-  inject(depth, uniforms, false);
+  inject(depth, uniforms, false, variants);
 
   return {
     color,
     depth,
     setGait: (g) => {
       gait.value = g;
+    },
+    setVariant: (v) => {
+      varSel.value = v;
     },
     dispose: () => {
       color.dispose();
@@ -424,10 +475,10 @@ export function makeGaitMaterials(rig: EnemyRig): GaitMaterials {
 const matCache = new Map<string, GaitMaterials>();
 
 /** 캐시된 gait 머티리얼. key 는 종 id (보스는 개체 슬롯까지 포함) */
-export function cachedGaitMaterials(key: string, rig: EnemyRig): GaitMaterials {
+export function cachedGaitMaterials(key: string, rig: EnemyRig, variants = false): GaitMaterials {
   let gm = matCache.get(key);
   if (!gm) {
-    gm = makeGaitMaterials(rig);
+    gm = makeGaitMaterials(rig, variants);
     matCache.set(key, gm);
   }
   return gm;

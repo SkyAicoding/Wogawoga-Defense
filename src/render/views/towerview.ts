@@ -1,7 +1,7 @@
 /**
  * 타워 렌더 뷰 — 부위 리그(base + head(action)) 관리.
  * 헤드 타깃 조준(지수 감쇠 요 회전), 무기별 발사 애니메이션, 업그레이드 팝,
- * 배치 고스트 프리뷰(초록/빨강)를 처리한다.
+ * 배치 고스트 프리뷰(초록/빨강), 적 부족에게 맞았을 때의 피격 연출을 처리한다.
  */
 import * as THREE from 'three';
 import type { EnemyState, TowerId, TowerState } from '@/data/types';
@@ -33,6 +33,21 @@ const POP_TIME = 0.3;
 const BOLT_HIDE = 0.12;
 /** 배치 고스트 크기 — 실제로 놓이는 건 T1이므로 T1 크기와 같아야 한다 */
 const GHOST_SCALE = towerTierScale(0);
+/** 피격 붉은 플래시 지속 (초) — 재질 스왑 구간 */
+const HIT_FLASH_TIME = 0.07;
+/**
+ * 플래시 **최소 간격**(초) — 듀티 사이클 상한을 만든다.
+ *
+ * 없으면 무리에 붙잡힌 타워가 상시 붉은 덩어리가 된다: siege 규칙 2(사거리 내 최근접)
+ * 때문에 한 무리가 같은 타워를 잡으므로, blade 쿨다운 20틱(0.667초) 기준
+ * N명이면 평균 0.667/N초마다 플래시가 걸려 N≥7이면 듀티 100%, N=5에서도 75%다.
+ * 그동안 종류·티어·지붕 형태가 전부 사라져 "팔지 강화할지"를 판단할 근거가 없어진다.
+ * 0.30초 간격 + 0.07초 플래시 = 듀티 상한 23% — 맞고 있다는 건 계속 보이지만
+ * 타워의 정체는 4프레임 중 3프레임에서 읽힌다. (지속 신호는 체력바가 맡는다)
+ */
+const HIT_FLASH_MIN_GAP = 0.3;
+/** 피격 흔들림 지속 (초) — 플래시보다 길게 남겨 타격감을 준다 */
+const HIT_SHAKE_TIME = 0.26;
 
 interface TowerEntry {
   root: THREE.Group;
@@ -72,6 +87,17 @@ interface TowerEntry {
   recoilT: number;
   /** 업그레이드/배치 팝 진행 */
   popT: number;
+  /** 피격 흔들림 진행 (1→0) */
+  hitT: number;
+  /** 다음 플래시가 허용될 때까지 남은 초 (듀티 상한) */
+  flashGap: number;
+  /** 피격 플래시 잔여 (초). 0 이하면 원래 재질로 되돌린다 */
+  flashT: number;
+  /** 재질 스왑 대상 — [메시, 원래 재질]. 애디티브 플래시 셸은 제외 */
+  swap: [THREE.Mesh, THREE.Material | THREE.Material[]][];
+  /** 배치 월드 좌표 (피격 흔들림 오프셋의 기준점) */
+  baseX: number;
+  baseZ: number;
 }
 
 const _v = new THREE.Vector3();
@@ -82,6 +108,8 @@ export class TowerView {
   private ghost: THREE.Group | null = null;
   private ghostMatValid: THREE.MeshLambertMaterial;
   private ghostMatInvalid: THREE.MeshLambertMaterial;
+  /** 피격 플래시용 공유 재질 — 전 타워가 같은 인스턴스를 쓴다 (프로그램 1개) */
+  private hitMat: THREE.MeshLambertMaterial;
   private enemyById = new Map<number, EnemyState>();
   private time = 0;
 
@@ -114,6 +142,13 @@ export class TowerView {
       opacity: 0.9,
       depthWrite: false,
     });
+    // 붉은 틴트 + 중간 세기 emissive. emissive를 더 올리면 면 방향이 뭉개져
+    // "빨간 덩어리"가 되고 무엇이 맞았는지 형태가 안 읽힌다 (실측 캡처 확인).
+    this.hitMat = new THREE.MeshLambertMaterial({
+      vertexColors: true,
+      color: 0xd88878,
+      emissive: 0xb02408,
+    });
   }
 
   private makeEntry(defId: TowerId, tier: number): TowerEntry {
@@ -121,6 +156,12 @@ export class TowerView {
     const rig = assembleTower(model, { flat: flatMat(), glow: glowMat() }, true);
     // 첫 update 전 한 프레임이 원본 크기로 번쩍이지 않게 팝 시작값(0.6)까지 미리 반영
     rig.root.scale.setScalar(towerTierScale(tier) * 0.6);
+    // 피격 플래시 대상 수집 — 발사 플래시 셸(애디티브)은 건드리지 않는다
+    const swap: [THREE.Mesh, THREE.Material | THREE.Material[]][] = [];
+    rig.root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh && m !== rig.flash) swap.push([m, m.material]);
+    });
     return {
       root: rig.root,
       head: rig.head,
@@ -143,6 +184,12 @@ export class TowerView {
       phase: 0,
       recoilT: 0,
       popT: 1,
+      hitT: 0,
+      flashGap: 0,
+      flashT: 0,
+      swap,
+      baseX: 0,
+      baseZ: 0,
     };
   }
 
@@ -152,6 +199,8 @@ export class TowerView {
     entry.phase = id * 1.37;
     const v = this.cellToWorld(cellX, cellZ);
     entry.root.position.set(v.x, 0.1, v.z); // 슬롯 패드 위
+    entry.baseX = v.x;
+    entry.baseZ = v.z;
     this.group.add(entry.root);
     this.towers.set(id, entry);
   }
@@ -161,6 +210,8 @@ export class TowerView {
     if (!old || old.tier === tier) return;
     const entry = this.makeEntry(old.defId, tier);
     entry.root.position.copy(old.root.position);
+    entry.baseX = old.baseX;
+    entry.baseZ = old.baseZ;
     // 조준/회전 상태 유지
     entry.yaw = old.yaw;
     entry.targetYaw = old.targetYaw;
@@ -175,8 +226,30 @@ export class TowerView {
   remove(id: number): void {
     const entry = this.towers.get(id);
     if (!entry) return;
+    this.setFlash(entry, false); // 맞는 중에 부서져도 재질 참조를 원상 복구
     this.group.remove(entry.root);
     this.towers.delete(id);
+  }
+
+  /**
+   * 적 부족에게 맞았다 — 붉은 플래시 + 흔들림.
+   * 플래시는 **공유 재질 1개로 스왑**한다: 타워는 어차피 개별 Mesh라 재질을 바꿔도
+   * 드로우콜이 늘지 않고, 재질을 복제하지 않으니 GPU 자원도 늘지 않는다.
+   */
+  hit(id: number): void {
+    const e = this.towers.get(id);
+    if (!e) return;
+    // 흔들림은 매 타격 걸어 "난타당하는 중"이 보이게 하고,
+    // 재질 스왑(형태를 지우는 연출)만 간격 제한을 둔다
+    e.hitT = 1;
+    if (e.flashGap > 0) return;
+    e.flashGap = HIT_FLASH_MIN_GAP;
+    e.flashT = HIT_FLASH_TIME;
+    this.setFlash(e, true);
+  }
+
+  private setFlash(e: TowerEntry, on: boolean): void {
+    for (const [mesh, orig] of e.swap) mesh.material = on ? this.hitMat : orig;
   }
 
   /** 발사 애니 트리거 — 타입별로 분기 (fx가 towerFired마다 호출) */
@@ -284,6 +357,22 @@ export class TowerView {
         const pulse = 1 + Math.sin(this.time * 3.4) * 0.035;
         sx *= pulse;
         sy *= 2 - pulse;
+      }
+      // 피격: 짧은 붉은 플래시 + 감쇠 진동(좌우 흔들림 + 눌림)
+      if (e.flashGap > 0) e.flashGap -= dt;
+      if (e.flashT > 0) {
+        e.flashT -= dt;
+        if (e.flashT <= 0) this.setFlash(e, false);
+      }
+      if (e.hitT > 0) {
+        e.hitT = Math.max(0, e.hitT - dt / HIT_SHAKE_TIME);
+        const k = e.hitT * e.hitT;
+        const j = Math.sin(this.time * 62 + e.phase) * 0.055 * k;
+        e.root.position.set(e.baseX + j, 0.1, e.baseZ + j * 0.6);
+        sy *= 1 - 0.07 * k;
+        sx *= 1 + 0.05 * k;
+      } else if (e.root.position.x !== e.baseX || e.root.position.z !== e.baseZ) {
+        e.root.position.set(e.baseX, 0.1, e.baseZ);
       }
       e.root.scale.set(sx, sy, sx);
     }
@@ -409,5 +498,6 @@ export class TowerView {
     this.ghost = null;
     this.ghostMatValid.dispose();
     this.ghostMatInvalid.dispose();
+    this.hitMat.dispose();
   }
 }

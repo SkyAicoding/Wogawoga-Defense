@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Rng } from '@/core/rng';
 import { clamp01 } from '@/core/mathx';
-import { LIMB_ATTR } from './gait';
+import { LIMB_ATTR, VARIANT_ATTR } from './gait';
 
 export interface PartSpec {
   kind: 'box' | 'cyl' | 'cone' | 'ico' | 'sphere';
@@ -29,6 +29,13 @@ export interface PartSpec {
    * 태그가 하나도 없으면 어트리뷰트를 아예 만들지 않아 기존 동작과 동일하다.
    */
   limb?: number;
+  /**
+   * 변형(variant) 태그 (1-base). 미지정/0 = 모든 변형에 공통으로 보이는 파트.
+   * 한 지오메트리에 여러 종의 장비를 함께 굽고 **인스턴스마다 하나만 보여주기** 위한 것으로,
+   * 셰이더가 자기 변형이 아닌 정점을 원점으로 접어 축퇴 삼각형으로 만든다(gait.ts).
+   * 부족 습격대 4종이 몸통을 공유하면서 드로우콜 1개로 그려지는 근거다.
+   */
+  variant?: number;
 }
 
 export interface BuildOpts {
@@ -73,7 +80,8 @@ export function buildParts(parts: readonly PartSpec[], opts: BuildOpts = {}): TH
   // (파트마다 어트리뷰트를 달아 mergeGeometries 로 합치면 작은 배열 수십 개 할당 +
   //  병합 복사가 그대로 콜드 빌드 비용이 된다 — 파트별 버텍스 수만 기억했다 나중에 채운다)
   const useLimb = parts.some((p) => (p.limb ?? 0) > 0);
-  const limbRuns: number[] = []; // [버텍스 수, limb id, ...]
+  const useVariant = parts.some((p) => (p.variant ?? 0) > 0);
+  const limbRuns: number[] = []; // [버텍스 수, limb id, variant id, ...]
 
   for (const part of parts) {
     const base = primitive(part.kind, part.seg ?? 6);
@@ -105,7 +113,7 @@ export function buildParts(parts: readonly PartSpec[], opts: BuildOpts = {}): TH
       }
     }
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    if (useLimb) limbRuns.push(count, part.limb ?? 0);
+    if (useLimb || useVariant) limbRuns.push(count, part.limb ?? 0, part.variant ?? 0);
     geo.deleteAttribute('normal');
     geo.deleteAttribute('uv');
     geos.push(geo);
@@ -115,19 +123,23 @@ export function buildParts(parts: readonly PartSpec[], opts: BuildOpts = {}): TH
   for (const g of geos) g.dispose();
   if (!merged) throw new Error('mergeGeometries 실패');
 
-  // 사지 태그: 병합 결과는 파트 순서대로 이어붙인 것이므로 구간을 그대로 칠하면 된다
-  if (useLimb) {
+  // 사지/변형 태그: 병합 결과는 파트 순서대로 이어붙인 것이므로 구간을 그대로 칠하면 된다
+  if (useLimb || useVariant) {
     const total = merged.getAttribute('position').count;
-    const limbs = new Float32Array(total);
+    const limbs = useLimb ? new Float32Array(total) : null;
+    const vars = useVariant ? new Float32Array(total) : null;
     let o = 0;
-    for (let i = 0; i < limbRuns.length; i += 2) {
+    for (let i = 0; i < limbRuns.length; i += 3) {
       const n = limbRuns[i]!;
       const id = limbRuns[i + 1]!;
-      if (id > 0) limbs.fill(id, o, o + n);
+      const vid = limbRuns[i + 2]!;
+      if (limbs && id > 0) limbs.fill(id, o, o + n);
+      if (vars && vid > 0) vars.fill(vid, o, o + n);
       o += n;
     }
     if (o !== total) throw new Error('aLimb 구간 합이 병합 버텍스 수와 다르다');
-    merged.setAttribute(LIMB_ATTR, new THREE.BufferAttribute(limbs, 1));
+    if (limbs) merged.setAttribute(LIMB_ATTR, new THREE.BufferAttribute(limbs, 1));
+    if (vars) merged.setAttribute(VARIANT_ATTR, new THREE.BufferAttribute(vars, 1));
   }
 
   // 바닥 AO: y가 낮을수록 최대 ao만큼 어둡게

@@ -1,7 +1,10 @@
 /**
  * createBattle — BattleSim 구현. 틱 순서:
- * 웨이브 스폰 → 적 이동/누수 → 상태이상 → 버프 재계산(5틱마다) → 타워 조준/발사
- * → 투사체 이동/명중 → 사망 처리 → 승패 판정.
+ * 웨이브 스폰(+prep 수리) → 적의 타워 공격(+저주) → 부서진 타워 회수 → 적 이동/누수
+ * → 상태이상 → 버프 재계산(5틱마다) → 타워 조준/발사(침묵 감소) → 투사체 이동/명중
+ * → 사망 처리 → 승패 판정.
+ * 공성(적의 타워 공격)이 이동보다 앞인 이유: 근접 유닛의 "멈춰 서서 때린다"를
+ * 이동 단계가 towerTargetId로 읽어야 하기 때문이다 (src/sim/siege.ts 규칙 4).
  * prep: 웨이브1 전 150틱, 이후 90틱. callWave 스킵 시 남은틱×0.15 골드(내림).
  * three/DOM 임포트 금지 — @/data/types + @/core/* 만 사용.
  */
@@ -23,6 +26,14 @@ import { addGold, leakEnemy } from './combat';
 import { Economy, sceneryClearCostFor, sellRefundFor } from './economy';
 import { pathFor, World, type EnemySim, type SimCtx } from './entities';
 import { buildPath, buildStraight } from './path';
+import {
+  isRepairTick,
+  isSieging,
+  maxHpFor,
+  repairTowers,
+  sweepDestroyedTowers,
+  updateSiege,
+} from './siege';
 import { effectiveSpeed, processHealAuras, tickEnemyStatuses } from './status';
 import { WaveSpawner } from './waves';
 
@@ -113,31 +124,39 @@ class Battle implements BattleSim {
     v.tick++;
     // 1) prep 진행 / 웨이브 스폰
     if (v.phase === 'prep') {
+      // 준비 단계 자동 수리 — 이 페이즈에는 살아 있는 적이 0마리임이 보장된다(checkEnd)
+      if (isRepairTick(v.tick)) repairTowers(ctx);
       if (v.prepTicksLeft > 0) v.prepTicksLeft--;
       v.earlyCallBonusGold = Math.floor(v.prepTicksLeft * EARLY_CALL_RATE);
       if (v.prepTicksLeft <= 0) this.startWave();
     }
     if (v.phase === 'wave') this.spawner.update(ctx);
-    // 2) 적 이동/누수
+    // 2) 적 부족의 타워 공격 → 부서진 타워 회수 (발사 단계보다 먼저)
+    updateSiege(ctx);
+    if (sweepDestroyedTowers(ctx)) {
+      this.economy.recalcCosts(ctx); // 타워 수 감소 → 핸드 실비용 하락
+      recomputeBuffs(ctx); // drum이 부서졌을 수 있다 — 5틱 주기를 기다리지 않는다
+    }
+    // 3) 적 이동/누수
     this.moveEnemies();
-    // 3) 상태이상 틱 + 힐 오라
+    // 4) 상태이상 틱 + 힐 오라
     const enemies = ctx.world.enemies.items;
     for (let i = enemies.length - 1; i >= 0; i--) {
       const e = enemies[i] as EnemySim;
       if (e.alive) tickEnemyStatuses(ctx, e);
     }
     if (v.tick % STATUS_TICK_INTERVAL === 0) processHealAuras(ctx);
-    // 4) 버프 재계산 (5틱마다)
+    // 5) 버프 재계산 (5틱마다)
     if (v.tick % BUFF_INTERVAL === 0) recomputeBuffs(ctx);
-    // 5) 타워 조준/발사
+    // 6) 타워 조준/발사
     updateTowers(ctx);
-    // 6) 투사체 이동/명중
+    // 7) 투사체 이동/명중
     updateProjectiles(ctx);
-    // 7) 사망 처리 (이벤트는 피해 시점에 발생, 여기서는 회수만)
+    // 8) 사망 처리 (이벤트는 피해 시점에 발생, 여기서는 회수만)
     for (let i = enemies.length - 1; i >= 0; i--) {
       if (!(enemies[i] as EnemySim).alive) ctx.world.removeEnemyAt(i);
     }
-    // 8) 승패/웨이브 완료 판정
+    // 9) 승패/웨이브 완료 판정
     this.checkEnd();
   }
 
@@ -162,6 +181,8 @@ class Battle implements BattleSim {
       if (!e.alive) continue;
       e.prevX = e.x;
       e.prevZ = e.z;
+      // 근접 부족원은 타워를 때리는 동안 그 자리에 멈춰 선다 (siege.ts 규칙 4)
+      if (isSieging(e)) continue;
       const sp = effectiveSpeed(e);
       if (sp <= 0) continue;
       e.dist += sp * TICK_DT;
@@ -254,10 +275,14 @@ class Battle implements BattleSim {
     if (!this.canPlaceAt(cellX, cellZ)) return false;
     if (ctx.view.gold < card.cost) return false;
     addGold(ctx, -card.cost);
+    const maxHp = maxHpFor(ctx, card.towerId, 0);
     const t: TowerState = {
       id: ctx.world.newId(),
       defId: card.towerId,
       tier: 0,
+      hp: maxHp,
+      maxHp,
+      silenceLeft: 0,
       cellX,
       cellZ,
       cooldownLeft: 0,
@@ -282,6 +307,14 @@ class Battle implements BattleSim {
     addGold(ctx, -next.cost);
     t.tier++;
     t.invested += next.cost;
+    // 업그레이드 회복 정책: **늘어난 최대치만큼만 즉시 회복** (누적 피해량은 그대로 유지).
+    // 전량 회복으로 하면 업그레이드가 곧 완전 수리가 되어 "부서지기 전에 한 티어 올려 버티기"가
+    // 항상 정답이 되고 파괴 위협이 사라진다. 비율 유지로 하면 반대로 절반 남은 타워를
+    // 올릴 이유가 없어져 투자가 죽는다. 절대 피해 보존은 그 사이 —
+    // 업그레이드가 체력을 크게 늘려주긴 하지만(T1→T2에서 +130) 상처는 남는다.
+    const nextMax = maxHpFor(ctx, t.defId, t.tier);
+    t.hp = Math.max(1, t.hp + (nextMax - t.maxHp));
+    t.maxHp = nextMax;
     ctx.events.push({ type: 'towerUpgraded', towerId: t.id, defId: t.defId, tier: t.tier });
     return true;
   }
@@ -340,12 +373,20 @@ class Battle implements BattleSim {
       h = mix(h, Math.round(e.x * 1000));
       h = mix(h, Math.round(e.z * 1000));
       h = mix(h, e.hp);
+      // 공성 상태 — 이게 빠지면 "언제 누구를 때리는가"의 발산을 해시가 못 잡는다
+      h = mix(h, e.attackCdLeft);
+      h = mix(h, e.towerTargetId);
     }
     for (const t of ctx.world.towers.items) {
       h = mix(h, t.id);
       h = mix(h, t.cellX * 1000);
       h = mix(h, t.cellZ * 1000);
       h = mix(h, t.tier * 1000 + t.cooldownLeft);
+      // 구조물 체력 — 파괴 시점이 1틱만 어긋나도 해시가 갈라진다
+      h = mix(h, t.hp);
+      h = mix(h, t.maxHp);
+      // 침묵 잔여 — "언제부터 다시 쏘는가"의 발산을 잡는다 (저주는 발사 시점을 바꾼다)
+      h = mix(h, t.silenceLeft);
     }
     for (const p of ctx.world.projectiles.items) {
       h = mix(h, p.id);

@@ -1,168 +1,118 @@
 /**
  * 자동플레이 밸런스 하네스 — 난이도 봉투를 CI에 고정한다.
- * 봇 전략(평범한 플레이 근사): 타워 8기까지 배치 → 최다투자 타워 집중 업그레이드
- * → 여유골드 1.5배면 추가 배치. 새로고침/판매/타게팅 미사용 (사람은 이보다 잘한다).
- * 배치 8기 상한 근거(지가 상승 시대): 7~8기째 배치 비용은 기본가 ×1.6~1.7로
- * 티어 업그레이드(비용 ×2, DPS ×1.65)와 비슷한 효율이라 소수 정예+업그레이드가
- * 합리적 플레이 — 실측에서도 6기 상한보다 8기 상한이 우세했다 (스팸 20기는 ×2.9로 비효율).
+ * 봇 구현과 "봇이 왜 이렇게 두는가"의 근거는 tests/sim/botharness.ts 헤더에 있다.
  *
- * 봉투:
- *  - 스테이지1, 별 0: 시드 5개 중 3개 이상 클리어, 전부 웨이브 45+ 도달 (초심자 클리어 보장)
- *  - 스테이지1, 방치(타워 0): 웨이브 3 안에 패배 (공짜 클리어 방지)
- *  - 스테이지6, 별 0: 클리어 불가 (난이도 서열 보장)
- *  - 불도저 봇(골드로 소품 제거 우선): 스테이지1에서 일반 봇보다 우세하지 않고
- *    스테이지6은 여전히 클리어 불가 (지형 개조가 난이도 서열을 무너뜨리지 않는다)
+ * ── 4단계 개정: 시드 5개 표본을 버렸다 ──────────────────────────────────────
+ * 이전 봉투는 시드 5개(101/202/303/404/505)로 "전부 클리어 = 초심자 완주 보장"을
+ * 주장했다. **그 표본이 편향돼 있었다** — 같은 봇·같은 덱으로 신선한 시드 40개를
+ * 돌리면 30/40(75%)이었고, 스테이지1의 웨이브 편성은 시드와 무관하게 완전 고정이므로
+ * (makeWaveFor가 stage.wavePlan.seed만 쓴다) 그 25%는 웨이브 운이 아니라 **핸드 드로우
+ * 운**이다. 5개짜리 표본으로는 그 분산을 볼 수 없다.
+ *
+ * 그래서 이 파일의 모든 스윕은 **1000 + 37i (i=0..19)** 라는 고정 등차수열 20개를 쓴다.
+ * 값을 고를 여지가 없는 수열이라 "통과하는 시드를 골랐다"가 불가능하고, 20개면
+ * 승수 1 차이(=5%p)까지 잡힌다. 실행 시간은 스윕 1회 ≈ 2초다.
+ *
+ * ── 항목별로 무엇을 잠그는가 ────────────────────────────────────────────────
+ *  1) 완주 가능성 — 클리어 13/20 이상 + 전 시드 웨이브 40 이상 도달 (실측 15/20, 최소 42)
+ *  2) 습격대가 실제로 값을 청구한다 — 파괴 합계 하한 (실측 177기)
+ *  3) 죽음의 나선 금지 — **웨이브 15 이후** 타워 수 하한 (실측 전 시드 8, 상한선=배치상한)
+ *     웨이브 10부터 재던 예전 지표는 '건설 진도'를 재고 있어 구조적으로 무력했다
+ *     (botharness.MIN_TOWERS_FROM_WAVE 주석에 판별력 실측 있음)
+ *  4) 배치 거리 = 실력 축 — 경로 밀착 봇은 클리어 0
+ *  5) 방치(타워 0)는 웨이브 10 안에 패배 / 스테이지6 별0은 클리어 불가 (난이도 서열)
+ *  6) 지형 개조가 지배 전략이 아니다 — 승수 우위 ≤ 1, 여유(기지HP)도 앞서지 않는다
  */
 import { describe, expect, it } from 'vitest';
-import { createBattle } from '@/sim/battle';
-import { ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
-import { rasterizePathCells } from '@/data/grid';
-import type { BattleSim, StageDef, TowerId } from '@/data/types';
+import type { TowerId } from '@/data/types';
+import { MIN_TOWERS_FROM_WAVE, makeBotSim, runBot, type BotOptions, type BotResult } from './botharness';
 
-/** 봇 배치 상한 — 지가 상승으로 8기 이후는 업그레이드가 우세 (헤더 주석 참조) */
-const PLACEMENT_CAP = 8;
-
+/**
+ * 고정 등차수열 — 고를 여지가 없어야 표본이 정직하다.
+ * (예전 봉투가 쓰던 101/202/303/404/505 는 전부 통과하는 5개짜리 편향 표본이었다)
+ */
+const SEEDS = Array.from({ length: 20 }, (_, i) => 1000 + 37 * i);
 const STAGE1_DECK: TowerId[] = ['spear', 'catapult', 'frost'];
 const ALL_DECK: TowerId[] = [
   'spear', 'catapult', 'frost', 'lightning', 'poison', 'ballista', 'brazier', 'drum',
 ];
 
-function makeSim(
-  stageId: number,
-  seed: number,
-  deck: TowerId[],
-  stars = 0,
-): { sim: BattleSim; stage: StageDef } {
-  const stage = stageById(stageId);
-  if (!stage) throw new Error(`no stage ${stageId}`);
-  const starMap: Partial<Record<TowerId, number>> = {};
-  for (const id of deck) starMap[id] = stars;
-  const sim = createBattle({
-    stage,
-    stars: starMap,
-    deck,
-    endless: false,
-    seed,
-    towerDefs: TOWER_DEFS,
-    enemyDefs: ENEMY_DEFS,
-    waveFor: makeWaveFor(stage),
+/** 같은 스윕을 여러 항목이 재사용한다 — 20시드 × 재실행은 순수 낭비라 캐시한다 */
+const cache = new Map<string, BotResult[]>();
+function playAll(stageId: number, deck: TowerId[], opts: BotOptions = {}): BotResult[] {
+  const key = `${stageId}|${deck.join()}|${JSON.stringify(opts)}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const rs = SEEDS.map((seed) => {
+    const { sim, stage } = makeBotSim(stageId, seed, deck);
+    return runBot(sim, stage, opts);
   });
-  return { sim, stage };
+  cache.set(key, rs);
+  return rs;
 }
 
-interface BotResult {
-  won: boolean;
-  wave: number;
-  /** 이 판에서 골드로 치운 소품 수 */
-  clears: number;
-}
-
-/**
- * bulldoze=true면 "경로에 더 가까운 자리를 골드로 사는" 불도저 봇이 된다.
- * (소품 셀도 후보에 넣고, 배치 직전에 제거 비용+배치 비용을 함께 감당할 수 있으면 치운다)
- */
-function runBot(
-  sim: BattleSim,
-  stage: StageDef,
-  opts: { bulldoze?: boolean } = {},
-  maxIters = 900,
-): BotResult {
-  const bulldoze = opts.bulldoze === true;
-  // 자유 배치: 경로에서 가까운 셀부터 채운다 (사람의 상식적 배치 근사)
-  const pathCells = rasterizePathCells(stage);
-  const pathPts: [number, number][] = [];
-  for (const key of pathCells) pathPts.push([key % stage.gridW, Math.floor(key / stage.gridW)]);
-  const slots: [number, number][] = [];
-  for (let z = 0; z < stage.gridH; z++) {
-    for (let x = 0; x < stage.gridW; x++) {
-      if (sim.canPlaceAt(x, z) || (bulldoze && sim.hasScenery(x, z))) slots.push([x, z]);
-    }
-  }
-  const distToPath = ([x, z]: [number, number]): number => {
-    let best = Infinity;
-    for (const [px, pz] of pathPts) {
-      const d = (px - x) * (px - x) + (pz - z) * (pz - z);
-      if (d < best) best = d;
-    }
-    return best;
-  };
-  slots.sort((a, b) => distToPath(a) - distToPath(b));
-  /** 불도저 봇이 이번 판에서 실제로 치운 횟수 (검증이 공허하지 않은지 확인용) */
-  let clears = 0;
-  /**
-   * 지금 배치 가능한 최선의 셀. 불도저 봇은 경로에 더 가까운 소품 자리를 만나면
-   * (제거비 + 배치비)를 감당할 수 있는 한 골드를 내고 산다 = "맵을 미는" 최대치 플레이.
-   * 자유 배치라 빈 땅은 늘 남아 있으므로, 이 봇이 사는 건 순수하게 '더 좋은 자리'다.
-   */
-  const freeSlot = (placeCost: number): [number, number] | undefined => {
-    const free = slots.find(([x, z]) => sim.canPlaceAt(x, z));
-    if (!bulldoze) return free;
-    // 경로에 가까운 순서로 소품 자리를 훑어 살 수 있는 첫 자리를 산다.
-    // (자유 배치라 늘 빈 땅이 남으므로, 이 지출은 순수하게 '더 좋은 자리' 값이다)
-    for (const [x, z] of slots) {
-      const clear = sim.clearSceneryCost(x, z);
-      if (clear === null || sim.state.gold < clear + placeCost) continue;
-      if (sim.applyCommand({ type: 'clearScenery', cellX: x, cellZ: z })) {
-        clears++;
-        return [x, z];
-      }
-    }
-    return free;
-  };
-  let guard = 0;
-  while (sim.state.phase !== 'won' && sim.state.phase !== 'lost' && guard < maxIters) {
-    guard++;
-    const st = sim.state;
-    if (st.towers.length < PLACEMENT_CAP) {
-      for (let h = 0; h < st.hand.length; h++) {
-        const card = st.hand[h];
-        if (!card || st.gold < card.cost) continue;
-        const free = freeSlot(card.cost);
-        if (!free) break;
-        sim.applyCommand({ type: 'placeTower', handIndex: h, cellX: free[0], cellZ: free[1] });
-        break;
-      }
-    }
-    let best: { id: number; inv: number } | null = null;
-    for (const t of st.towers) {
-      const c = sim.upgradeCost(t.id);
-      if (c !== null && st.gold >= c && (!best || t.invested > best.inv)) {
-        best = { id: t.id, inv: t.invested };
-      }
-    }
-    if (best) sim.applyCommand({ type: 'upgradeTower', towerId: best.id });
-    else if (st.towers.length >= PLACEMENT_CAP) {
-      for (let h = 0; h < st.hand.length; h++) {
-        const card = st.hand[h];
-        if (!card || st.gold < card.cost * 1.5) continue;
-        const free = freeSlot(card.cost);
-        if (!free) break;
-        sim.applyCommand({ type: 'placeTower', handIndex: h, cellX: free[0], cellZ: free[1] });
-        break;
-      }
-    }
-    if (st.phase === 'prep' && st.prepTicksLeft > 0) sim.applyCommand({ type: 'callWave' });
-    for (let i = 0; i < 120; i++) sim.tick();
-    sim.drainEvents();
-  }
-  return { won: sim.state.phase === 'won', wave: sim.state.waveIndex, clears };
-}
+const wins = (rs: BotResult[]): number => rs.filter((r) => r.won).length;
+const sum = (rs: BotResult[], f: (r: BotResult) => number): number => rs.reduce((a, r) => a + f(r), 0);
 
 describe('autoplay 난이도 봉투', () => {
-  it('스테이지1: 평범한 봇이 시드 5개 중 3+ 클리어, 전부 웨이브 45+', () => {
-    const seeds = [101, 202, 303, 404, 505];
-    const results = seeds.map((s) => {
-      const { sim, stage } = makeSim(1, s, STAGE1_DECK);
-      return runBot(sim, stage);
-    });
-    const wins = results.filter((r) => r.won).length;
-    const minWave = Math.min(...results.map((r) => r.wave));
-    expect(wins, `클리어 ${wins}/5, 결과: ${JSON.stringify(results)}`).toBeGreaterThanOrEqual(3);
-    expect(minWave, `최소 도달 웨이브: ${JSON.stringify(results)}`).toBeGreaterThanOrEqual(43);
-  }, 60_000);
+  it('스테이지1: 넓은 시드 20개에서 과반이 완주하고, 전부 웨이브 40을 넘긴다', () => {
+    const rs = playAll(1, STAGE1_DECK);
+    const msg = JSON.stringify(rs);
+    // 실측 15/20. 하한 13은 "핸드 드로우 운으로 지는 판이 절반을 넘지 않는다"이고,
+    // 5시드 표본이 주장하던 '전부 클리어'가 사실이 아님을 문서화한 값이다.
+    expect(wins(rs), `클리어 ${wins(rs)}/20, 결과: ${msg}`).toBeGreaterThanOrEqual(13);
+    // 지더라도 후반까지는 간다 — 초반에 무너지면 여기서 걸린다 (실측 최소 42)
+    expect(Math.min(...rs.map((r) => r.wave)), `최소 도달 웨이브: ${msg}`).toBeGreaterThanOrEqual(40);
+  }, 120_000);
+
+  /**
+   * 봉투가 "통과하지만 아무 일도 안 일어나는" 상태로 썩지 않게 한다.
+   * 습격대를 삭제하거나 무력화하면(예: 근접만 남기면 경로 이격 배치에 영원히 못 닿는다)
+   * 파괴 수가 0으로 떨어져 여기서 걸린다. 실측 177기(시드 20 합계) → 하한 100기.
+   */
+  it('스테이지1: 습격대가 실제로 타워를 부순다 (클리어해도 값은 치른다)', () => {
+    const rs = playAll(1, STAGE1_DECK);
+    const destroyed = sum(rs, (r) => r.destroyed);
+    expect(destroyed, `파괴 합계: ${JSON.stringify(rs)}`).toBeGreaterThanOrEqual(100);
+    // 잃은 건 타워 한 기가 아니라 거기 넣은 골드다 — 재건설 비용이 성장을 늦춘다
+    expect(sum(rs, (r) => r.lostGold)).toBeGreaterThan(0);
+  }, 120_000);
+
+  /**
+   * 죽음의 나선 금지 — 부서진 만큼 다시 짓지 못해 방어선이 계속 줄어드는 상태.
+   * 웨이브 15면 배치 상한 8기가 다 서 있으므로(실측 전 시드 8) 그 뒤의 하락은 전부
+   * '파괴를 못 메운 몫'이다. 하한 7 = 상한선에서 한 기까지의 하락만 허용.
+   * 판별력: 습격대 towerAttack.dmg를 ×3 하면 5~7로 떨어져 걸린다
+   * (botharness.MIN_TOWERS_FROM_WAVE 주석의 A/B 실측).
+   */
+  it('스테이지1: 파괴가 죽음의 나선으로 번지지 않는다', () => {
+    const rs = playAll(1, STAGE1_DECK);
+    for (const r of rs) {
+      expect(r.minTowers, `웨이브 ${MIN_TOWERS_FROM_WAVE}+ 최소 타워 수: ${JSON.stringify(r)}`)
+        .toBeGreaterThanOrEqual(7);
+    }
+  }, 120_000);
+
+  /**
+   * 습격대가 만든 실력 축을 잠근다: **경로에서 얼마나 떨어뜨려 짓는가**.
+   * 같은 전략·같은 시드에서 밀착 배치만 바꾸면 15/20 → 0/20 으로 무너진다.
+   * 이 격차가 사라지면 습격대는 그냥 체력이 늘어난 적일 뿐이다.
+   *
+   * 파괴 '총수'로는 재지 않는다 — 밀착 봇은 웨이브 20 언저리에서 죽어 부서질 시간이
+   * 짧아 오히려 총수가 적게 나온다(실측 142 대 177). 대신 **방어선이 남아나는지**를
+   * 본다: 웨이브 15+ 최소 타워 수가 밀착 봇에서 확실히 낮다 (실측 합계 120 대 160).
+   */
+  it('스테이지1: 경로 밀착 배치는 클리어하지 못한다 (배치 거리 = 실력 축)', () => {
+    const safe = playAll(1, STAGE1_DECK);
+    const hug = playAll(1, STAGE1_DECK, { hugPath: true });
+    const msg = `안전배치 ${JSON.stringify(safe)} / 밀착배치 ${JSON.stringify(hug)}`;
+    expect(wins(hug), msg).toBeLessThan(wins(safe));
+    expect(wins(hug), msg).toBeLessThanOrEqual(2);
+    expect(sum(hug, (r) => r.minTowers), msg).toBeLessThan(sum(safe, (r) => r.minTowers));
+  }, 240_000);
 
   it('스테이지1: 방치(타워 0)면 웨이브 10 안에 패배', () => {
-    const { sim } = makeSim(1, 7, STAGE1_DECK);
+    const { sim } = makeBotSim(1, 7, STAGE1_DECK);
     sim.applyCommand({ type: 'callWave' });
     for (let i = 0; i < 30 * 60 * 8 && sim.state.phase !== 'lost'; i++) {
       sim.tick();
@@ -174,31 +124,37 @@ describe('autoplay 난이도 봉투', () => {
   }, 30_000);
 
   it('스테이지6: 별 0 봇은 클리어 불가 (난이도 서열)', () => {
-    const { sim, stage } = makeSim(6, 11, ALL_DECK);
+    const { sim, stage } = makeBotSim(6, 11, ALL_DECK);
     const r = runBot(sim, stage);
     expect(r.won, `stage6 결과: ${JSON.stringify(r)}`).toBe(false);
   }, 60_000);
 
+  /**
+   * 지형 개조가 **지배 전략**이 되면 안 된다 — "승수도 앞서고 여유도 앞선다"는 금지다.
+   * 습격대 도입으로 칸의 가치가 올랐으므로(근접이 못 닿는 자리 = 타워 수명)
+   * 제거 비용 곡선도 함께 올렸다 — 스윕 근거는 balance.SCENERY_CLEAR_BASE_COST 주석.
+   *
+   * 실측(시드 20): 일반 15승·기지HP합 171 / 불도저 16승·164·제거 12회.
+   * 승수 +1은 20시드에서 노이즈 폭(제거 0회인 BASE 470에서도 ±1이 나온다)이라
+   * 하한을 +1까지 허용하되, **여유까지 동시에 앞서면** 실패로 잡는다.
+   * BASE 120(3단계 값)에서는 17승·166으로 승수 +2라 이 항목이 걸린다.
+   */
   it('불도저 봇(소품 제거로 자리 사기)이 스테이지1을 더 쉽게 만들지 않는다', () => {
-    const seeds = [101, 202, 303, 404, 505];
-    const plain = seeds.map((s) => {
-      const { sim, stage } = makeSim(1, s, STAGE1_DECK);
-      return runBot(sim, stage);
-    });
-    const dozer = seeds.map((s) => {
-      const { sim, stage } = makeSim(1, s, STAGE1_DECK);
-      return runBot(sim, stage, { bulldoze: true });
-    });
-    const wins = (rs: BotResult[]): number => rs.filter((r) => r.won).length;
+    const plain = playAll(1, STAGE1_DECK);
+    const dozer = playAll(1, STAGE1_DECK, { bulldoze: true });
     const msg = `일반 ${JSON.stringify(plain)} / 불도저 ${JSON.stringify(dozer)}`;
     // 검증이 공허하지 않은지 — 봇이 실제로 골드를 내고 지형을 갈아엎었어야 한다
-    expect(dozer.reduce((a, r) => a + r.clears, 0), msg).toBeGreaterThan(0);
-    // 제거에 쓴 골드만큼 강화가 밀리므로 클리어 수가 늘어나면 안 된다 (지배 전략 금지)
-    expect(wins(dozer), msg).toBeLessThanOrEqual(wins(plain));
-  }, 120_000);
+    expect(sum(dozer, (r) => r.clears), msg).toBeGreaterThan(0);
+    expect(sum(dozer, (r) => r.clearGold), msg).toBeGreaterThan(0);
+    expect(wins(dozer), msg).toBeLessThanOrEqual(wins(plain) + 1);
+    const better =
+      wins(dozer) > wins(plain) &&
+      sum(dozer, (r) => r.baseHpLeft) > sum(plain, (r) => r.baseHpLeft);
+    expect(better, `불도저가 승수와 여유 둘 다에서 앞선다 = 지배 전략: ${msg}`).toBe(false);
+  }, 240_000);
 
   it('불도저 봇도 스테이지6은 클리어 불가 (지형 개조가 서열을 뒤집지 않는다)', () => {
-    const { sim, stage } = makeSim(6, 11, ALL_DECK);
+    const { sim, stage } = makeBotSim(6, 11, ALL_DECK);
     const r = runBot(sim, stage, { bulldoze: true });
     expect(r.won, `stage6 불도저 결과: ${JSON.stringify(r)}`).toBe(false);
   }, 60_000);

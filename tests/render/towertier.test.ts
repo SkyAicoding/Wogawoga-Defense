@@ -33,8 +33,10 @@ function extent(id: TowerId, tier: number): { w: number; h: number } {
 }
 
 describe('towerTierScale', () => {
-  it('Lv1은 정확히 0.60배', () => {
-    expect(towerTierScale(0)).toBeCloseTo(0.6, 6);
+  // 최초 요청은 0.60(40% 축소)이었으나 그 값에서는 기본 줌에서 갈색 계열 타워끼리
+  // 구분이 안 된다는 피드백을 받아 0.66으로 올렸다. 축소 취지는 유지된다.
+  it('Lv1은 0.66배', () => {
+    expect(towerTierScale(0)).toBeCloseTo(0.66, 6);
   });
 
   it('티어가 오를수록 단조 증가하고 단계 간격이 고르다', () => {
