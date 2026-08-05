@@ -14,9 +14,17 @@ declare global {
           gold: number;
           baseHp: number;
           hand: { towerId: string; cost: number }[];
-          enemies: readonly unknown[];
+          enemies: { blockerAllyId: number }[];
           towers: readonly unknown[];
+          allies: { id: number; defId: string; targetId: number; hp: number }[];
+          allyCap: number;
+          baseLevel: number;
+          baseLevelMax: number;
+          baseHpMax: number;
+          projectiles: { fromBase?: boolean; towerDefId: string }[];
         };
+        allyCost(defId: string): number;
+        canTrainAlly(defId: string): boolean;
         canPlaceAt(x: number, z: number): boolean;
         hasScenery(x: number, z: number): boolean;
         towerAt(x: number, z: number): unknown | null;
@@ -35,6 +43,23 @@ declare global {
       clearScenery(x: number, z: number): boolean;
       setGold(g: number): void;
       cellToScreen(x: number, z: number): { x: number; y: number };
+      trainAlly(defId: string): boolean;
+      allyCost(defId: string): number;
+      canTrainAlly(defId: string): boolean;
+      allies(): { id: number; defId: string; hp: number; x: number; z: number; targetId: number }[];
+      baseInfo(): {
+        level: number;
+        levelMax: number;
+        hp: number;
+        hpMax: number;
+        range: number;
+        cost: number | null;
+        can: boolean;
+        cell: { x: number; z: number };
+      };
+      upgradeBase(): boolean;
+      selectedBase(): boolean;
+      damageBase(n: number): void;
     };
   }
 }
@@ -233,7 +258,14 @@ test('방해 지형지물: 탭 → 골드로 제거 → 그 자리에 타워 건
   expect(armed.gold, '확인 전 첫 탭에서 골드가 빠졌다').toBe(1000);
   expect(armed.scenery, '확인 전 첫 탭에서 제거됐다').toBe(true);
   await clearBtn.click();
-  await page.waitForTimeout(600);
+  // 선택 해제는 sceneryCleared 이벤트를 battlecontroller.processEvents()가 받아
+  // refreshScenerySelection()을 부를 때 일어나고, 그건 **rAF 프레임 안에서** 돈다.
+  // 고정 대기(600ms)로 재면 워커 둘이 SwiftShader를 나눠 쓰는 전체 실행에서
+  // 프레임 하나를 제때 못 받아 간헐 실패한다(실측: 단독 6/6 통과, 전체 병렬에서 3/11 실패).
+  // 시간이 아니라 **조건**을 기다린다.
+  await page.waitForFunction(() => (window.__wgd?.selectedScenery() ?? null) === null, null, {
+    timeout: 10_000,
+  });
   const afterClear = await page.evaluate(
     (c) => ({
       gold: window.__wgd?.sim.state.gold ?? -1,
@@ -311,4 +343,296 @@ test('방해 지형지물: 탭 → 골드로 제거 → 그 자리에 타워 건
   expect(await page.evaluate(() => window.__wgd?.drawCalls() ?? -1)).toBeLessThanOrEqual(60);
 
   expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
+});
+
+/**
+ * 아군 부족원 출동 — 마을에서 주민을 뽑아 길목에서 적을 막아 세운다.
+ *
+ * **드로우콜이 이 테스트의 핵심이다.** 아군은 적 습격대와 같은 InstancedMesh,
+ * 같은 오버레이 메시를 쓰므로(구조 검증은 tests/render/allies.test.ts) 두 메시가
+ * 이미 켜져 있는 프레임 — 즉 실측 최악 프레임의 조건 — 에서는 **한 콜도 늘면 안 된다**.
+ */
+test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/?test=1', { waitUntil: 'networkidle' });
+  await page.mouse.click(100, 300);
+  await page.getByRole('button', { name: /전투/ }).first().click();
+  await page.waitForFunction(() => window.__wgd !== undefined);
+  await page.waitForTimeout(900);
+
+  // --- 출동 바가 실제로 있고 터치 타깃을 지키는가 ---------------------------
+  const btns = page.locator('.ally-btn');
+  await expect(btns).toHaveCount(3);
+  for (let i = 0; i < 3; i++) {
+    const box = await btns.nth(i).boundingBox();
+    expect(box, `출동 버튼 ${i} 박스`).not.toBeNull();
+    expect(box!.height, `출동 버튼 ${i} 높이`).toBeGreaterThanOrEqual(44);
+  }
+
+  // --- 골드가 실제로 빠지고, 비용이 인원수에 따라 오른다 --------------------
+  const econ = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.setGold(5000);
+    const steps: { cost: number; ok: boolean; spent: number; alive: number }[] = [];
+    for (let i = 0; i < 8; i++) {
+      const cost = g.allyCost('clubber');
+      const before = g.sim.state.gold;
+      const ok = g.trainAlly('clubber');
+      steps.push({ cost, ok, spent: before - g.sim.state.gold, alive: g.allies().length });
+    }
+    return { steps, cap: g.sim.state.allyCap, gold: g.sim.state.gold };
+  });
+  const cap = econ.cap;
+  for (let i = 0; i < cap; i++) {
+    expect(econ.steps[i]!.ok, `${i}번째 출동`).toBe(true);
+    expect(econ.steps[i]!.spent).toBe(econ.steps[i]!.cost);
+  }
+  // 비용은 단조 증가
+  for (let i = 1; i < cap; i++) {
+    expect(econ.steps[i]!.cost).toBeGreaterThan(econ.steps[i - 1]!.cost);
+  }
+  // 상한 초과분은 거부되고 골드도 안 빠진다 (돈이 남아 있는데도)
+  expect(econ.steps[cap]!.ok).toBe(false);
+  expect(econ.steps[cap]!.spent).toBe(0);
+  expect(econ.gold).toBeGreaterThan(econ.steps[cap]!.cost);
+
+  // 골드가 모자라면 막힌다
+  const poor = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.setGold(1);
+    return { can: g.canTrainAlly('guardian'), ok: g.trainAlly('guardian') };
+  });
+  expect(poor.can).toBe(false);
+  expect(poor.ok).toBe(false);
+
+  // --- 최악 프레임 조건에서 드로우콜 증가 0 ---------------------------------
+  // 습격대 공유 메시 + 오버레이 메시를 켜 둔 정지 장면에서 아군만 넣고 뺀다.
+  const maxCalls = (): Promise<number> =>
+    page.evaluate(
+      () =>
+        new Promise<number>((res) => {
+          const g = window.__wgd!;
+          const seen: number[] = [];
+          let i = 0;
+          const step = (): void => {
+            seen.push(g.renderInfo().calls);
+            if (++i >= 20) res(Math.max(...seen));
+            else requestAnimationFrame(step);
+          };
+          requestAnimationFrame(() => requestAnimationFrame(step));
+        }),
+    );
+
+  await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.setGold(999999);
+    g.place(0, 6, 6);
+    g.callWave();
+    g.ff(180);
+  });
+  await page.waitForTimeout(300);
+  await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.pause(true);
+    const st = g.sim.state as unknown as {
+      enemies: { defId: string; hp: number; maxHp: number }[];
+      towers: { hp: number; maxHp: number }[];
+    };
+    // 습격대 메시 ON + 오버레이 메시 ON (실측 최악 프레임의 조건)
+    if (st.enemies[0]) {
+      st.enemies[0].defId = 'blade';
+      st.enemies[0].hp = Math.max(1, Math.round(st.enemies[0].maxHp * 0.5));
+    }
+    if (st.towers[0]) st.towers[0].hp = Math.round(st.towers[0].maxHp * 0.6);
+    // 아군은 전부 비워 둔 상태에서 먼저 잰다
+    for (const a of g.sim.state.allies as unknown as { alive: boolean }[]) a.alive = false;
+    g.ff(1);
+  });
+  await page.waitForTimeout(400);
+  const callsNoAlly = await maxCalls();
+
+  const trained = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.setGold(999999);
+    let n = 0;
+    for (const id of ['clubber', 'slinger', 'guardian', 'clubber', 'slinger', 'guardian']) {
+      if (g.trainAlly(id)) n++;
+    }
+    return n;
+  });
+  expect(trained).toBeGreaterThan(0);
+  await page.waitForTimeout(400);
+  const callsWithAlly = await maxCalls();
+
+  expect(
+    callsWithAlly,
+    `아군 0명 ${callsNoAlly} → ${trained}명 ${callsWithAlly} (늘어나면 공유 메시가 깨진 것)`,
+  ).toBeLessThanOrEqual(callsNoAlly);
+  expect(callsWithAlly).toBeLessThanOrEqual(60);
+  await page.evaluate(() => window.__wgd?.pause(false));
+
+  // --- 실제로 적을 막아 세우는가 -------------------------------------------
+  // 타워를 전부 판다: 남겨 두면 적이 출격 한계선(기지 앞 6타일)에 닿기 전에 죽어
+  // 봉쇄를 관찰할 수 없다 — 여기서 보려는 건 "주민만으로 막아 세운다"이다.
+  await page.evaluate(() => {
+    const g = window.__wgd!;
+    const st = g.sim.state as unknown as { towers: { id: number }[] };
+    for (const t of [...st.towers]) g.sim.applyCommand({ type: 'sellTower', towerId: t.id });
+  });
+
+  let blocked = 0;
+  for (let k = 0; k < 300; k++) {
+    const r = await page.evaluate(() => {
+      const g = window.__wgd!;
+      const st = g.sim.state;
+      if (st.enemies.length === 0 && st.phase === 'prep') g.callWave();
+      g.setGold(999999);
+      for (const id of ['clubber', 'guardian', 'clubber', 'slinger', 'clubber', 'guardian']) {
+        if (g.canTrainAlly(id)) g.trainAlly(id);
+      }
+      g.ff(4);
+      return st.enemies.filter((e) => e.blockerAllyId >= 0).length;
+    });
+    if (r > 0) {
+      blocked = r;
+      break;
+    }
+  }
+  expect(blocked, '아군이 적을 한 번도 막아 세우지 못했다').toBeGreaterThan(0);
+
+  expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
+});
+
+test('홈타운: 기지가 쏜다 · 레벨업 2단 확인 · 골드/최대레벨 거부 · HP 정책', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/?test=1', { waitUntil: 'networkidle' });
+  await page.mouse.click(100, 300);
+  await page.getByRole('button', { name: /전투/ }).first().click();
+  await page.waitForFunction(() => window.__wgd !== undefined);
+  await page.waitForTimeout(900);
+
+  // --- 시작은 움막 하나 (Lv1) ----------------------------------------------
+  const init = await page.evaluate(() => window.__wgd!.baseInfo());
+  expect(init.level).toBe(1);
+  expect(init.levelMax).toBeGreaterThan(1);
+  expect(init.cost).not.toBeNull();
+  // 사거리는 가장 짧은 공격 타워(frost T1 2.4)보다도 안쪽이어야 한다 — 최후 방어선
+  expect(init.range).toBeLessThan(2.4);
+
+  // --- 골드가 모자라면 막힌다 (한 푼도 안 빠진다) ---------------------------
+  const poor = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.setGold(1);
+    const ok = g.upgradeBase();
+    return { can: g.baseInfo().can, ok, gold: g.sim.state.gold, level: g.baseInfo().level };
+  });
+  expect(poor.can).toBe(false);
+  expect(poor.ok).toBe(false);
+  expect(poor.gold).toBe(1);
+  expect(poor.level).toBe(1);
+
+  // --- 기지 셀 탭 → 레벨업 패널 --------------------------------------------
+  await page.evaluate(() => window.__wgd!.setGold(100000));
+  const cell = await page.evaluate(() => {
+    const c = window.__wgd!.baseInfo().cell;
+    return window.__wgd!.cellToScreen(c.x, c.z);
+  });
+  await page.mouse.click(cell.x, cell.y);
+  await page.waitForTimeout(250);
+  expect(await page.evaluate(() => window.__wgd!.selectedBase())).toBe(true);
+  const panel = page.locator('.tower-panel--home');
+  await expect(panel).toBeVisible();
+  const upBtn = panel.locator('.tp-btn--up');
+  // 패널은 250ms 팝인(card-pop, scale 0.85 → 1) 애니메이션을 탄다.
+  // click()은 요소가 멈출 때까지 알아서 기다리지만 boundingBox()는 안 기다리므로
+  // 여기서 명시적으로 끝낸다 — 안 그러면 애니메이션 중간 크기(46×0.85=39px)를 잰다
+  await panel.evaluate((el) =>
+    Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)),
+  );
+  // 터치 타깃 — 되돌릴 수 없는 결제 버튼이므로 더더욱 오탭이 나면 안 된다
+  const box = await upBtn.boundingBox();
+  expect(box!.height).toBeGreaterThanOrEqual(44);
+
+  // --- 2단 확인: 첫 탭은 무장만, 두 번째 탭이 결제 -------------------------
+  const goldBefore = await page.evaluate(() => window.__wgd!.sim.state.gold);
+  await upBtn.click();
+  await page.waitForTimeout(200);
+  const afterFirst = await page.evaluate(() => ({
+    gold: window.__wgd!.sim.state.gold,
+    level: window.__wgd!.baseInfo().level,
+  }));
+  expect(afterFirst.gold, '1탭은 결제가 아니다').toBe(goldBefore);
+  expect(afterFirst.level).toBe(1);
+  await expect(upBtn).toHaveClass(/is-armed/);
+
+  await upBtn.click();
+  await page.waitForTimeout(250);
+  const afterSecond = await page.evaluate(() => ({
+    gold: window.__wgd!.sim.state.gold,
+    ...window.__wgd!.baseInfo(),
+  }));
+  expect(afterSecond.level).toBe(2);
+  expect(goldBefore - afterSecond.gold).toBe(init.cost);
+  expect(afterSecond.hpMax).toBeGreaterThan(init.hpMax);
+  expect(afterSecond.range).toBeGreaterThan(init.range);
+
+  // --- HP 정책: 누적 피해 절대량 보존 (레벨업은 회복 수단이 아니다) --------
+  const hp = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.setGold(1000000);
+    g.damageBase(10);
+    const before = g.baseInfo();
+    g.upgradeBase();
+    const after = g.baseInfo();
+    return {
+      takenBefore: before.hpMax - before.hp,
+      takenAfter: after.hpMax - after.hp,
+      hp: after.hp,
+      hpMax: after.hpMax,
+    };
+  });
+  expect(hp.takenAfter).toBe(hp.takenBefore);
+  expect(hp.hp, '전량 회복이 아니다').toBeLessThan(hp.hpMax);
+
+  // --- 최대 레벨에서는 골드가 남아도 거부 -----------------------------------
+  const maxed = await page.evaluate(() => {
+    const g = window.__wgd!;
+    for (let i = 0; i < 10; i++) g.upgradeBase();
+    const b = g.baseInfo();
+    const gold = g.sim.state.gold;
+    const ok = g.upgradeBase();
+    return { level: b.level, levelMax: b.levelMax, cost: b.cost, can: b.can, ok, gold, after: g.sim.state.gold };
+  });
+  expect(maxed.level).toBe(maxed.levelMax);
+  expect(maxed.cost).toBeNull();
+  expect(maxed.can).toBe(false);
+  expect(maxed.ok).toBe(false);
+  expect(maxed.after).toBe(maxed.gold);
+  await expect(upBtn).toHaveClass(/is-disabled/);
+
+  // --- 기지가 실제로 화살을 쏜다 -------------------------------------------
+  const fired = await page.evaluate(() => {
+    const g = window.__wgd!;
+    let frames = 0;
+    for (let i = 0; i < 3000; i++) {
+      g.callWave();
+      g.ff(1);
+      if (g.sim.state.projectiles.some((p) => p.fromBase === true)) frames++;
+      if (frames >= 3) break;
+    }
+    return frames;
+  });
+  expect(fired, '기지 화살이 실제로 날아간다').toBeGreaterThanOrEqual(3);
+
+  expect(errors).toEqual([]);
 });

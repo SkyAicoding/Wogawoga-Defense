@@ -3,7 +3,7 @@
  * 타워 아이콘은 src/assets/towers 의 일러스트를 쓰고, 없으면 인라인 SVG로 폴백한다
  * (SVG 폴백은 8종이 형태/색으로 확실히 구분되도록 유지).
  */
-import type { TowerId } from '@/data/types';
+import type { AllyId, TowerId } from '@/data/types';
 import { h, cls, fmt, setText } from '../dom';
 import { t } from '../i18n';
 
@@ -119,12 +119,63 @@ export const amberSvg = SVG(
    <ellipse cx="22" cy="26" rx="4" ry="5.5" fill="#7a3c00"/>`,
 );
 
+/**
+ * 홈타운(기지) 아이콘 — 움막 + 목책 + 활.
+ * 타워 아이콘(towerCountSvg)과 실루엣이 겹치지 않게 **모닥불과 활**을 넣었다:
+ * 이 패널이 파는 것이 "구조물 한 기"가 아니라 "마을이 스스로 쏜다"이기 때문이다.
+ */
+export const hometownIconSvg = SVG(
+  `<path d="M24 6 L41 19 L37 19 L37 42 L11 42 L11 19 L7 19 Z"
+     fill="#c49a5e" stroke="#4a3018" stroke-width="3" stroke-linejoin="round"/>
+   <path d="M17 42 L17 30 C17 26 21 24 24 24 C27 24 31 26 31 30 L31 42 Z"
+     fill="#6b4a2f" stroke="#3a2512" stroke-width="2.5" stroke-linejoin="round"/>
+   <path d="M31 12 C37 16 37 24 31 28" fill="none" stroke="#e8d9b8" stroke-width="3" stroke-linecap="round"/>
+   <line x1="33" y1="11" x2="33" y2="29" stroke="#a8763f" stroke-width="2.4" stroke-linecap="round"/>`,
+);
+
 /** 방해 지형지물(나무+바위) — 골드로 치우는 대상 */
 export const sceneryIconSvg = SVG(
   `<path d="M6 40 C6 32 11 26 17 26 C23 26 28 32 28 40 Z" fill="#4f9440" stroke="#25502a" stroke-width="3" stroke-linejoin="round"/>
    <rect x="14.5" y="36" width="5" height="8" fill="#7a5230" stroke="#3d2a18" stroke-width="2.5"/>
    <path d="M28 44 L31 30 L38 26 L44 32 L43 44 Z" fill="#9aa39a" stroke="#3f4640" stroke-width="3" stroke-linejoin="round"/>`,
 );
+
+/**
+ * 아군 부족원 아이콘 3종 (출동 바).
+ * 타워 아이콘과 달리 **사람 실루엣**을 공통으로 두고 무기만 바꾼다 —
+ * 3D 모델도 몸통을 공유하므로(meshlib/enemies.ts allyVariant) 아이콘과 화면이 일치한다.
+ */
+const ALLY_BODY = `<circle cx="20" cy="13" r="7" fill="#e0a878" stroke="#7a4a28" stroke-width="2.5"/>
+   <path d="M20 20 L20 34 M20 24 L13 30 M20 34 L14 43 M20 34 L26 43"
+     fill="none" stroke="#e0a878" stroke-width="5" stroke-linecap="round"/>`;
+
+/** 몽둥이꾼 — 굵은 나무 몽둥이를 든 근접 */
+export const allyClubberSvg = SVG(
+  `${ALLY_BODY}
+   <path d="M27 26 L38 12" stroke="#8a5a30" stroke-width="4.5" stroke-linecap="round"/>
+   <circle cx="40" cy="9" r="6" fill="#a06a38" stroke="#4a2c14" stroke-width="2.5"/>`,
+);
+
+/** 돌팔매꾼 — 돌리는 가죽끈 + 돌 (원거리) */
+export const allySlingerSvg = SVG(
+  `${ALLY_BODY}
+   <path d="M27 24 Q40 18 38 32" fill="none" stroke="#c9a06a" stroke-width="3" stroke-linecap="round"/>
+   <circle cx="38" cy="35" r="5.5" fill="#9aa39a" stroke="#3f4640" stroke-width="2.5"/>`,
+);
+
+/** 방패 파수꾼 — 큰 나무 방패 (탱커) */
+export const allyGuardianSvg = SVG(
+  `${ALLY_BODY}
+   <path d="M32 12 L45 16 L45 30 C45 37 38 42 38 42 C38 42 31 37 31 30 Z"
+     fill="#c49a5e" stroke="#4a3018" stroke-width="3" stroke-linejoin="round"/>
+   <path d="M38 18 L38 36" stroke="#7a5230" stroke-width="2.5"/>`,
+);
+
+export const ALLY_ICON_SVG: Record<AllyId, string> = {
+  clubber: allyClubberSvg,
+  slinger: allySlingerSvg,
+  guardian: allyGuardianSvg,
+};
 
 /** 기지 HP 하트 */
 export const heartSvg = SVG(

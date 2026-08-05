@@ -37,8 +37,8 @@
  */
 import { createBattle } from '@/sim/battle';
 import { buildPath } from '@/sim/path';
-import { ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
-import type { BattleSim, StageDef, TowerDef, TowerId } from '@/data/types';
+import { ALLY_DEFS, BASE_LEVELS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
+import type { BaseLevelDef, BattleSim, StageDef, TowerDef, TowerId } from '@/data/types';
 
 /** 봇 배치 상한 — 지가 상승으로 8기 이후는 업그레이드가 우세 */
 export const PLACEMENT_CAP = 8;
@@ -116,13 +116,19 @@ export function makeBotSim(
   return { sim: makeBotSimFor(stage, seed, deck, stars, endless), stage };
 }
 
-/** 스테이지 객체를 직접 넘기는 형태 — A/B용 변형 스테이지에 쓴다 */
+/**
+ * 스테이지 객체를 직접 넘기는 형태 — A/B용 변형 스테이지에 쓴다.
+ * baseLevels를 넘기면 홈타운 방어를 끄거나 바꿔서 잴 수 있다(기본은 실제 데이터).
+ * 봇은 홈타운을 **레벨업하지 않는다** — 사람이 배우기 전의 하한선을 재는 것이 목적이라
+ * Lv1 그대로의 영향만 봉투에 들어간다.
+ */
 export function makeBotSimFor(
   stage: StageDef,
   seed: number,
   deck: TowerId[],
   stars = 0,
   endless = false,
+  baseLevelTable: readonly BaseLevelDef[] = BASE_LEVELS,
 ): BattleSim {
   const starMap: Partial<Record<TowerId, number>> = {};
   for (const id of deck) starMap[id] = stars;
@@ -134,6 +140,8 @@ export function makeBotSimFor(
     seed,
     towerDefs: TOWER_DEFS,
     enemyDefs: ENEMY_DEFS,
+    allyDefs: ALLY_DEFS,
+    baseLevels: baseLevelTable,
     waveFor: makeWaveFor(stage),
   });
   return sim;

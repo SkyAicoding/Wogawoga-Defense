@@ -9,7 +9,7 @@
  * 파티클 개수·크기·수명·쇼크웨이브 반경·카메라 셰이크·데미지 숫자 크기가 전부 s에 비례한다.
  */
 import * as THREE from 'three';
-import type { SimEvent, StatusKind, TowerId } from '@/data/types';
+import type { AllyId, HometownSourceId, SimEvent, StatusKind, TowerId } from '@/data/types';
 import { ENEMY_DEFS } from '@/data';
 import { clamp } from '@/core/mathx';
 import { vibrate } from '@/core/device';
@@ -41,6 +41,12 @@ const SHAKE_BUDGET = 0.5;
 
 /** 한 배치에서 허용하는 타워 피격 연출(파편+숫자) 수 — 부족 무리의 난타 스팸 방지 */
 const TOWER_HIT_FX_MAX = 4;
+/**
+ * 한 배치에서 궤적을 그릴 아군 원거리 타격 수 상한.
+ * 아군은 최대 6명이지만 4배속에서는 한 배치에 여러 틱이 몰려 들어와,
+ * 상한이 없으면 돌팔매 궤적만으로 파티클 예산을 먹고 적 피격 연출이 사라진다.
+ */
+const ALLY_SHOT_FX_MAX = 3;
 
 export function fxStrength(dmg: number, tier: number): number {
   const d = Math.max(1, dmg);
@@ -285,6 +291,7 @@ export class FxRouter {
   private auraFlecks = 0;
   /** 타워 피격 파편/숫자 스팸 방지 — 무리가 동시에 두들기면 금방 찬다 */
   private towerHits = 0;
+  private allyShots = 0;
 
   constructor(
     private stage3d: Stage3D,
@@ -326,6 +333,7 @@ export class FxRouter {
     this.shakeSpent = 0;
     this.auraFlecks = 0;
     this.towerHits = 0;
+    this.allyShots = 0;
     for (const ev of events) {
       switch (ev.type) {
         case 'waveStarted': {
@@ -617,6 +625,60 @@ export class FxRouter {
           if (s > 1.6) this.shake(clamp(0.02 * s, 0, 0.09));
           break;
         }
+        // --- 아군 부족원 -----------------------------------------------------
+        case 'allyTrained': {
+          // 마을에서 사람이 튀어나온다 — 흙먼지 고리 + 발자국 먼지.
+          // 기지가 화면 구석에 있을 수 있어 **소리로도** 나갔다는 걸 알린다
+          const w = s3.cellToWorld(ev.x, ev.z, this.v);
+          s3.particles.ring(w.x, w.z, 0xd8c7a4, 0.55, 9);
+          s3.particles.burst(w.x, 0.35, w.z, 0xc9b48c, 7, 1.1, 0.06, 0.5, {
+            gravity: 7,
+            drag: 1.5,
+            upBias: 0.9,
+            sizeVar: 0.5,
+          });
+          audio.play('towerPlace');
+          break;
+        }
+        case 'allyAttacked': {
+          // 원거리(돌팔매)만 궤적을 그린다 — 근접은 enemyDamaged의 피격 연출로 충분하고,
+          // 여기서 또 터뜨리면 난전에서 파티클 예산이 적 피격 연출을 밀어낸다
+          if (ev.ranged) this.allyShots++;
+          if (ev.ranged && this.allyShots <= ALLY_SHOT_FX_MAX) {
+            this.raidShot(ev.x, ev.z, ev.targetX, ev.targetZ, 0x9fd8ff);
+          }
+          break;
+        }
+        case 'allyDamaged': {
+          // 내 편이 깎이는 숫자는 타워와 같은 종류('tower')로 띄운다 —
+          // 적 피해(흰색)와 색이 갈려야 난전에서 "누가 맞고 있는가"가 읽힌다
+          const p = this.worldToScreen(ev.x, 1.15, ev.z);
+          if (p) spawnDamageNumber(p.sx, p.sy, `-${Math.round(ev.amount)}`, 'tower', 0.9);
+          break;
+        }
+        case 'allyDied': {
+          const w = s3.cellToWorld(ev.x, ev.z, this.v);
+          s3.particles.burst(w.x, 0.5, w.z, 0x9fd8ff, 10, 1.6, 0.06, 0.7, {
+            gravity: 9,
+            drag: 1.3,
+            upBias: 0.8,
+            sizeVar: 0.6,
+          });
+          audio.play('enemyDie');
+          break;
+        }
+        case 'allyRetired': {
+          // 죽은 게 아니라 **돌아간** 것 — 폭발이 아니라 위로 흩어지는 먼지 한 줌으로
+          // 구분한다. 소리를 주지 않는 이유도 같다(손실이 아니므로 경보가 아니다)
+          const w = s3.cellToWorld(ev.x, ev.z, this.v);
+          s3.particles.burst(w.x, 0.45, w.z, 0xd8c7a4, 5, 0.7, 0.05, 0.8, {
+            gravity: -0.8,
+            drag: 1.8,
+            upBias: 1,
+            sizeVar: 0.4,
+          });
+          break;
+        }
         case 'statusApplied': {
           const e = this.stage3d.enemies; // 히트 플래시로 대체 표시
           e.setHitFlash(ev.enemyId);
@@ -629,6 +691,38 @@ export class FxRouter {
           this.buzz(50);
           const ratio = ev.hpLeft / Math.max(1, this.baseHpMax);
           s3.setBaseDamageLevel(ratio > 0.6 ? 0 : ratio > 0.3 ? 1 : 2);
+          break;
+        }
+        case 'baseFired': {
+          // 전용 발사음 자산이 없어 발리스타/창의 투척음을 빌린다 (화살 지오메트리도 같은 출처).
+          // 화살 자체는 투사체 뷰가 그리므로 여기서는 소리와 시위 먼지 한 줌만.
+          audio.play('spearThrow');
+          const w = s3.cellToWorld(ev.x, ev.z, this.v);
+          s3.particles.burst(w.x, 0.75, w.z, 0xece0c4, 2, 0.9, 0.04, 0.22, {
+            gravity: 2,
+            drag: 2,
+            upBias: 0.5,
+            sizeVar: 0.4,
+          });
+          break;
+        }
+        case 'baseUpgraded': {
+          // 마을이 한 단계 커졌다 — 외형 성장(3단계가 실제 구조물로 대체) + 흙먼지
+          this.baseHpMax = ev.hpMax;
+          s3.setBaseLevel(ev.level);
+          const ratio = ev.hp / Math.max(1, ev.hpMax);
+          s3.setBaseDamageLevel(ratio > 0.6 ? 0 : ratio > 0.3 ? 1 : 2);
+          audio.play('towerUpgrade');
+          this.buzz(30);
+          // 기지 좌표는 이벤트에 싣지 않았다 — 마을은 판에 하나뿐이고 렌더가 이미 안다
+          const w = s3.basecamp.group.position;
+          s3.particles.burst(w.x, 0.4, w.z, 0xd8c7a4, 16, 1.4, 0.09, 0.9, {
+            gravity: 3,
+            drag: 1.4,
+            upBias: 0.9,
+            sizeVar: 0.7,
+          });
+          s3.particles.ring(w.x, w.z, 0xffd8a0, 1.1);
           break;
         }
         case 'earlyCallBonus': {
@@ -650,7 +744,12 @@ export class FxRouter {
    * brazier 오라 펄스 / 화상·독 DoT의 불티. 별도 이벤트가 없으므로 피해 이벤트에
    * 편승하되, 배치당 개수를 제한해 4배속 다중 타격에서도 풀을 고갈시키지 않는다.
    */
-  private auraFleck(source: TowerId | StatusKind, amount: number, x: number, z: number): void {
+  private auraFleck(
+    source: TowerId | StatusKind | AllyId | HometownSourceId,
+    amount: number,
+    x: number,
+    z: number,
+  ): void {
     if (source !== 'brazier' && source !== 'burn' && source !== 'poison') return;
     if (this.auraFlecks >= 5 || this.stage3d.particles.load > 0.72) return;
     this.auraFlecks++;

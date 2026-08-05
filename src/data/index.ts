@@ -4,6 +4,8 @@
  */
 export * from './balance';
 export { ENEMY_DEFS, ALL_ENEMY_IDS, BOUNTY_PER_COST } from './enemies';
+export { ALLY_DEFS, ALL_ALLY_IDS } from './allies';
+export { BASE_LEVELS, BASE_LEVEL_MAX } from './hometown';
 export { TOWER_DEFS, ALL_TOWER_IDS } from './towers';
 export { makeWaveFor } from './wavegen';
 export { STAGES, stageById } from './stages';

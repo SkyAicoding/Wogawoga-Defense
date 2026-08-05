@@ -4,6 +4,7 @@
  */
 import * as THREE from 'three';
 import type {
+  AllyId,
   BattleSim,
   BattleUiApi,
   ResultSummary,
@@ -12,7 +13,7 @@ import type {
   TowerId,
 } from '@/data/types';
 import { TICK_DT } from '@/data/types';
-import { ENEMY_DEFS, TOWER_DEFS, makeWaveFor, ALL_TOWER_IDS } from '@/data';
+import { ALLY_DEFS, BASE_LEVELS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, ALL_TOWER_IDS } from '@/data';
 import { createBattle } from '@/sim/battle';
 import { FixedStepLoop } from '@/core/time';
 import { requestWakeLock } from '@/core/device';
@@ -100,10 +101,14 @@ export class BattleController {
       seed,
       towerDefs: TOWER_DEFS,
       enemyDefs: ENEMY_DEFS,
+      allyDefs: ALLY_DEFS,
+      baseLevels: BASE_LEVELS,
       waveFor: makeWaveFor(stage),
     });
 
     this.stage3d = build(stage, quality);
+    // 마을은 Lv1(움막 하나) 크기로 시작한다 — 레벨업 때마다 baseUpgraded가 키운다
+    this.stage3d.setBaseLevel(this.sim.state.baseLevel);
     // 지속 상태 표식(파괴 잔해 + 침묵 룬)은 sim 타워 배열을 직접 읽는다.
     // stage3d.update(dt)에서 돌아가므로 테스트 훅 stepFx()로도 시간이 흐른다.
     this.stage3d.towerStatus.setTowers(this.sim.state.towers);
@@ -123,7 +128,9 @@ export class BattleController {
       endless,
       profile.data.settings.vibration,
     );
-    this.fx.baseHpMax = stage.baseHp;
+    // 기지 최대 HP는 홈타운 Lv1 배율이 걸린 값이다 — stage.baseHp를 그대로 쓰면
+    // Lv1 hpMul이 1이 아닌 테이블에서 피해 외형 단계가 어긋난다 (레벨업 시 baseUpgraded가 갱신)
+    this.fx.baseHpMax = this.sim.state.baseHpMax;
     this.fx.towerCellLookup = (id) => {
       const t = this.sim.state.towers.find((tw) => tw.id === id);
       return t ? { x: t.cellX, z: t.cellZ } : null;
@@ -149,6 +156,11 @@ export class BattleController {
       selectedCard: () => self.placement.selectedCard(),
       selectedTower: () => self.placement.selectedTower(),
       selectedScenery: () => self.placement.selectedScenery(),
+      selectedBase: () => self.placement.selectedBase(),
+      requestUpgradeBase: () => {
+        // 성공하면 baseUpgraded 이벤트가 연출/외형을, 여기서 사거리 링을 갱신한다
+        if (self.sim.applyCommand({ type: 'upgradeBase' })) self.placement.refreshBaseSelection();
+      },
       requestClearScenery: () => {
         const c = self.placement.selectedScenery();
         if (!c) return;
@@ -158,10 +170,15 @@ export class BattleController {
       clearSelection: () => {
         self.placement.clearScenerySelection();
         self.placement.clearTowerSelection();
+        self.placement.clearBaseSelection();
       },
       requestSetTargeting: (mode: TargetingMode) => {
         const id = self.placement.selectedTower();
         if (id !== null) self.sim.applyCommand({ type: 'setTargeting', towerId: id, mode });
+      },
+      requestTrainAlly: (defId: AllyId) => {
+        // 경로는 sim이 결정론적으로 고른다 (allies.ts 규칙 1) — UI는 종만 고른다
+        if (self.sim.applyCommand({ type: 'trainAlly', defId })) audio.play('uiTap');
       },
       requestRefresh: () => {
         if (self.sim.applyCommand({ type: 'refreshHand' })) audio.play('cardRefresh');
@@ -284,9 +301,17 @@ export class BattleController {
     // 뷰 갱신 (보간)
     const dt = Math.min(0.1, ticks * TICK_DT + 0.0001);
     const s3 = this.stage3d;
-    s3.enemies.update(st.enemies, alpha, s3.cellToWorld, dt);
-    // 오버레이 인스턴스 한 메시 — 적/타워 체력바 + 파괴 잔해 + 침묵 룬 (드로우콜 1)
-    s3.healthbars.update(st.enemies, st.towers, alpha, s3.cellToWorld, s3.towerStatus.marks());
+    // 아군은 적 습격대와 같은 InstancedMesh에 얹혀 그려진다 (드로우콜 증가 0)
+    s3.enemies.update(st.enemies, alpha, s3.cellToWorld, dt, st.allies);
+    // 오버레이 인스턴스 한 메시 — 적/아군/타워 체력바 + 파괴 잔해 + 침묵 룬 (드로우콜 1)
+    s3.healthbars.update(
+      st.enemies,
+      st.towers,
+      alpha,
+      s3.cellToWorld,
+      s3.towerStatus.marks(),
+      st.allies,
+    );
     s3.projectiles.update(st.projectiles, alpha, dt);
     s3.towers.aim(st.towers, st.enemies, alpha);
     s3.update(dt);
@@ -448,6 +473,53 @@ export class BattleController {
       clearRubble: (x: number, z: number): void => {
         this.stage3d.towerStatus.clearCell(x, z);
       },
+      // 아군 출동 검증용 — 상한/골드 거부까지 그대로 밟는다
+      trainAlly: (defId: AllyId): boolean => {
+        const ok = this.sim.applyCommand({ type: 'trainAlly', defId });
+        this.processEvents();
+        return ok;
+      },
+      allyCost: (defId: AllyId): number => this.sim.allyCost(defId),
+      canTrainAlly: (defId: AllyId): boolean => this.sim.canTrainAlly(defId),
+      // 홈타운 방어/레벨업 검증용 — 최대 레벨·골드 부족 거부까지 그대로 밟는다
+      baseInfo: (): {
+        level: number;
+        levelMax: number;
+        hp: number;
+        hpMax: number;
+        range: number;
+        cost: number | null;
+        can: boolean;
+        cell: { x: number; z: number };
+      } => ({
+        level: this.sim.state.baseLevel,
+        levelMax: this.sim.state.baseLevelMax,
+        hp: this.sim.state.baseHp,
+        hpMax: this.sim.state.baseHpMax,
+        range: this.sim.baseRange(),
+        cost: this.sim.baseUpgradeCost(),
+        can: this.sim.canUpgradeBase(),
+        cell: { x: this.stage.baseCell.x, z: this.stage.baseCell.z },
+      }),
+      upgradeBase: (): boolean => {
+        const ok = this.sim.applyCommand({ type: 'upgradeBase' });
+        this.processEvents();
+        return ok;
+      },
+      selectedBase: (): boolean => this.api.selectedBase(),
+      damageBase: (n: number): void => {
+        // HP 처리 정책 검증용 — 누수를 기다리지 않고 기지에 상처를 낸다
+        (this.sim.state as { baseHp: number }).baseHp = Math.max(1, this.sim.state.baseHp - n);
+      },
+      allies: (): { id: number; defId: AllyId; hp: number; x: number; z: number; targetId: number }[] =>
+        this.sim.state.allies.map((a) => ({
+          id: a.id,
+          defId: a.defId,
+          hp: a.hp,
+          x: a.x,
+          z: a.z,
+          targetId: a.targetId,
+        })),
       setGold: (g: number): void => {
         // 골드 부족/충분 분기 검증용 — 테스트 모드에서만 노출된다
         (this.sim.state as { gold: number }).gold = g;

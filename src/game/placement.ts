@@ -1,8 +1,12 @@
 /**
  * 배치/선택 입력 — 탭·호버를 셀 좌표로 변환해 시뮬레이션 커맨드로.
  * 카드 선택 → 슬롯 발광 + 고스트 프리뷰 → 탭 배치.
- * 타워 탭 → 선택 + 사거리 링. 소품(나무·바위) 탭 → 선택 + 링(제거 패널).
+ * 타워 탭 → 선택 + 사거리 링. 홈타운(기지 셀) 탭 → 선택 + 사거리 링(레벨업 패널).
+ * 소품(나무·바위) 탭 → 선택 + 링(제거 패널).
  * 빈 곳 탭 / 같은 대상 재탭 → 해제. 카드 선택 중에는 배치 흐름이 우선이다.
+ *
+ * 셋(타워·홈타운·소품)은 상호배타다. 기지 셀은 경로 셀이라 타워가 설 수 없으므로
+ * 타워와 겹칠 일이 없고, 소품도 건설 가능 셀에만 놓이므로 겹치지 않는다.
  */
 import * as THREE from 'three';
 import type { BattleSim, StageDef, TowerId, Vec2 } from '@/data/types';
@@ -24,6 +28,8 @@ export class PlacementController {
   private selectedTowerId: number | null = null;
   /** 탭해서 고른 소품 셀 (제거 패널 대상) */
   private selectedSceneryCell: Vec2 | null = null;
+  /** 홈타운(기지 셀)이 선택되어 있는가 — 레벨업 패널 대상 */
+  private baseSelected = false;
   private ghostCell: { x: number; z: number } | null = null;
 
   constructor(
@@ -109,14 +115,29 @@ export class PlacementController {
     this.selectAt(cell);
   }
 
-  /** 셀 하나에 대한 선택 규칙 — 타워 > 소품 > 해제 (셋은 상호배타) */
+  /** 셀 하나에 대한 선택 규칙 — 타워 > 홈타운 > 소품 > 해제 (셋은 상호배타) */
   private selectAt(cell: { x: number; z: number } | null): void {
     // 타워 선택/해제
     const tower = cell ? this.sim.towerAt(cell.x, cell.z) : null;
     if (tower) {
       this.clearScenerySelection();
+      this.clearBaseSelection();
       this.selectedTowerId = tower.id;
       this.showRangeFor(tower.id);
+      audio.play('uiTap');
+      return;
+    }
+    // 홈타운(기지 셀) 선택/해제 — 같은 셀을 다시 탭하면 닫힌다
+    const bc = this.stage.baseCell;
+    if (cell && cell.x === bc.x && cell.z === bc.z) {
+      if (this.baseSelected) {
+        this.clearBaseSelection();
+        return;
+      }
+      this.clearTowerSelection();
+      this.clearScenerySelection();
+      this.baseSelected = true;
+      this.showBaseRange();
       audio.play('uiTap');
       return;
     }
@@ -128,6 +149,7 @@ export class PlacementController {
         return;
       }
       this.clearTowerSelection();
+      this.clearBaseSelection();
       this.selectedSceneryCell = { x: cell.x, z: cell.z };
       // 소품은 셀 중심에서 흩어져 있다 — 링을 실제 밑동에 맞춘다
       const off = this.stage3d.sceneryOffset(cell.x, cell.z);
@@ -138,6 +160,13 @@ export class PlacementController {
     // 빈 곳 탭 → 전부 해제
     if (this.selectedTowerId !== null) this.clearTowerSelection();
     if (this.selectedSceneryCell !== null) this.clearScenerySelection();
+    if (this.baseSelected) this.clearBaseSelection();
+  }
+
+  /** 홈타운 사거리 링 — 레벨업으로 사거리가 늘면 그 자리에서 넓어지는 게 보인다 */
+  private showBaseRange(): void {
+    const bc = this.stage.baseCell;
+    this.stage3d.decals.showRange(bc.x, bc.z, this.sim.baseRange());
   }
 
   private showRangeFor(towerId: number): void {
@@ -160,6 +189,7 @@ export class PlacementController {
     if (index !== null) {
       this.clearTowerSelection();
       this.clearScenerySelection();
+      this.clearBaseSelection();
     }
   }
 
@@ -173,6 +203,21 @@ export class PlacementController {
 
   selectedScenery(): Vec2 | null {
     return this.selectedSceneryCell;
+  }
+
+  selectedBase(): boolean {
+    return this.baseSelected;
+  }
+
+  clearBaseSelection(): void {
+    if (!this.baseSelected) return;
+    this.baseSelected = false;
+    this.stage3d.decals.hideRange();
+  }
+
+  /** 레벨업 후 사거리 링 갱신 — 선택 중이 아니면 아무 일도 하지 않는다 */
+  refreshBaseSelection(): void {
+    if (this.baseSelected) this.showBaseRange();
   }
 
   clearScenerySelection(): void {

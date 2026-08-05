@@ -5,14 +5,17 @@
  * ?model=towers 로 타워만 8행(종) × 5열(티어) — 등급 성장 비교 전용 격자.
  * ?yaw=0.9 로 회전을 고정(라디안) — 개선 전/후 동일 앵글 비교 캡처용.
  * ?camyaw=0 으로 카메라 방위 고정 — 한 줄 배치를 정면으로 받아 화면을 꽉 채울 때 쓴다.
+ * ?spacing=3.6 으로 격자 간격 조절 — 마을처럼 큰 모델이 서로 겹칠 때.
+ * ?model=hometown1..5 로 마을 한 레벨만 확대.
  */
 import * as THREE from 'three';
-import type { EnemyId, TowerId } from '@/data/types';
+import type { AllyId, EnemyId, TowerId } from '@/data/types';
+import { ALL_ALLY_IDS } from '@/data/allies';
 import { flatMat, glowMat } from '@/render/palette';
-import { ALL_ENEMY_IDS, buildEnemySolo } from '@/render/meshlib/enemies';
+import { ALL_ENEMY_IDS, buildAllySolo, buildEnemySolo } from '@/render/meshlib/enemies';
 import { assembleTower, buildTower, towerTierScale } from '@/render/meshlib/towers';
 import { PROJECTILE_TOWERS, buildProjectile } from '@/render/meshlib/projectiles';
-import { createBasecamp } from '@/render/meshlib/basecamp';
+import { BASECAMP_LAYER_COUNT, createBasecamp } from '@/render/meshlib/basecamp';
 
 const TOWER_IDS: readonly TowerId[] = [
   'spear', 'catapult', 'lightning', 'brazier', 'frost', 'poison', 'ballista', 'drum',
@@ -48,6 +51,34 @@ function enemyItem(id: EnemyId): Item {
   });
 }
 
+function allyItem(id: AllyId): Item {
+  return makeItem(`ally:${id}`, (g) => {
+    const mesh = new THREE.Mesh(buildAllySolo(id), flatMat());
+    mesh.castShadow = true;
+    g.add(mesh);
+  });
+}
+
+/** 마을 레벨 1~5를 한 줄로 — 구조물이 쌓이는지 나란히 비교한다 */
+function hometownItem(level: number): Item {
+  return makeItem(`마을 Lv${level}`, (g) => {
+    const camp = createBasecamp();
+    camp.setLevel(level, BASECAMP_LAYER_COUNT);
+    camp.setDamageLevel(0);
+    g.add(camp.group);
+  });
+}
+
+/** 같은 레벨의 피해 3단계 (온전/파손/반파) */
+function hometownDamageItem(level: number, dmg: 0 | 1 | 2): Item {
+  return makeItem(`Lv${level} 피해${dmg}`, (g) => {
+    const camp = createBasecamp();
+    camp.setLevel(level, BASECAMP_LAYER_COUNT);
+    camp.setDamageLevel(dmg);
+    g.add(camp.group);
+  });
+}
+
 /** 열 수를 강제하는 축약 갤러리 — 없으면 화면 비율로 자동 계산 */
 const GROUPS: Record<string, { cols: number; build: () => Item[] }> = {
   enemies: { cols: 0, build: () => ALL_ENEMY_IDS.map(enemyItem) },
@@ -56,6 +87,21 @@ const GROUPS: Record<string, { cols: number; build: () => Item[] }> = {
     cols: 4,
     build: () => (['blade', 'lancer', 'archer', 'hexer'] as EnemyId[]).map(enemyItem),
   },
+  // 아군 3종 + 적 습격대 4종을 한 줄로 — **아군/적 구분이 서는지**가 이 줄의 목적이다
+  tribes: {
+    cols: 7,
+    build: () => [
+      ...ALL_ALLY_IDS.map(allyItem),
+      ...(['blade', 'lancer', 'archer', 'hexer'] as EnemyId[]).map(enemyItem),
+    ],
+  },
+  allies: { cols: 3, build: () => ALL_ALLY_IDS.map(allyItem) },
+  hometown: { cols: 5, build: () => [1, 2, 3, 4, 5].map(hometownItem) },
+  hometownDamage: {
+    cols: 3,
+    build: () =>
+      [1, 3, 5].flatMap((lv) => ([0, 1, 2] as const).map((d) => hometownDamageItem(lv, d))),
+  },
   // 한 행 = 한 종, 왼→오 = T1→T5. 등급 성장을 나란히 읽는 격자.
   towers: { cols: 5, build: () => TOWER_IDS.flatMap((id) => [0, 1, 2, 3, 4].map((t) => towerItem(id, t))) },
 };
@@ -63,6 +109,9 @@ const GROUPS: Record<string, { cols: number; build: () => Item[] }> = {
 function buildItems(filter: string | null): Item[] {
   const group = filter === null ? undefined : GROUPS[filter];
   if (group) return group.build();
+  // ?model=hometown3 — 마을 한 레벨만 (단일 모드로 확대된다)
+  const one = filter?.match(/^hometown([1-9])$/);
+  if (one) return [hometownItem(Number(one[1]))];
   let items: Item[] = [
     ...ALL_ENEMY_IDS.map(enemyItem),
     ...TOWER_IDS.flatMap((id) => [0, 1, 2, 3, 4].map((t) => towerItem(id, t))),
@@ -125,7 +174,8 @@ export function run(): void {
     : fixedCols > 0
       ? fixedCols
       : Math.max(3, Math.min(10, Math.round(Math.sqrt(items.length * aspect0 * 1.4))));
-  const spacing = 2.6;
+  const spacingParam = Number(params.get('spacing'));
+  const spacing = Number.isFinite(spacingParam) && spacingParam > 0 ? spacingParam : 2.6;
   const rows = Math.ceil(items.length / cols);
   const world = new THREE.Group();
   scene.add(world);

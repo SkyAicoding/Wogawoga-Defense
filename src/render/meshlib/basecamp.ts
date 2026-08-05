@@ -1,16 +1,46 @@
 /**
- * 기지(아군 원시부족 마을) — 큰 돌 화덕 모닥불을 중심으로 가죽 움막·짚 움막·
- * 가죽 차양, 뼈/나무 목책, 토템 기둥, 가죽 건조대, 항아리·바구니, 사냥 도구
- * 더미, 통나무 의자, 고기 굽는 꼬치대, 뼈 아치 입구가 둘러싼 디오라마.
+ * 기지(아군 원시부족 마을) — **레벨이 오를수록 구조물이 쌓이는** 디오라마.
  *
- * 피해 단계(0=온전 / 1=파손 / 2=반파)별 배리에이션을 미리 만들어 visible 토글.
- * 세 배리에이션 모두 상주하지만 그려지는 건 항상 1개(메시 2개 = 드로우콜 2).
- * 연기 강도 등 동적 연출은 파티클 훅(smokeLevel)으로 상위에서 처리.
+ * ── 성장 규칙: 쌓인다, 바뀌지 않는다 ──────────────────────────────────────
+ * 타워 티어 언어와 같은 원칙이다. 레벨업은 있던 것을 치우고 새 것을 놓는 게 아니라
+ * **더한다**. 그래서 Lv5 마을 안에는 Lv1 때 지은 그 움막이 그대로 서 있고,
+ * 플레이어가 자기가 지은 것의 역사를 화면에서 읽을 수 있다.
  *
- * 좌표 규약: 모닥불이 로컬 원점, 마을 구조물은 -z(뒤편)에 배치.
- * fireOffset(0,0.5,0)은 파티클 스폰 위치이므로 화덕을 원점에서 옮기지 말 것.
+ *   Lv1 움막 하나 + 화톳불 + 사수 발판
+ *   Lv2 + 모닥불(정식 화덕·꼬치대·통나무 의자) + 목책 + 짚 움막 + 가죽 건조대
+ *   Lv3 + 망루(사수 발판이 2층으로 올라선다) + 토템 + 차양 작업장 + 사냥 도구
+ *   Lv4 + 돌담(목책 밑동을 돌로 받친다) + 깃발 + 뼈 아치 입구 + 항아리
+ *   Lv5 + 큰 장옥 + 망루 꼭대기층·깃발 + 두개골 말뚝
+ *
+ * ── 쏘는 지점 = 마을 한복판의 사수 발판 (구조를 강제하는 제약) ─────────────
+ * sim이 쏘는 화살은 **기지 셀 중심의 y=0.6**에서 출발한다(sim/hometown.ts ARROW_Y).
+ * 그 좌표는 이 모델의 로컬 원점이다. 그래서 원점에는 반드시 "사람이 올라서서 쏘는
+ * 자리"가 있어야 하고, 그 발판 높이도 0.6에 맞춰야 화살이 난간 위에서 떠난다.
+ * → WATCH_DECK_Y = 0.6. Lv3에서 망루가 올라서도 **아래 발판은 그 높이에 남고**
+ *   위층이 얹힌다. 화살은 언제나 아래 발판에서 나간다.
+ * 그 대가로 모닥불이 원점을 비켜 앉는다(HEARTH). fireOffset이 파티클 스폰을
+ * 화덕 위치로 옮겨 주므로 연기는 그대로 화덕에서 피어오른다.
+ *
+ * ── 반경: 바닥판(ground) ≤ 1.45 ───────────────────────────────────────────
+ * 기지 셀은 맵 가장자리에서 1칸 안쪽이라 어느 방향이든 1.5를 넘으면 흙바닥이
+ * 허공으로 삐져나온다(stage3은 -z가 낭떠러지). 그래서 마을은 커질수록 **넓어지는 게
+ * 아니라 빽빽해진다** — 구조물을 반경 1.0 고리에 슬롯으로 앉히고, 레벨이 오르면
+ * 빈 슬롯을 채우고 있던 것 위에 층을 얹는다.
+ * 2단계까지의 모델은 전체 반경이 1.839(반파 1.991)로 바닥판 밖까지 나가 있었다.
+ * 이번 재배치로 **구조물도 전부 바닥판 안**에 들어온다(tests/render/basecamp.test.ts).
+ *
+ * ── 피해 단계(0=온전 / 1=파손 / 2=반파) ───────────────────────────────────
+ * 레벨과 직교한다. 레벨 L·피해 d 조합은 5×3 = 15가지인데, 통째로 15벌을 구우면
+ * 콜드 빌드가 24ms × 15 = 360ms다. 그래서 **레벨 레이어별로 굽고 병합**한다:
+ *   layer(L, d) = 레벨 L에서 **새로 더해지는** 파트만 구운 지오메트리
+ *   camp(L, d)  = merge(layer(1..L, d))        ← 프리미티브 재생성 없는 memcpy
+ * 진입 때는 Lv1 레이어 3벌(≈15ms)만 굽고, 레벨업 때 그 레벨 레이어 3벌만 더 굽는다.
+ * (AO는 조각마다 자기 높이로 정규화하면 층간 음영이 어긋나므로 aoRange로 고정한다)
+ *
+ * 그려지는 메시는 레벨·피해와 무관하게 **항상 2개**(본체 + 발광 불꽃) = 드로우콜 2.
  */
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { C, flatMat, glowMat } from '../palette';
 import { buildParts, type PartSpec } from './factory';
 
@@ -18,14 +48,63 @@ export interface Basecamp {
   group: THREE.Group;
   /** 0=온전 / 1=파손 / 2=반파 */
   setDamageLevel(level: 0 | 1 | 2): void;
+  /**
+   * 홈타운 레벨 반영 (level·maxLevel 모두 1-base).
+   * 레벨 → 레이어를 비율로 사상하므로 BASE_LEVELS 길이가 바뀌어도 양끝이 맞는다.
+   */
+  setLevel(level: number, maxLevel: number): void;
   /** 파티클 훅용: 현재 연기 강도 0~2 */
   readonly smokeLevel: () => number;
-  /** 모닥불 월드 오프셋 (파티클 스폰 위치) */
+  /**
+   * 모닥불 월드 오프셋 (파티클 스폰 위치).
+   * 화덕이 원점이 아니라 HEARTH 슬롯에 있으므로 x/z가 0이 아니다 —
+   * 이 값을 쓰지 않고 group.position 만 쓰면 연기가 망루에서 피어오른다.
+   */
   fireOffset: THREE.Vector3;
   dispose(): void;
 }
 
-type Lv = 0 | 1 | 2;
+/** 피해 단계 */
+type Dmg = 0 | 1 | 2;
+
+/** 화살이 떠나는 높이 = 아래 발판 높이 (sim/hometown.ts ARROW_Y와 같은 값) */
+const WATCH_DECK_Y = 0.6;
+/** Lv3 망루 위층 데크 높이 */
+const WATCH_UPPER_Y = 1.14;
+/**
+ * 망루 난간 윗선 — Lv5 깃대가 여기서 시작한다 (둘이 어긋나면 깃발이 공중에 뜬다).
+ *
+ * ⚠ 망루에 **지붕을 씌우지 않은** 이유: 카메라가 55° 부감이라 데크 위에 지붕을 얹으면
+ * 위에서 보이는 건 지붕뿐이고 난간·발판이 통째로 가려진다. 실제로 처음엔 4각뿔 지붕을
+ * 얹었는데 캡처에서 망루가 아니라 **정자(亭子)** 로 읽혔다. 지금은 뒤편에만 가죽 차양을
+ * 달아 비를 가리는 시늉을 하고 데크는 하늘로 열어 둔다 — 위에서 "사람이 서는 자리"가 보인다.
+ */
+const WATCH_RAIL_Y = WATCH_UPPER_Y + 0.3;
+
+/**
+ * AO 정규화 높이 구간 — 레벨 레이어를 따로 굽고 합치므로 전 레이어가 같은 자를 써야 한다.
+ * 상한은 Lv5 망루 꼭대기(≈1.8)에 여유를 준 값.
+ */
+const AO_RANGE: [number, number] = [0, 2.2];
+const AO_STRENGTH = 0.16;
+
+// --- 구조물 슬롯 -----------------------------------------------------------
+/**
+ * 반경 1.0 고리 위의 8슬롯 + 중앙. 마을이 커져도 **바깥으로 번지지 않게** 하는 장치다.
+ * 각 구조물의 자체 반경이 0.45를 넘지 않으므로 어느 슬롯도 1.45를 넘지 않는다.
+ */
+const HEARTH: [number, number] = [-0.54, 0.54]; // 135° 모닥불
+const HUT_A: [number, number] = [-0.58, -0.54]; // 225° 가죽 움막 (Lv1)
+const HUT_B: [number, number] = [0.02, -0.86]; // 270° 짚 움막
+const LEANTO: [number, number] = [0.66, -0.6]; // 315° 차양 작업장
+const HALL: [number, number] = [0.86, 0.04]; // 0°   큰 장옥
+const TOTEM: [number, number] = [0.36, 0.68]; // 45°  토템 (입구 옆)
+const RACK: [number, number] = [-0.9, -0.02]; // 180° 가죽 건조대
+const ARCH_Z = 0.92; // 90°  뼈 아치 입구
+/** 목책 호의 반경 — 말뚝 머리까지 바닥판(1.45) 안에 들어오는 값 */
+const WALL_R = 1.28;
+/** 마을 전체가 넘어서는 안 되는 반경 (tests/render/basecamp.test.ts가 잠근다) */
+export const BASECAMP_MAX_RADIUS = 1.45;
 
 /** 색 명도 배율 — 같은 계열 안에서 면을 나눠 각진 결/그을음을 표현 */
 function shade(hex: number, f: number): number {
@@ -36,8 +115,8 @@ function shade(hex: number, f: number): number {
 }
 
 /** 피해 단계별 그을림 — 반파일수록 어둡고 탁하게 */
-function soot(hex: number, lv: Lv): number {
-  return lv === 0 ? hex : shade(hex, lv === 1 ? 0.84 : 0.66);
+function soot(hex: number, d: Dmg): number {
+  return d === 0 ? hex : shade(hex, d === 1 ? 0.84 : 0.66);
 }
 
 /** 뒤집힌 원뿔 = 밑동 플레어 / 항아리 목 / 갓 테두리 */
@@ -59,176 +138,400 @@ function post(
   return { kind: 'cyl', pos: [x, y, z], rot, scale: [r, h, r], color, seg };
 }
 
-// --- 화덕 -----------------------------------------------------------------
+/** 가로 들보 (x축 방향 통나무) */
+function beam(x: number, y: number, z: number, len: number, r: number, color: number, yaw = 0): PartSpec {
+  return {
+    kind: 'cyl',
+    pos: [x, y, z],
+    rot: [0, yaw, Math.PI / 2],
+    scale: [r, len, r],
+    color,
+    seg: 4,
+  };
+}
 
-const HEARTH_R = 0.46;
+// --- Lv1: 흙바닥 · 움막 · 화톳불 · 사수 발판 --------------------------------
 
-/** 마을 전체가 올라앉는 다진 흙바닥 — 소품 더미가 아니라 '정착지'로 읽히게 한다 */
-function ground(lv: Lv): PartSpec[] {
-  // 겹친 원반 4장으로 원형이 아닌 불규칙 윤곽을 만든다 (타일 상면 y≈0 위로 살짝)
-  const dirt = lv === 2 ? 0x827058 : 0x9c8259;
+/**
+ * 마을이 올라앉는 다진 흙바닥. 레벨마다 원반을 덧대 **넓어지는 게 보이게** 한다.
+ * 어떤 레벨에서도 hypot(중심, 반경) ≤ 1.45 를 넘지 않는다 (헤더의 바닥판 제약).
+ */
+function groundL1(d: Dmg): PartSpec[] {
+  const dirt = d === 2 ? 0x827058 : 0x9c8259;
   return [
-    { kind: 'cyl', pos: [0, 0.024, -0.15], scale: [2.2, 0.045, 2.2], color: dirt, seg: 12, hueJitter: 0.02 },
-    { kind: 'cyl', pos: [0.52, 0.026, 0.52], scale: [1.3, 0.048, 1.3], color: shade(dirt, 1.07), seg: 9, hueJitter: 0.02 },
-    { kind: 'cyl', pos: [-0.86, 0.026, 0.3], scale: [1.08, 0.048, 1.08], color: shade(dirt, 0.93), seg: 8, hueJitter: 0.02 },
-    // 기지 셀은 맵 가장자리에서 1칸 안쪽이라 어느 방향이든 반경 1.45를 넘으면
-    // 흙바닥이 허공으로 삐져나온다 (stage3은 -z가 낭떠러지) — 넘지 않게 유지할 것
-    { kind: 'cyl', pos: [-0.15, 0.026, -0.95], scale: [0.95, 0.048, 0.95], color: shade(dirt, 1.03), seg: 8, hueJitter: 0.02 },
+    // Lv1은 움막·화톳불·발판만 덮는 작은 터 — 마을이 아니라 '자리를 잡은 집 한 채'
+    { kind: 'cyl', pos: [-0.2, 0.024, -0.14], scale: [2.1, 0.045, 2.1], color: dirt, seg: 11, hueJitter: 0.02 },
+    { kind: 'cyl', pos: [-0.34, 0.026, 0.44], scale: [1.0, 0.048, 1.0], color: shade(dirt, 1.06), seg: 8, hueJitter: 0.02 },
   ];
 }
 
-/** 돌 화덕 + 재 원반 + 장작 + 잉걸 */
-function hearth(lv: Lv): PartSpec[] {
-  const stone = lv === 2 ? 0x5a5450 : C.stone;
-  const parts: PartSpec[] = [
-    { kind: 'ico', pos: [0, 0.03, 0], rot: [0, 0.3, 0], scale: [1.05, 0.05, 1.05], color: 0x7d6742, hueJitter: 0.02 },
-    { kind: 'cyl', pos: [0, 0.06, 0], scale: [0.62, 0.05, 0.62], color: lv === 2 ? 0x3a3430 : 0x4e463e, seg: 8 },
+function groundL2(d: Dmg): PartSpec[] {
+  const dirt = d === 2 ? 0x827058 : 0x9c8259;
+  return [
+    // 목책을 두르며 뒤편이 넓어진다
+    { kind: 'cyl', pos: [0.0, 0.024, -0.42], scale: [1.96, 0.044, 1.96], color: shade(dirt, 0.96), seg: 10, hueJitter: 0.02 },
+    { kind: 'cyl', pos: [-0.78, 0.026, 0.06], scale: [1.24, 0.047, 1.24], color: shade(dirt, 1.03), seg: 8, hueJitter: 0.02 },
   ];
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2 + 0.2;
+}
+
+function groundL3(d: Dmg): PartSpec[] {
+  const dirt = d === 2 ? 0x827058 : 0x9c8259;
+  return [
+    { kind: 'cyl', pos: [0.56, 0.025, -0.3], scale: [1.6, 0.046, 1.6], color: shade(dirt, 1.05), seg: 9, hueJitter: 0.02 },
+  ];
+}
+
+function groundL4(d: Dmg): PartSpec[] {
+  const dirt = d === 2 ? 0x827058 : 0x9c8259;
+  return [
+    { kind: 'cyl', pos: [0.1, 0.026, 0.42], scale: [1.86, 0.048, 1.86], color: shade(dirt, 1.08), seg: 9, hueJitter: 0.02 },
+    // 입구 진입로 — 아치 아래로 이어지는 밟아 다진 길
+    { kind: 'box', pos: [0, 0.03, 0.92], rot: [0, 0.06, 0], scale: [0.62, 0.05, 0.86], color: shade(dirt, 1.12) },
+  ];
+}
+
+function groundL5(d: Dmg): PartSpec[] {
+  const dirt = d === 2 ? 0x827058 : 0x9c8259;
+  return [
+    { kind: 'cyl', pos: [0.66, 0.027, 0.04], scale: [1.54, 0.05, 1.54], color: shade(dirt, 1.02), seg: 8, hueJitter: 0.02 },
+  ];
+}
+
+/**
+ * Lv1 화톳불 — 돌 몇 개로 두른 작은 불자리.
+ * Lv2 의 정식 화덕은 이걸 **치우지 않고 둘러싼다**(바깥 돌·장작·꼬치대를 더한다).
+ */
+function emberPit(d: Dmg): PartSpec[] {
+  const [x, z] = HEARTH;
+  const stone = d === 2 ? 0x5a5450 : C.stone;
+  const parts: PartSpec[] = [
+    { kind: 'cyl', pos: [x, 0.05, z], scale: [0.44, 0.05, 0.44], color: d === 2 ? 0x3a3430 : 0x4e463e, seg: 7 },
+  ];
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 + 0.3;
     parts.push({
       kind: 'ico',
-      pos: [Math.cos(a) * HEARTH_R, 0.09, Math.sin(a) * HEARTH_R],
+      pos: [x + Math.cos(a) * 0.3, 0.075, z + Math.sin(a) * 0.3],
       rot: [i * 0.7, i * 1.3, i * 0.4],
-      scale: [0.21, 0.18, 0.19],
+      scale: [0.17, 0.15, 0.16],
       color: i % 2 ? stone : shade(stone, 0.86),
       hueJitter: 0.012,
     });
   }
-  const logColor = lv === 2 ? 0x2e2622 : C.woodDark;
+  const logColor = d === 2 ? 0x2e2622 : C.woodDark;
   parts.push(
-    post(0, 0.1, 0, 0.09, 0.52, logColor, 5, [0, 0.5, 1.35]),
-    post(0, 0.12, 0, 0.09, 0.5, shade(logColor, 0.8), 5, [1.35, 0.9, 0]),
-  );
-  if (lv < 2) parts.push(post(0.02, 0.14, -0.02, 0.08, 0.46, shade(logColor, 1.15), 5, [0.7, 2.1, 0.9]));
-  parts.push(
-    { kind: 'ico', pos: [-0.12, 0.07, 0.1], scale: [0.14, 0.08, 0.13], color: lv === 2 ? 0x6a3a20 : C.ember },
-    { kind: 'ico', pos: [0.13, 0.06, -0.09], scale: [0.11, 0.07, 0.1], color: lv === 2 ? 0x5a3018 : 0xff7a28 },
+    post(x, 0.09, z, 0.075, 0.4, logColor, 5, [0, 0.5, 1.35]),
+    { kind: 'ico', pos: [x - 0.08, 0.06, z + 0.07], scale: [0.12, 0.07, 0.11], color: d === 2 ? 0x6a3a20 : C.ember },
   );
   return parts;
 }
 
-/** 발광 불꽃 — 피해가 클수록 모닥불은 작아지고 잔해에 불길이 붙는다 */
-function flames(lv: Lv): PartSpec[] {
-  const s = lv === 0 ? 1 : lv === 1 ? 0.76 : 0.48;
-  const parts: PartSpec[] = [
-    { kind: 'cone', pos: [0, 0.32 * s + 0.1, 0], scale: [0.4 * s, 0.64 * s, 0.4 * s], color: C.fire, seg: 6 },
-    { kind: 'cone', pos: [0.04, 0.26 * s + 0.1, 0.03], scale: [0.25 * s, 0.44 * s, 0.25 * s], color: 0xffd24a, seg: 5 },
+/**
+ * 사수 발판 (Lv1) — 마을 한복판, 로컬 원점.
+ * 통나무 네 기둥 + 발판 + 활·화살 거치대. **화살은 이 발판 높이에서 떠난다.**
+ * Lv3 망루는 이 발판을 그대로 두고 위로 층을 올린다.
+ */
+function watchDeck(d: Dmg): PartSpec[] {
+  const wood = soot(C.wood, d);
+  const woodD = soot(C.woodDark, d);
+  const y = WATCH_DECK_Y;
+  const s = 0.27; // 기둥 반칸
+  const parts: PartSpec[] = [];
+  // 네 기둥 — 반파에서는 한 짝이 부러져 발판이 기운다
+  const legs: [number, number][] = [
+    [s, s],
+    [-s, s],
+    [s, -s],
+    [-s, -s],
   ];
-  if (lv === 0) {
+  legs.forEach(([lx, lz], i) => {
+    if (d === 2 && i === 3) {
+      parts.push(post(lx - 0.16, 0.05, lz - 0.12, 0.075, y * 0.8, woodD, 4, [0.5, 0.8, 1.4]));
+      return;
+    }
+    const tilt = d === 1 && i === 1 ? 0.09 : 0;
+    // 굵고 어두운 통나무 다리 — 밝은 흙바닥 위에서 구조가 먼저 읽힌다
+    parts.push(post(lx, y * 0.5, lz, 0.075, y, woodD, 4, [tilt, 0, tilt]));
+  });
+  // X 가새 — "망대"의 결정적 신호. 좌우 두 면에만 넣어 실루엣을 어지럽히지 않는다
+  if (d < 2) {
+    for (const sx of [s, -s]) {
+      parts.push(
+        { kind: 'box', pos: [sx, y * 0.5, 0], rot: [0.86, 0, 0], scale: [0.045, 0.045, y * 0.86], color: wood },
+        { kind: 'box', pos: [sx, y * 0.5, 0], rot: [-0.86, 0, 0], scale: [0.045, 0.045, y * 0.86], color: shade(wood, 0.88) },
+      );
+    }
+  }
+  // 발판 (판자 3장) — 화살이 떠나는 면
+  const deckY = d === 2 ? y - 0.1 : y;
+  const deckTilt = d === 2 ? 0.16 : d === 1 ? 0.05 : 0;
+  for (let i = 0; i < 3; i++) {
+    parts.push({
+      kind: 'box',
+      pos: [0, deckY + 0.02 - i * 0.005, -0.22 + i * 0.22],
+      rot: [deckTilt * 0.6, 0, deckTilt],
+      scale: [0.66, 0.055, 0.19],
+      color: i % 2 ? shade(wood, 1.12) : wood,
+      hueJitter: 0.02,
+    });
+  }
+  // 앞쪽 낮은 난간 — 사수가 몸을 기대는 자리
+  if (d < 2) {
     parts.push(
-      { kind: 'cone', pos: [-0.19, 0.26, 0.13], rot: [0, 0, 0.42], scale: [0.16, 0.36, 0.16], color: C.ember, seg: 4 },
-      { kind: 'cone', pos: [0.2, 0.24, -0.14], rot: [0, 0, -0.4], scale: [0.14, 0.32, 0.14], color: 0xffb43a, seg: 4 },
+      post(0.3, deckY + 0.16, 0.28, 0.045, 0.3, woodD, 4),
+      post(-0.3, deckY + 0.16, 0.28, 0.045, 0.3, woodD, 4),
+      beam(0, deckY + 0.29, 0.28, 0.66, 0.04, shade(wood, 1.15)),
     );
   }
-  if (lv === 2) {
-    // 무너진 움막 잔해에 붙은 불
+  // 활·화살 거치대 (발판 뒤편에 세워 둔다 — 실루엣에서 '쏘는 자리'를 만드는 물건)
+  const bone = soot(C.bone, d);
+  parts.push(
+    post(-0.24, deckY + 0.22, -0.28, 0.032, 0.42, woodD, 4, [0, 0, 0.12]),
+    // 활 — 세로로 걸어 둔 활대 (호 3마디)
+    { kind: 'cyl', pos: [-0.28, deckY + 0.34, -0.28], rot: [0, 0, 0.5], scale: [0.028, 0.3, 0.028], color: bone, seg: 4 },
+    { kind: 'cyl', pos: [-0.2, deckY + 0.34, -0.28], rot: [0, 0, -0.5], scale: [0.028, 0.3, 0.028], color: bone, seg: 4 },
+    { kind: 'cyl', pos: [-0.24, deckY + 0.45, -0.28], scale: [0.026, 0.16, 0.026], color: bone, seg: 4 },
+  );
+  if (d < 2) {
+    // 화살통 — 발판 위에 꽂아 둔 화살 다발
     parts.push(
-      { kind: 'cone', pos: [-0.86, 0.24, -0.46], scale: [0.19, 0.36, 0.19], color: C.ember, seg: 4 },
-      { kind: 'cone', pos: [-1.04, 0.18, -0.62], scale: [0.13, 0.26, 0.13], color: C.fire, seg: 4 },
-      { kind: 'cone', pos: [0.3, 0.16, -1.0], scale: [0.12, 0.24, 0.12], color: 0xffb43a, seg: 4 },
+      { kind: 'cyl', pos: [0.24, deckY + 0.12, -0.24], scale: [0.13, 0.2, 0.13], color: soot(C.hideDark, d), seg: 5 },
+      { kind: 'cone', pos: [0.22, deckY + 0.3, -0.26], rot: [0.1, 0, 0.1], scale: [0.026, 0.24, 0.026], color: bone, seg: 4 },
+      { kind: 'cone', pos: [0.27, deckY + 0.29, -0.21], rot: [-0.12, 0, -0.08], scale: [0.026, 0.22, 0.026], color: shade(bone, 0.9), seg: 4 },
     );
+  }
+  // 오르는 사다리 (뒤쪽)
+  parts.push(
+    post(-0.12, deckY * 0.5, -0.4, 0.03, deckY + 0.1, wood, 4, [0.26, 0, 0]),
+    post(0.12, deckY * 0.5, -0.4, 0.03, deckY + 0.1, wood, 4, [0.26, 0, 0]),
+  );
+  for (let i = 0; i < 3; i++) {
+    parts.push(beam(0, 0.16 + i * 0.18, -0.44 + i * 0.045, 0.26, 0.022, woodD));
   }
   return parts;
 }
 
-// --- 움막 -----------------------------------------------------------------
-
-const HUT_A: [number, number] = [-0.84, -0.46];
-const HUT_B: [number, number] = [0.26, -0.92];
-const HUT_C: [number, number] = [0.98, -0.2];
-
-/** 가죽 돔 움막 (마을에서 가장 큰 집) */
-function hideHut(lv: Lv): PartSpec[] {
+/** 가죽 돔 움막 (Lv1 — 마을이 시작된 그 집) */
+function hideHut(d: Dmg): PartSpec[] {
   const [x, z] = HUT_A;
-  const hide = soot(C.hide, lv);
-  const hideD = soot(C.hideDark, lv);
-  const wood = soot(C.woodDark, lv);
+  const hide = soot(C.hide, d);
+  const hideD = soot(C.hideDark, d);
+  const wood = soot(C.woodDark, d);
 
-  if (lv === 2) {
+  if (d === 2) {
     // 붕괴 + 불타는 잔해
     return [
-      { kind: 'ico', pos: [x, 0.09, z], rot: [0.3, 0.5, 0.1], scale: [0.9, 0.2, 0.86], color: 0x4a3a2c, hueJitter: 0.02 },
-      { kind: 'ico', pos: [x - 0.22, 0.16, z + 0.18], rot: [0.9, 0.2, 0.6], scale: [0.42, 0.24, 0.38], color: 0x3a2c20 },
-      { kind: 'ico', pos: [x + 0.24, 0.13, z - 0.2], rot: [0.4, 1.2, 0.3], scale: [0.36, 0.2, 0.34], color: 0x2e241c },
-      { kind: 'cone', pos: [x + 0.3, 0.16, z + 0.26], rot: [1.35, 0.4, 0], scale: [0.56, 0.4, 0.56], color: shade(hideD, 0.7), seg: 7 },
-      post(x - 0.34, 0.24, z - 0.1, 0.07, 0.52, wood, 4, [0.35, 0, 0.55]),
-      post(x + 0.1, 0.2, z - 0.34, 0.065, 0.46, wood, 4, [-0.6, 0, 0.2]),
-      post(x - 0.06, 0.28, z + 0.3, 0.06, 0.58, shade(wood, 0.75), 4, [0.9, 0.4, -0.3]),
-      post(x + 0.36, 0.14, z - 0.02, 0.055, 0.4, wood, 4, [0, 0.3, 1.2]),
-      { kind: 'box', pos: [x - 0.5, 0.05, z + 0.36], rot: [0, 0.6, 0.1], scale: [0.34, 0.07, 0.22], color: 0x2a2018 },
-      { kind: 'box', pos: [x + 0.44, 0.04, z + 0.1], rot: [0, -0.4, 0], scale: [0.28, 0.06, 0.18], color: 0x241c16 },
-      { kind: 'box', pos: [x - 0.1, 0.05, z - 0.5], rot: [0, 1.1, 0.08], scale: [0.3, 0.06, 0.2], color: 0x2a2018 },
-      { kind: 'ico', pos: [x - 0.62, 0.03, z - 0.3], rot: [0.2, 0.4, 0], scale: [0.36, 0.06, 0.32], color: 0x584f48 },
+      { kind: 'ico', pos: [x, 0.09, z], rot: [0.3, 0.5, 0.1], scale: [0.86, 0.2, 0.82], color: 0x4a3a2c, hueJitter: 0.02 },
+      { kind: 'ico', pos: [x - 0.2, 0.16, z + 0.18], rot: [0.9, 0.2, 0.6], scale: [0.4, 0.24, 0.36], color: 0x3a2c20 },
+      { kind: 'ico', pos: [x + 0.22, 0.13, z - 0.2], rot: [0.4, 1.2, 0.3], scale: [0.34, 0.2, 0.32], color: 0x2e241c },
+      { kind: 'cone', pos: [x + 0.28, 0.16, z + 0.24], rot: [1.35, 0.4, 0], scale: [0.52, 0.38, 0.52], color: shade(hideD, 0.7), seg: 7 },
+      post(x - 0.32, 0.24, z - 0.1, 0.07, 0.5, wood, 4, [0.35, 0, 0.55]),
+      post(x + 0.1, 0.2, z - 0.32, 0.065, 0.44, wood, 4, [-0.6, 0, 0.2]),
+      post(x - 0.06, 0.28, z + 0.28, 0.06, 0.56, shade(wood, 0.75), 4, [0.9, 0.4, -0.3]),
+      { kind: 'box', pos: [x - 0.46, 0.05, z + 0.34], rot: [0, 0.6, 0.1], scale: [0.32, 0.07, 0.2], color: 0x2a2018 },
+      { kind: 'box', pos: [x + 0.42, 0.04, z + 0.1], rot: [0, -0.4, 0], scale: [0.26, 0.06, 0.17], color: 0x241c16 },
+      { kind: 'ico', pos: [x - 0.44, 0.03, z - 0.2], rot: [0.2, 0.4, 0], scale: [0.34, 0.06, 0.3], color: 0x584f48 },
     ];
   }
 
-  const tilt = lv === 1 ? 0.16 : 0;
+  const tilt = d === 1 ? 0.16 : 0;
   const parts: PartSpec[] = [
-    { kind: 'cyl', pos: [x, 0.2, z], scale: [0.94, 0.4, 0.94], color: hideD, seg: 8, hueJitter: 0.015 },
-    { kind: 'cone', pos: [x, 0.66, z], rot: [tilt, 0.3, tilt * 0.6], scale: [1.04, 0.44, 1.04], color: shade(hide, 1.14), seg: 8, hueJitter: 0.02 },
-    { kind: 'cone', pos: [x + tilt * 0.5, 0.92, z], rot: [tilt, 0.3, tilt * 0.6], scale: [0.54, 0.3, 0.54], color: shade(hide, 1.16), seg: 8 },
-    { kind: 'cyl', pos: [x + tilt * 0.8, 1.05, z], scale: [0.19, 0.05, 0.19], color: wood, seg: 6 },
-    // 꼭대기에서 교차하는 지지 장대 3개 (짧게 — 실루엣을 어지럽히지 않도록)
-    { kind: 'cone', pos: [x + tilt * 0.9 - 0.03, 1.13, z + 0.02], rot: [0.16, 0, 0.12], scale: [0.038, 0.2, 0.038], color: wood, seg: 4 },
-    { kind: 'cone', pos: [x + tilt * 0.9 + 0.04, 1.12, z - 0.03], rot: [-0.14, 0, -0.16], scale: [0.036, 0.18, 0.036], color: shade(wood, 1.2), seg: 4 },
+    { kind: 'cyl', pos: [x, 0.2, z], scale: [0.88, 0.4, 0.88], color: hideD, seg: 8, hueJitter: 0.015 },
+    { kind: 'cone', pos: [x, 0.66, z], rot: [tilt, 0.3, tilt * 0.6], scale: [0.98, 0.44, 0.98], color: shade(hide, 1.14), seg: 8, hueJitter: 0.02 },
+    { kind: 'cone', pos: [x + tilt * 0.5, 0.92, z], rot: [tilt, 0.3, tilt * 0.6], scale: [0.5, 0.3, 0.5], color: shade(hide, 1.16), seg: 8 },
+    { kind: 'cyl', pos: [x + tilt * 0.8, 1.05, z], scale: [0.18, 0.05, 0.18], color: wood, seg: 6 },
+    { kind: 'cone', pos: [x + tilt * 0.9 - 0.03, 1.13, z + 0.02], rot: [0.16, 0, 0.12], scale: [0.036, 0.2, 0.036], color: wood, seg: 4 },
+    { kind: 'cone', pos: [x + tilt * 0.9 + 0.04, 1.12, z - 0.03], rot: [-0.14, 0, -0.16], scale: [0.034, 0.18, 0.034], color: shade(wood, 1.2), seg: 4 },
   ];
-  if (lv === 0) {
+  if (d === 0) {
     parts.push(
-      { kind: 'cyl', pos: [x, 0.43, z], scale: [0.98, 0.07, 0.98], color: shade(hide, 1.24), seg: 8 },
+      { kind: 'cyl', pos: [x, 0.43, z], scale: [0.92, 0.07, 0.92], color: shade(hide, 1.24), seg: 8 },
       // 부족 문양 띠 — 갈색 일변도를 깨는 색 포인트
-      { kind: 'cyl', pos: [x, 0.29, z], scale: [0.96, 0.07, 0.96], color: 0xb4482e, seg: 8, hueJitter: 0.02 },
+      { kind: 'cyl', pos: [x, 0.29, z], scale: [0.9, 0.07, 0.9], color: 0xb4482e, seg: 8, hueJitter: 0.02 },
     );
   } else {
-    // 찢어진 가죽 자국
     parts.push(
-      { kind: 'box', pos: [x - 0.44, 0.3, z + 0.3], rot: [0, -0.7, 0.2], scale: [0.3, 0.26, 0.06], color: 0x3a2c1c },
-      { kind: 'box', pos: [x + 0.4, 0.24, z + 0.26], rot: [0, 0.8, -0.15], scale: [0.24, 0.2, 0.06], color: 0x33261a },
-      { kind: 'cyl', pos: [x, 0.29, z], scale: [0.96, 0.07, 0.96], color: shade(0xb4482e, 0.78), seg: 8 },
+      { kind: 'box', pos: [x - 0.4, 0.3, z + 0.28], rot: [0, -0.7, 0.2], scale: [0.28, 0.24, 0.06], color: 0x3a2c1c },
+      { kind: 'box', pos: [x + 0.38, 0.24, z + 0.24], rot: [0, 0.8, -0.15], scale: [0.22, 0.18, 0.06], color: 0x33261a },
+      { kind: 'cyl', pos: [x, 0.29, z], scale: [0.9, 0.07, 0.9], color: shade(0xb4482e, 0.78), seg: 8 },
     );
   }
-  // 출입구 (모닥불 쪽)
+  // 출입구 (마을 안쪽 = 망루 쪽)
   parts.push(
-    post(x + 0.32, 0.19, z + 0.44, 0.06, 0.38, wood, 5),
-    post(x - 0.3, 0.19, z + 0.5, 0.06, 0.38, wood, 5),
-    { kind: 'box', pos: [x + 0.01, 0.4, z + 0.47], rot: [0, -0.1, 0], scale: [0.68, 0.07, 0.09], color: shade(wood, 1.2) },
-    { kind: 'box', pos: [x + 0.02, 0.19, z + 0.5], rot: [0, -0.1, 0.06], scale: [0.34, 0.36, 0.05], color: soot(0x3a2c1c, lv) },
-    // 벽에 걸어 말리는 가죽/방패
-    { kind: 'box', pos: [x - 0.62, 0.34, z + 0.18], rot: [0, -1.0, 0.1], scale: [0.3, 0.28, 0.05], color: soot(C.hide, lv) },
+    post(x + 0.3, 0.19, z + 0.42, 0.055, 0.38, wood, 5),
+    post(x - 0.28, 0.19, z + 0.46, 0.055, 0.38, wood, 5),
+    { kind: 'box', pos: [x + 0.01, 0.4, z + 0.44], rot: [0, -0.1, 0], scale: [0.64, 0.07, 0.09], color: shade(wood, 1.2) },
+    { kind: 'box', pos: [x + 0.02, 0.19, z + 0.47], rot: [0, -0.1, 0.06], scale: [0.32, 0.36, 0.05], color: soot(0x3a2c1c, d) },
+    { kind: 'box', pos: [x - 0.58, 0.34, z + 0.16], rot: [0, -1.0, 0.1], scale: [0.28, 0.26, 0.05], color: soot(C.hide, d) },
+    // 지지목은 바깥으로 뻗지 않게 기울기를 안쪽으로 준다 (반경 1.45 제약)
+    post(x - 0.42, 0.26, z - 0.2, 0.05, 0.56, wood, 4, [0.2, 0, 0.3]),
+    // 밑동 돌
+    { kind: 'ico', pos: [x - 0.48, 0.06, z + 0.38], rot: [0.4, 0.7, 0.2], scale: [0.19, 0.13, 0.17], color: soot(C.stone, d) },
+    { kind: 'ico', pos: [x + 0.46, 0.06, z + 0.4], rot: [1.1, 0.2, 0.6], scale: [0.17, 0.12, 0.16], color: soot(C.stoneDark, d) },
   );
-  if (lv === 0) {
-    parts.push({ kind: 'box', pos: [x + 0.66, 0.3, z + 0.1], rot: [0, 1.1, -0.08], scale: [0.26, 0.24, 0.05], color: C.boneDark });
-  }
-  // 지지목
-  parts.push(post(x - 0.68, 0.26, z - 0.32, 0.055, 0.6, wood, 4, [0.2, 0, 0.5]));
-  if (lv === 0) parts.push(post(x + 0.6, 0.28, z - 0.4, 0.055, 0.62, wood, 4, [-0.15, 0, -0.45]));
-  else parts.push(post(x + 0.68, 0.05, z - 0.3, 0.055, 0.6, wood, 4, [0.2, 0.6, 1.5]));
-  // 밑동 돌
-  parts.push(
-    { kind: 'ico', pos: [x - 0.52, 0.06, z + 0.4], rot: [0.4, 0.7, 0.2], scale: [0.2, 0.13, 0.18], color: soot(C.stone, lv) },
-    { kind: 'ico', pos: [x + 0.5, 0.06, z + 0.42], rot: [1.1, 0.2, 0.6], scale: [0.18, 0.12, 0.17], color: soot(C.stoneDark, lv) },
-    { kind: 'ico', pos: [x - 0.02, 0.05, z + 0.66], rot: [0.7, 1.3, 0.3], scale: [0.16, 0.1, 0.15], color: soot(C.stone, lv) },
-  );
+  if (d === 0) parts.push(post(x + 0.52, 0.28, z - 0.32, 0.05, 0.58, wood, 4, [-0.15, 0, 0.4]));
   return parts;
 }
 
-/** 짚 원뿔 움막 (겹겹이 인 이엉) */
-function thatchHut(lv: Lv): PartSpec[] {
-  const [x, z] = HUT_B;
-  const straw = soot(C.straw, lv);
-  const strawD = soot(shade(C.straw, 0.8), lv);
-  const wood = soot(C.woodDark, lv);
+/** Lv1 바닥 잡동사니 */
+function scatterL1(d: Dmg): PartSpec[] {
+  const parts: PartSpec[] = [
+    { kind: 'ico', pos: [-0.94, 0.05, -0.26], rot: [0.4, 0.8, 0.2], scale: [0.22, 0.13, 0.2], color: soot(C.rock, d), hueJitter: 0.015 },
+    { kind: 'cyl', pos: [-0.3, 0.06, 0.22], rot: [0, 0.9, Math.PI / 2], scale: [0.07, 0.32, 0.07], color: soot(C.woodDark, d), seg: 4 },
+    { kind: 'ico', pos: [0.06, 0.04, -0.62], rot: [0.7, 1.2, 0.3], scale: [0.16, 0.1, 0.15], color: soot(C.rock, d) },
+  ];
+  if (d === 2) {
+    parts.push(
+      { kind: 'ico', pos: [-0.42, 0.03, -0.8], rot: [0.3, 0.6, 0.2], scale: [0.3, 0.06, 0.26], color: 0x3e3630 },
+      { kind: 'ico', pos: [-0.82, 0.05, 0.46], rot: [0.2, 0.7, 0.4], scale: [0.24, 0.07, 0.22], color: 0x9a958c },
+    );
+  }
+  return parts;
+}
 
-  if (lv === 2) {
-    // 지붕이 날아가고 뼈대만 남음
+// --- Lv2: 정식 모닥불 · 목책 · 짚 움막 · 건조대 -----------------------------
+
+/** Lv2 화덕 — Lv1 화톳불을 **둘러싸는** 바깥 돌 + 큰 장작 + 재 원반 */
+function hearthFull(d: Dmg): PartSpec[] {
+  const [x, z] = HEARTH;
+  const stone = d === 2 ? 0x5a5450 : C.stone;
+  const parts: PartSpec[] = [
+    { kind: 'ico', pos: [x, 0.03, z], rot: [0, 0.3, 0], scale: [0.98, 0.05, 0.98], color: 0x7d6742, hueJitter: 0.02 },
+  ];
+  for (let i = 0; i < 7; i++) {
+    const a = (i / 7) * Math.PI * 2 - 0.15;
+    parts.push({
+      kind: 'ico',
+      pos: [x + Math.cos(a) * 0.44, 0.085, z + Math.sin(a) * 0.44],
+      rot: [i * 0.9, i * 1.1, i * 0.5],
+      scale: [0.2, 0.17, 0.18],
+      color: i % 2 ? shade(stone, 0.92) : stone,
+      hueJitter: 0.012,
+    });
+  }
+  const logColor = d === 2 ? 0x2e2622 : C.woodDark;
+  parts.push(post(x + 0.02, 0.12, z - 0.02, 0.085, 0.48, shade(logColor, 0.85), 5, [1.35, 0.9, 0]));
+  if (d < 2) parts.push(post(x - 0.02, 0.14, z + 0.02, 0.075, 0.44, shade(logColor, 1.15), 5, [0.7, 2.1, 0.9]));
+  parts.push({ kind: 'ico', pos: [x + 0.12, 0.06, z - 0.08], scale: [0.11, 0.07, 0.1], color: d === 2 ? 0x5a3018 : 0xff7a28 });
+  return parts;
+}
+
+/** 모닥불 둘레 통나무 의자 + 고기 굽는 꼬치대 (Lv2) */
+function fireside(d: Dmg): PartSpec[] {
+  const [x, z] = HEARTH;
+  const wood = soot(C.wood, d);
+  const woodD = soot(C.woodDark, d);
+  if (d === 2) {
+    return [
+      { kind: 'cyl', pos: [x + 0.6, 0.08, z - 0.16], rot: [0, 0.5, Math.PI / 2], scale: [0.13, 0.56, 0.13], color: 0x33291f, seg: 6 },
+      { kind: 'ico', pos: [x - 0.42, 0.05, z + 0.16], rot: [0.5, 0.4, 0.2], scale: [0.24, 0.1, 0.2], color: 0x2e251c },
+      post(x - 0.14, 0.04, z + 0.36, 0.035, 0.46, 0x33291f, 4, [0.2, 0.8, 1.5]),
+    ];
+  }
+  const parts: PartSpec[] = [
+    { kind: 'cyl', pos: [x + 0.62, 0.12, z - 0.14], rot: [0, 0.42, Math.PI / 2], scale: [0.15, 0.58, 0.15], color: wood, seg: 6, hueJitter: 0.02 },
+    { kind: 'cyl', pos: [x - 0.36, 0.12, z + 0.2], rot: [0, -0.5, Math.PI / 2], scale: [0.14, 0.5, 0.14], color: woodD, seg: 6, hueJitter: 0.02 },
+    // 꼬치대 — 불꽃 실루엣을 가리지 않도록 화덕 바깥쪽으로
+    post(x - 0.3, 0.24, z - 0.3, 0.038, 0.48, woodD, 4, [0, 0, 0.16]),
+    post(x + 0.3, 0.24, z - 0.3, 0.038, 0.48, woodD, 4, [0, 0, -0.16]),
+    beam(x, 0.5, z - 0.3, 0.72, 0.028, shade(woodD, 1.2)),
+  ];
+  if (d === 0) {
+    parts.push(
+      { kind: 'box', pos: [x - 0.12, 0.43, z - 0.3], rot: [0, 0.2, 0], scale: [0.15, 0.13, 0.1], color: 0x9c4a34 },
+      { kind: 'box', pos: [x + 0.14, 0.44, z - 0.3], rot: [0, -0.3, 0], scale: [0.13, 0.12, 0.1], color: 0x8a4030 },
+    );
+  } else {
+    parts.push({ kind: 'box', pos: [x + 0.02, 0.43, z - 0.3], rot: [0, 0.2, 0], scale: [0.13, 0.11, 0.1], color: 0x5c3626 });
+  }
+  return parts;
+}
+
+/**
+ * 뼈·나무 목책 (Lv2) — 뒤쪽 반원 배열.
+ * 피해가 클수록 말뚝이 부러지고 가름대가 사라진다.
+ */
+function palisade(d: Dmg): PartSpec[] {
+  const parts: PartSpec[] = [];
+  const n = 13;
+  const r = WALL_R;
+  const wood = soot(C.wood, d);
+  const woodD = soot(C.woodDark, d);
+  // 뒤쪽(−z) 3/4 를 감싼다 — 앞(+z)은 입구
+  const a0 = Math.PI * 0.1;
+  const span = Math.PI * 0.8;
+  for (let i = 0; i < n; i++) {
+    if (d === 1 && i % 4 === 1) continue;
+    if (d === 2 && i % 2 === 0 && i !== 6) continue;
+    const a = a0 + (i / (n - 1)) * span;
+    const h = 0.5 + ((i * 7) % 3) * 0.06 - (d === 2 ? 0.16 : 0);
+    const px = Math.cos(a) * r;
+    const pz = -Math.sin(a) * r;
+    parts.push(
+      post(px, h / 2, pz, 0.078, h, i % 2 === 0 ? wood : woodD, 5, [
+        ((i * 13) % 5) * 0.025 - 0.06,
+        0,
+        ((i * 11) % 5) * 0.025 - 0.06,
+      ]),
+    );
+    if (i % 2 === 0 && d < 2) {
+      parts.push({ kind: 'cone', pos: [px, h + 0.07, pz], scale: [0.078, 0.16, 0.078], color: shade(wood, 1.15), seg: 4 });
+    }
+  }
+  // 가로 가름대 (호를 4구간으로 근사)
+  const railN = d === 0 ? 4 : d === 1 ? 2 : 0;
+  for (let i = 0; i < railN; i++) {
+    const b0 = a0 + (i / 4) * span;
+    const b1 = a0 + ((i + 1) / 4) * span;
+    const mx = (Math.cos(b0) + Math.cos(b1)) * 0.5 * r;
+    const mz = -(Math.sin(b0) + Math.sin(b1)) * 0.5 * r;
+    const len = Math.hypot(Math.cos(b1) - Math.cos(b0), Math.sin(b1) - Math.sin(b0)) * r;
+    parts.push({
+      kind: 'cyl',
+      pos: [mx, 0.38, mz],
+      rot: [0, -Math.atan2(-(Math.sin(b1) - Math.sin(b0)), Math.cos(b1) - Math.cos(b0)), Math.PI / 2],
+      scale: [0.038, len * 1.06, 0.038],
+      color: woodD,
+      seg: 4,
+    });
+  }
+  // 밧줄 결속
+  const lashN = d === 2 ? 1 : 3;
+  for (let i = 0; i < lashN; i++) {
+    const a = a0 + 0.18 + (i / 3) * (span - 0.36);
+    parts.push({
+      kind: 'box',
+      pos: [Math.cos(a) * r, 0.4, -Math.sin(a) * r],
+      rot: [0, -a, 0],
+      scale: [0.12, 0.07, 0.12],
+      color: soot(C.rope, d),
+    });
+  }
+  if (d === 2) {
+    parts.push(
+      post(0.46, 0.06, -1.06, 0.075, 0.44, woodD, 4, [0.4, 0.9, 1.5]),
+      post(-0.66, 0.06, -0.94, 0.075, 0.4, wood, 4, [1.5, 0.3, 0.6]),
+    );
+  }
+  return parts;
+}
+
+/** 짚 원뿔 움막 (Lv2) */
+function thatchHut(d: Dmg): PartSpec[] {
+  const [x, z] = HUT_B;
+  const straw = soot(C.straw, d);
+  const strawD = soot(shade(C.straw, 0.8), d);
+  const wood = soot(C.woodDark, d);
+
+  if (d === 2) {
     const parts: PartSpec[] = [
-      { kind: 'cyl', pos: [x, 0.13, z], scale: [0.74, 0.26, 0.74], color: shade(wood, 0.8), seg: 7 },
-      { kind: 'ico', pos: [x, 0.06, z], rot: [0.2, 0.5, 0], scale: [0.8, 0.12, 0.78], color: 0x4a3c2a },
+      { kind: 'cyl', pos: [x, 0.13, z], scale: [0.7, 0.26, 0.7], color: shade(wood, 0.8), seg: 7 },
+      { kind: 'ico', pos: [x, 0.06, z], rot: [0.2, 0.5, 0], scale: [0.76, 0.12, 0.74], color: 0x4a3c2a },
     ];
     for (let i = 0; i < 4; i++) {
       const a = (i / 4) * Math.PI * 2 + 0.5;
       parts.push(
-        post(x + Math.cos(a) * 0.3, 0.34, z + Math.sin(a) * 0.3, 0.05, 0.62, wood, 4, [
+        post(x + Math.cos(a) * 0.28, 0.34, z + Math.sin(a) * 0.28, 0.048, 0.6, wood, 4, [
           Math.sin(a) * 0.34,
           0,
           -Math.cos(a) * 0.34,
@@ -236,46 +539,43 @@ function thatchHut(lv: Lv): PartSpec[] {
       );
     }
     parts.push(
-      { kind: 'ico', pos: [x - 0.5, 0.07, z + 0.3], rot: [0.3, 0.8, 0.2], scale: [0.36, 0.12, 0.32], color: strawD },
-      { kind: 'ico', pos: [x + 0.48, 0.06, z - 0.24], rot: [0.9, 0.2, 0.5], scale: [0.3, 0.1, 0.28], color: shade(strawD, 0.8) },
-      { kind: 'box', pos: [x + 0.2, 0.04, z + 0.5], rot: [0, 0.7, 0.05], scale: [0.34, 0.06, 0.22], color: 0x2e2418 },
+      { kind: 'ico', pos: [x - 0.46, 0.07, z + 0.28], rot: [0.3, 0.8, 0.2], scale: [0.34, 0.12, 0.3], color: strawD },
+      { kind: 'ico', pos: [x + 0.44, 0.06, z - 0.22], rot: [0.9, 0.2, 0.5], scale: [0.28, 0.1, 0.26], color: shade(strawD, 0.8) },
     );
     return parts;
   }
 
-  const tilt = lv === 1 ? 0.2 : 0;
+  const tilt = d === 1 ? 0.2 : 0;
   const parts: PartSpec[] = [
-    { kind: 'cyl', pos: [x, 0.15, z], scale: [0.7, 0.3, 0.7], color: wood, seg: 7, hueJitter: 0.015 },
-    { kind: 'cyl', pos: [x, 0.3, z], scale: [0.74, 0.05, 0.74], color: soot(C.rope, lv), seg: 7 },
-    { kind: 'cone', pos: [x, 0.52, z], rot: [tilt, 0, tilt * 0.5], scale: [0.9, 0.46, 0.9], color: straw, seg: 8, hueJitter: 0.025 },
-    { kind: 'cone', pos: [x + tilt * 0.4, 0.76, z], rot: [tilt, 0.4, tilt * 0.5], scale: [0.68, 0.38, 0.68], color: strawD, seg: 8, hueJitter: 0.025 },
+    { kind: 'cyl', pos: [x, 0.15, z], scale: [0.66, 0.3, 0.66], color: wood, seg: 7, hueJitter: 0.015 },
+    { kind: 'cyl', pos: [x, 0.3, z], scale: [0.7, 0.05, 0.7], color: soot(C.rope, d), seg: 7 },
+    { kind: 'cone', pos: [x, 0.52, z], rot: [tilt, 0, tilt * 0.5], scale: [0.86, 0.46, 0.86], color: straw, seg: 8, hueJitter: 0.025 },
+    { kind: 'cone', pos: [x + tilt * 0.4, 0.76, z], rot: [tilt, 0.4, tilt * 0.5], scale: [0.64, 0.38, 0.64], color: strawD, seg: 8, hueJitter: 0.025 },
   ];
-  if (lv === 0) {
+  if (d === 0) {
     parts.push(
-      { kind: 'cone', pos: [x, 0.98, z], scale: [0.44, 0.32, 0.44], color: straw, seg: 7, hueJitter: 0.02 },
-      { kind: 'cone', pos: [x, 1.14, z], scale: [0.2, 0.2, 0.2], color: wood, seg: 5 },
+      { kind: 'cone', pos: [x, 0.98, z], scale: [0.42, 0.32, 0.42], color: straw, seg: 7, hueJitter: 0.02 },
+      { kind: 'cone', pos: [x, 1.14, z], scale: [0.19, 0.2, 0.19], color: wood, seg: 5 },
     );
   } else {
-    // 꼭대기 이엉이 벗겨져 서까래가 드러남
     parts.push(
-      post(x + 0.06, 0.94, z, 0.04, 0.36, wood, 4, [0.3, 0, 0.25]),
-      post(x - 0.05, 0.92, z + 0.05, 0.04, 0.32, wood, 4, [-0.25, 0, -0.2]),
-      { kind: 'ico', pos: [x - 0.62, 0.07, z + 0.22], rot: [0.4, 0.6, 0.2], scale: [0.3, 0.1, 0.26], color: strawD },
+      post(x + 0.06, 0.94, z, 0.038, 0.34, wood, 4, [0.3, 0, 0.25]),
+      post(x - 0.05, 0.92, z + 0.05, 0.038, 0.3, wood, 4, [-0.25, 0, -0.2]),
     );
   }
   parts.push(
-    post(x + 0.24, 0.17, z + 0.44, 0.05, 0.34, wood, 4),
-    post(x - 0.24, 0.17, z + 0.44, 0.05, 0.34, wood, 4),
-    { kind: 'box', pos: [x, 0.17, z + 0.48], rot: [0, 0, 0.04], scale: [0.3, 0.32, 0.05], color: soot(0x3a2c1c, lv) },
+    post(x + 0.22, 0.17, z + 0.42, 0.048, 0.34, wood, 4),
+    post(x - 0.22, 0.17, z + 0.42, 0.048, 0.34, wood, 4),
+    { kind: 'box', pos: [x, 0.17, z + 0.45], rot: [0, 0, 0.04], scale: [0.28, 0.32, 0.05], color: soot(0x3a2c1c, d) },
   );
   // 처마 아래 삐져나온 짚뭉치
   for (let i = 0; i < 3; i++) {
     const a = 1.1 + i * 1.9;
     parts.push({
       kind: 'cone',
-      pos: [x + Math.cos(a) * 0.46, 0.34, z + Math.sin(a) * 0.46],
+      pos: [x + Math.cos(a) * 0.44, 0.34, z + Math.sin(a) * 0.44],
       rot: [Math.sin(a) * 0.9, 0, -Math.cos(a) * 0.9],
-      scale: [0.11, 0.2, 0.11],
+      scale: [0.1, 0.19, 0.1],
       color: strawD,
       seg: 4,
     });
@@ -283,275 +583,204 @@ function thatchHut(lv: Lv): PartSpec[] {
   return parts;
 }
 
-/** 가죽 차양(오두막) — 도구·바구니 보관소 */
-function leanTo(lv: Lv): PartSpec[] {
-  const [x, z] = HUT_C;
-  const wood = soot(C.wood, lv);
-  const hide = soot(C.hide, lv);
-
-  if (lv === 2) {
+/** 가죽 건조대 (Lv2) */
+function dryingRack(d: Dmg): PartSpec[] {
+  const [rx, rz] = RACK;
+  const wood = soot(C.wood, d);
+  if (d === 2) {
     return [
-      post(x - 0.2, 0.16, z + 0.2, 0.05, 0.34, soot(C.woodDark, 2), 4, [0.3, 0, 0.25]),
-      post(x + 0.24, 0.06, z - 0.1, 0.05, 0.5, soot(C.woodDark, 2), 4, [0, 0.5, 1.4]),
-      { kind: 'box', pos: [x, 0.04, z], rot: [0, 0.4, 0.06], scale: [0.5, 0.05, 0.38], color: shade(hide, 0.6) },
-      { kind: 'ico', pos: [x - 0.3, 0.06, z - 0.24], rot: [0.5, 0.3, 0.2], scale: [0.24, 0.1, 0.2], color: 0x3e3226 },
+      post(rx, 0.05, rz + 0.1, 0.048, 0.54, soot(C.woodDark, 2), 4, [0.4, 0.3, 1.45]),
+      post(rx + 0.1, 0.06, rz - 0.34, 0.048, 0.48, soot(C.woodDark, 2), 4, [1.4, 0.6, 0.2]),
+      { kind: 'box', pos: [rx + 0.12, 0.04, rz - 0.06], rot: [0, 0.5, 0.05], scale: [0.38, 0.05, 0.28], color: shade(soot(C.hide, 2), 0.7) },
     ];
   }
-
-  // 앞이 높고 뒤가 낮은 한쪽 경사 차양 — 기둥을 굵게 해 구조가 읽히게 한다
-  const drop = lv === 1 ? 0.14 : 0;
   const parts: PartSpec[] = [
-    post(x - 0.28, 0.28, z + 0.26, 0.08, 0.56, wood, 5),
-    post(x + 0.28, 0.28, z + 0.26, 0.08, 0.56, wood, 5),
-    post(x - 0.28, 0.14, z - 0.24, 0.07, 0.28, wood, 4),
-    post(x + 0.28, 0.14, z - 0.24, 0.07, 0.28, wood, 4),
-    { kind: 'cyl', pos: [x, 0.56, z + 0.26], rot: [0, 0, Math.PI / 2], scale: [0.05, 0.68, 0.05], color: shade(wood, 1.18), seg: 4 },
-    { kind: 'cyl', pos: [x, 0.28, z - 0.24], rot: [0, 0, Math.PI / 2], scale: [0.045, 0.66, 0.045], color: shade(wood, 1.05), seg: 4 },
+    post(rx, 0.36, rz + 0.32, 0.08, 0.72, wood, 5, [0, 0, d === 1 ? 0.16 : 0]),
+    post(rx, 0.36, rz - 0.36, 0.08, 0.72, wood, 5),
+    { kind: 'cyl', pos: [rx, 0.7, rz - 0.02], rot: [Math.PI / 2, 0, 0], scale: [0.045, 0.74, 0.045], color: shade(wood, 1.18), seg: 4 },
+    { kind: 'box', pos: [rx, 0.48, rz + 0.24], rot: [0, 0.06, 0], scale: [0.05, 0.36, 0.14], color: soot(shade(C.hide, 1.12), d), hueJitter: 0.02 },
+    { kind: 'box', pos: [rx, 0.5, rz - 0.26], rot: [0, -0.08, 0], scale: [0.05, 0.32, 0.13], color: soot(C.hideDark, d), hueJitter: 0.02 },
   ];
-  // 지붕 = 널찍한 판 하나가 아니라 겹쳐 덮은 가죽 4장 (평평한 면이 도드라지지 않게)
+  if (d === 0) {
+    parts.push(
+      { kind: 'box', pos: [rx, 0.52, rz - 0.02], scale: [0.045, 0.28, 0.12], color: soot(C.hide, d) },
+      { kind: 'box', pos: [rx, 0.62, rz + 0.34], rot: [0, 0, 0.1], scale: [0.055, 0.17, 0.11], color: 0xb84a4a },
+    );
+  }
+  return parts;
+}
+
+// --- Lv3: 망루 · 토템 · 차양 작업장 · 도구 ---------------------------------
+
+/**
+ * 망루 (Lv3) — Lv1 사수 발판 **위로** 올라선 2층.
+ * 아래 발판(y=0.6)은 그대로 남고 기둥이 연장되어 위층 데크(y=1.16)와 가죽 지붕이 얹힌다.
+ * 화살은 여전히 아래 발판에서 나가지만, 실루엣에서 "이 마을은 망을 본다"가 읽힌다.
+ */
+function watchTower(d: Dmg): PartSpec[] {
+  const wood = soot(C.wood, d);
+  const woodD = soot(C.woodDark, d);
+  const hide = soot(C.hide, d);
+  const s = 0.27;
+  const upperY = WATCH_UPPER_Y;
+  const parts: PartSpec[] = [];
+  const legs: [number, number][] = [
+    [s, s],
+    [-s, s],
+    [s, -s],
+    [-s, -s],
+  ];
+  legs.forEach(([lx, lz], i) => {
+    if (d === 2 && i === 3) return; // 반파: 한 기둥이 통째로 없다
+    const lean = d === 2 ? 0.06 : d === 1 ? 0.03 : 0;
+    parts.push(
+      post(lx, (WATCH_DECK_Y + upperY) * 0.5, lz, 0.06, upperY - WATCH_DECK_Y + 0.06, woodD, 4, [lean, 0, lean]),
+    );
+  });
+  if (d < 2) {
+    // 위층에도 X 가새 — 아래층과 같은 언어로 "탑"이 이어진다
+    const mid = (WATCH_DECK_Y + upperY) * 0.5;
+    const h = upperY - WATCH_DECK_Y;
+    for (const sx of [s, -s]) {
+      parts.push(
+        { kind: 'box', pos: [sx, mid, 0], rot: [0.86, 0, 0], scale: [0.04, 0.04, h * 0.88], color: wood },
+        { kind: 'box', pos: [sx, mid, 0], rot: [-0.86, 0, 0], scale: [0.04, 0.04, h * 0.88], color: shade(wood, 0.88) },
+      );
+    }
+  }
+  if (d === 2) {
+    // 위층이 주저앉아 널판이 비스듬히 걸쳐 있다
+    parts.push(
+      { kind: 'box', pos: [-0.1, upperY - 0.12, 0.06], rot: [0.3, 0.4, 0.42], scale: [0.72, 0.06, 0.5], color: shade(woodD, 0.9) },
+      { kind: 'cone', pos: [0.3, upperY + 0.1, -0.24], rot: [1.1, 0.5, 0.3], scale: [0.5, 0.34, 0.5], color: shade(hide, 0.72), seg: 6 },
+      post(-0.34, 0.08, 0.5, 0.05, 0.6, woodD, 4, [0.3, 0.6, 1.42]),
+    );
+    return parts;
+  }
+  // 위층 데크
+  const tilt = d === 1 ? 0.05 : 0;
+  parts.push(
+    { kind: 'box', pos: [0, upperY, 0], rot: [tilt * 0.5, 0, tilt], scale: [0.78, 0.06, 0.78], color: wood, hueJitter: 0.02 },
+    { kind: 'box', pos: [0, upperY - 0.04, 0], scale: [0.86, 0.05, 0.86], color: shade(woodD, 0.95) },
+  );
+  // 난간 (네 귀퉁이 짧은 기둥 + 가름대)
+  legs.forEach(([lx, lz], i) => {
+    if (d === 1 && i === 2) return;
+    parts.push(post(lx * 1.05, upperY + 0.15, lz * 1.05, 0.038, 0.28, woodD, 4));
+  });
+  const rails: [number, number, number, number][] = [
+    [0, s * 1.05, 0.56, 0],
+    [0, -s * 1.05, 0.56, 0],
+    [s * 1.05, 0, 0.56, Math.PI / 2],
+    [-s * 1.05, 0, 0.56, Math.PI / 2],
+  ];
+  rails.forEach(([rxp, rzp, len, yaw], i) => {
+    if (d === 1 && i === 1) return;
+    parts.push(beam(rxp, upperY + 0.26, rzp, len, 0.03, shade(wood, 1.14), yaw));
+  });
+  // 뒤편 바람막이 — 난간에 **붙여** 낮게 세운다. 데크 위에 지붕처럼 띄우면
+  // 부감 카메라에서 발판을 가리고, 공중에 뜬 널판 하나로 보인다(캡처에서 확인).
+  parts.push(
+    { kind: 'box', pos: [0, upperY + 0.28, -s * 1.02], rot: [0.22, 0, 0], scale: [0.66, 0.36, 0.05], color: shade(hide, 1.12), hueJitter: 0.02 },
+    { kind: 'box', pos: [0, upperY + 0.46, -s * 0.92], rot: [0.22, 0, 0], scale: [0.7, 0.06, 0.09], color: soot(C.rope, d) },
+    { kind: 'box', pos: [-s * 1.02, upperY + 0.22, -s * 0.4], rot: [0, 0, 0], scale: [0.05, 0.3, 0.4], color: shade(hide, 0.94), hueJitter: 0.02 },
+  );
+  if (d === 0) {
+    // 망 보는 사람의 물건 — 뿔나팔과 여분 화살 다발
+    parts.push(
+      { kind: 'cone', pos: [0.2, upperY + 0.18, 0.2], rot: [0.3, 0, -0.5], scale: [0.09, 0.26, 0.09], color: soot(C.bone, d), seg: 5 },
+      { kind: 'cyl', pos: [-0.16, upperY + 0.14, -0.12], scale: [0.11, 0.2, 0.11], color: soot(C.hideDark, d), seg: 5 },
+    );
+  }
+  return parts;
+}
+
+/** 토템 기둥 (Lv3) — 조각 단 + 날개 + 두개골 + 깃털 */
+function totemPole(d: Dmg): PartSpec[] {
+  const [tx, tz] = TOTEM;
+  if (d === 2) {
+    return [
+      { kind: 'cyl', pos: [tx, 0.07, tz], scale: [0.34, 0.14, 0.34], color: soot(C.stone, 2), seg: 7 },
+      post(tx, 0.24, tz, 0.24, 0.28, soot(C.wood, 2), 7),
+      { kind: 'cone', pos: [tx, 0.42, tz], scale: [0.24, 0.16, 0.24], color: 0x3a2c1c, seg: 6 },
+      post(tx + 0.26, 0.13, tz + 0.2, 0.24, 0.38, soot(0xc9702e, 2), 7, [0.3, 0, 1.5]),
+      { kind: 'ico', pos: [tx + 0.46, 0.1, tz + 0.28], rot: [0.6, 0.4, 0.2], scale: [0.19, 0.15, 0.19], color: soot(C.bone, 2) },
+    ];
+  }
+  const lean = d === 1 ? 0.1 : 0;
+  const wood = soot(C.wood, d);
+  return [
+    { kind: 'cyl', pos: [tx, 0.07, tz], scale: [0.35, 0.14, 0.35], color: soot(C.stone, d), seg: 7 },
+    post(tx, 0.28, tz, 0.24, 0.3, wood, 7, [0, 0, lean]),
+    post(tx - lean * 0.3, 0.56, tz, 0.26, 0.28, soot(0xc9702e, d), 7, [0, 0, lean]),
+    post(tx - lean * 0.6, 0.84, tz, 0.23, 0.28, soot(0x3f8a4a, d), 7, [0, 0, lean]),
+    { kind: 'box', pos: [tx - 0.08, 0.6, tz + 0.22], scale: [0.09, 0.09, 0.06], color: C.white },
+    { kind: 'box', pos: [tx + 0.1, 0.6, tz + 0.22], scale: [0.09, 0.09, 0.06], color: C.white },
+    { kind: 'cone', pos: [tx, 0.5, tz + 0.24], rot: [1.5, 0, 0], scale: [0.1, 0.19, 0.1], color: soot(C.bone, d), seg: 5 },
+    { kind: 'box', pos: [tx - 0.3, 0.86, tz], rot: [0, 0, 0.3], scale: [0.28, 0.07, 0.11], color: soot(C.woodDark, d) },
+    { kind: 'box', pos: [tx + 0.3, 0.86, tz], rot: [0, 0, -0.3], scale: [0.28, 0.07, 0.11], color: soot(C.woodDark, d) },
+    { kind: 'ico', pos: [tx - lean, 1.06, tz], rot: [0.1, 0.3, 0], scale: [0.22, 0.21, 0.21], color: soot(C.bone, d) },
+    { kind: 'cone', pos: [tx - lean - 0.1, 1.24, tz - 0.04], rot: [0, 0, 0.4], scale: [0.055, 0.23, 0.055], color: soot(C.banner, d), seg: 4 },
+    { kind: 'cone', pos: [tx - lean + 0.02, 1.28, tz + 0.02], scale: [0.055, 0.25, 0.055], color: soot(C.gold, d), seg: 4 },
+    { kind: 'cone', pos: [tx - lean + 0.12, 1.23, tz - 0.02], rot: [0, 0, -0.42], scale: [0.055, 0.21, 0.055], color: soot(C.banner, d), seg: 4 },
+  ];
+}
+
+/** 가죽 차양 작업장 (Lv3) — 도구·바구니 보관소 */
+function leanTo(d: Dmg): PartSpec[] {
+  const [x, z] = LEANTO;
+  const wood = soot(C.wood, d);
+  const hide = soot(C.hide, d);
+
+  if (d === 2) {
+    return [
+      post(x - 0.2, 0.16, z + 0.2, 0.048, 0.32, soot(C.woodDark, 2), 4, [0.3, 0, 0.25]),
+      post(x + 0.24, 0.06, z - 0.1, 0.048, 0.48, soot(C.woodDark, 2), 4, [0, 0.5, 1.4]),
+      { kind: 'box', pos: [x, 0.04, z], rot: [0, 0.4, 0.06], scale: [0.48, 0.05, 0.36], color: shade(hide, 0.6) },
+    ];
+  }
+  const drop = d === 1 ? 0.14 : 0;
+  const parts: PartSpec[] = [
+    post(x - 0.26, 0.28, z + 0.24, 0.075, 0.56, wood, 5),
+    post(x + 0.26, 0.28, z + 0.24, 0.075, 0.56, wood, 5),
+    post(x - 0.26, 0.14, z - 0.22, 0.065, 0.28, wood, 4),
+    post(x + 0.26, 0.14, z - 0.22, 0.065, 0.28, wood, 4),
+    beam(x, 0.56, z + 0.24, 0.64, 0.045, shade(wood, 1.18)),
+    beam(x, 0.28, z - 0.22, 0.62, 0.04, shade(wood, 1.05)),
+  ];
   const strips: [number, number, number][] = [
-    [-0.18, 0.31, 0.05],
-    [-0.05, 0.39, -0.04],
+    [-0.16, 0.31, 0.05],
+    [-0.04, 0.39, -0.04],
     [0.08, 0.46, 0.03],
-    [0.21, 0.53, -0.06],
+    [0.2, 0.53, -0.06],
   ];
   strips.forEach(([sz, sy, yaw], i) => {
     parts.push({
       kind: 'box',
       pos: [x, sy - drop * 0.5, z + sz],
       rot: [-0.5 + drop, yaw, 0],
-      scale: [0.64, 0.05, 0.17],
+      scale: [0.6, 0.05, 0.16],
       color: i % 2 ? shade(hide, 1.16) : shade(hide, 0.96),
       hueJitter: 0.02,
     });
   });
-  if (lv === 0) {
-    parts.push({ kind: 'box', pos: [x, 0.55, z + 0.24], rot: [-0.5, 0, 0], scale: [0.68, 0.04, 0.08], color: soot(C.rope, lv) });
-  }
   parts.push(
-    { kind: 'box', pos: [x + 0.32, 0.18, z + 0.01], rot: [0, 0.08, 0], scale: [0.05, 0.36, 0.46], color: soot(C.hideDark, lv) },
-    { kind: 'cyl', pos: [x - 0.1, 0.11, z - 0.02], scale: [0.25, 0.22, 0.25], color: soot(C.rope, lv), seg: 6, hueJitter: 0.02 },
-    flare(x - 0.1, 0.24, z - 0.02, 0.27, 0.08, soot(shade(C.rope, 0.8), lv)),
+    { kind: 'box', pos: [x + 0.3, 0.18, z + 0.01], rot: [0, 0.08, 0], scale: [0.05, 0.34, 0.42], color: soot(C.hideDark, d) },
+    { kind: 'cyl', pos: [x - 0.1, 0.11, z - 0.02], scale: [0.23, 0.22, 0.23], color: soot(C.rope, d), seg: 6, hueJitter: 0.02 },
+    flare(x - 0.1, 0.24, z - 0.02, 0.25, 0.08, soot(shade(C.rope, 0.8), d)),
   );
   return parts;
 }
 
-// --- 방어/장식 -------------------------------------------------------------
-
-/** 뼈·나무 목책 — 반원 배열. 피해가 클수록 말뚝이 부러지고 가름대가 사라진다 */
-function palisade(lv: Lv): PartSpec[] {
-  const parts: PartSpec[] = [];
-  const n = 11;
-  const r = 1.42;
-  const wood = soot(C.wood, lv);
-  const woodD = soot(C.woodDark, lv);
-  for (let i = 0; i < n; i++) {
-    if (lv === 1 && i % 3 === 1) continue;
-    if (lv === 2 && i % 2 === 0 && i !== 6) continue;
-    const a = Math.PI * 0.18 + (i / (n - 1)) * Math.PI * 0.64;
-    const h = 0.5 + ((i * 7) % 3) * 0.06 - (lv === 2 ? 0.16 : 0);
-    const px = Math.cos(a) * r;
-    const pz = -Math.sin(a) * r;
-    parts.push(
-      post(px, h / 2, pz, 0.085, h, i % 2 === 0 ? wood : woodD, 5, [
-        ((i * 13) % 5) * 0.025 - 0.06,
-        0,
-        ((i * 11) % 5) * 0.025 - 0.06,
-      ]),
-    );
-    if (i % 2 === 0 && lv < 2) {
-      parts.push({
-        kind: 'cone',
-        pos: [px, h + 0.07, pz],
-        scale: [0.085, 0.17, 0.085],
-        color: shade(wood, 1.15),
-        seg: 4,
-      });
-    }
-  }
-  // 가로 가름대 (호를 4구간으로 근사)
-  const railN = lv === 0 ? 4 : lv === 1 ? 2 : 0;
-  for (let i = 0; i < railN; i++) {
-    const a0 = Math.PI * 0.18 + (i / 4) * Math.PI * 0.64;
-    const a1 = Math.PI * 0.18 + ((i + 1) / 4) * Math.PI * 0.64;
-    const mx = (Math.cos(a0) + Math.cos(a1)) * 0.5 * r;
-    const mz = -(Math.sin(a0) + Math.sin(a1)) * 0.5 * r;
-    const len = Math.hypot(Math.cos(a1) - Math.cos(a0), Math.sin(a1) - Math.sin(a0)) * r;
-    parts.push({
-      kind: 'cyl',
-      pos: [mx, 0.38, mz],
-      rot: [0, -Math.atan2(-(Math.sin(a1) - Math.sin(a0)), Math.cos(a1) - Math.cos(a0)), Math.PI / 2],
-      scale: [0.04, len * 1.06, 0.04],
-      color: woodD,
-      seg: 4,
-    });
-  }
-  // 밧줄 결속
-  const lashN = lv === 2 ? 1 : 3;
-  for (let i = 0; i < lashN; i++) {
-    const a = Math.PI * 0.26 + (i / 3) * Math.PI * 0.48;
-    parts.push({
-      kind: 'box',
-      pos: [Math.cos(a) * r, 0.4, -Math.sin(a) * r],
-      rot: [0, -a, 0],
-      scale: [0.13, 0.07, 0.13],
-      color: soot(C.rope, lv),
-    });
-  }
-  // 겁주기용 두개골 말뚝
-  parts.push({
-    kind: 'ico',
-    pos: [Math.cos(Math.PI * 0.5) * r, 0.66, -Math.sin(Math.PI * 0.5) * r],
-    rot: [0.2, 0.4, 0],
-    scale: [0.2, 0.18, 0.18],
-    color: soot(C.bone, lv),
-  });
-  if (lv < 2) {
-    parts.push({
-      kind: 'ico',
-      pos: [Math.cos(Math.PI * 0.24) * r, 0.62, -Math.sin(Math.PI * 0.24) * r],
-      rot: [0.5, 1.1, 0.2],
-      scale: [0.17, 0.15, 0.16],
-      color: soot(C.boneDark, lv),
-    });
-  }
-  if (lv === 2) {
-    // 부러져 쓰러진 말뚝
-    parts.push(
-      post(0.5, 0.06, -1.16, 0.08, 0.46, woodD, 4, [0.4, 0.9, 1.5]),
-      post(-0.72, 0.06, -1.0, 0.08, 0.42, wood, 4, [1.5, 0.3, 0.6]),
-    );
-  }
-  return parts;
-}
-
-/** 뼈 아치 입구 (모닥불 앞쪽) */
-function boneArch(lv: Lv): PartSpec[] {
-  if (lv === 2) {
+/** 사냥 도구 더미 (Lv3) — 세워둔 창 3자루 + 돌도끼 */
+function toolPile(d: Dmg): PartSpec[] {
+  const sx = 0.34;
+  const sz = -0.76;
+  const wood = soot(C.wood, d);
+  if (d === 2) {
     return [
-      post(-0.62, 0.05, 0.98, 0.06, 0.44, soot(C.woodDark, 2), 4, [0.3, 0.5, 1.4]),
-      { kind: 'ico', pos: [-0.2, 0.06, 1.02], rot: [0.6, 0.3, 0.2], scale: [0.19, 0.11, 0.17], color: soot(C.boneDark, 2) },
-      { kind: 'cone', pos: [0.24, 0.08, 0.96], rot: [1.4, 0.4, 0], scale: [0.1, 0.38, 0.1], color: soot(C.bone, 2), seg: 5 },
-    ];
-  }
-  const bone = soot(C.bone, lv);
-  const parts: PartSpec[] = [
-    post(-0.54, 0.3, 0.94, 0.1, 0.6, soot(C.wood, lv), 5),
-    post(0.54, 0.3, 0.94, 0.1, 0.6, soot(C.wood, lv), 5),
-    // 안쪽으로 휘어 정수리에서 만나는 엄니 한 쌍 = 아치
-    { kind: 'cone', pos: [-0.42, 0.72, 0.94], rot: [0, 0, -1.0], scale: [0.15, 0.5, 0.15], color: bone, seg: 5 },
-    { kind: 'cone', pos: [0.42, 0.72, 0.94], rot: [0, 0, 1.0], scale: [0.15, 0.5, 0.15], color: bone, seg: 5 },
-    { kind: 'ico', pos: [0, 0.86, 0.94], rot: [0.15, 0, 0], scale: [0.32, 0.28, 0.28], color: bone },
-    { kind: 'cone', pos: [0, 0.72, 1.06], rot: [1.3, 0, 0], scale: [0.11, 0.2, 0.11], color: shade(bone, 0.92), seg: 5 },
-    { kind: 'box', pos: [-0.4, 0.44, 0.94], rot: [0, 0, 0.15], scale: [0.06, 0.26, 0.06], color: soot(C.boneDark, lv) },
-  ];
-  if (lv === 0) {
-    parts.push({ kind: 'box', pos: [0.4, 0.46, 0.94], rot: [0, 0, -0.12], scale: [0.06, 0.24, 0.06], color: soot(C.boneDark, lv) });
-  }
-  return parts;
-}
-
-/** 토템 기둥 — 조각 단 + 날개 + 두개골 + 깃털 */
-function totemPole(lv: Lv): PartSpec[] {
-  const tx = 0.9;
-  const tz = 0.62;
-  if (lv === 2) {
-    // 부러져 쓰러진 토템
-    return [
-      { kind: 'cyl', pos: [tx, 0.07, tz], scale: [0.36, 0.14, 0.36], color: soot(C.stone, 2), seg: 7 },
-      post(tx, 0.24, tz, 0.26, 0.28, soot(C.wood, 2), 7),
-      { kind: 'cone', pos: [tx, 0.42, tz], scale: [0.26, 0.16, 0.26], color: 0x3a2c1c, seg: 6 },
-      post(tx + 0.36, 0.13, tz + 0.3, 0.26, 0.4, soot(0xc9702e, 2), 7, [0.3, 0, 1.5]),
-      { kind: 'ico', pos: [tx + 0.66, 0.1, tz + 0.46], rot: [0.6, 0.4, 0.2], scale: [0.2, 0.16, 0.2], color: soot(C.bone, 2) },
-      { kind: 'ico', pos: [tx - 0.24, 0.06, tz + 0.2], rot: [0.3, 1.0, 0.4], scale: [0.22, 0.1, 0.2], color: 0x4a3a28 },
-    ];
-  }
-  const lean = lv === 1 ? 0.1 : 0;
-  const wood = soot(C.wood, lv);
-  return [
-    { kind: 'cyl', pos: [tx, 0.07, tz], scale: [0.38, 0.14, 0.38], color: soot(C.stone, lv), seg: 7 },
-    post(tx, 0.28, tz, 0.26, 0.3, wood, 7, [0, 0, lean]),
-    post(tx - lean * 0.3, 0.56, tz, 0.28, 0.28, soot(0xc9702e, lv), 7, [0, 0, lean]),
-    post(tx - lean * 0.6, 0.84, tz, 0.25, 0.28, soot(0x3f8a4a, lv), 7, [0, 0, lean]),
-    { kind: 'box', pos: [tx - 0.08, 0.6, tz + 0.24], scale: [0.09, 0.09, 0.06], color: C.white },
-    { kind: 'box', pos: [tx + 0.1, 0.6, tz + 0.24], scale: [0.09, 0.09, 0.06], color: C.white },
-    { kind: 'cone', pos: [tx, 0.5, tz + 0.26], rot: [1.5, 0, 0], scale: [0.11, 0.2, 0.11], color: soot(C.bone, lv), seg: 5 },
-    { kind: 'box', pos: [tx - 0.32, 0.86, tz], rot: [0, 0, 0.3], scale: [0.3, 0.07, 0.12], color: soot(C.woodDark, lv) },
-    { kind: 'box', pos: [tx + 0.32, 0.86, tz], rot: [0, 0, -0.3], scale: [0.3, 0.07, 0.12], color: soot(C.woodDark, lv) },
-    { kind: 'ico', pos: [tx - lean, 1.06, tz], rot: [0.1, 0.3, 0], scale: [0.24, 0.22, 0.22], color: soot(C.bone, lv) },
-    { kind: 'cone', pos: [tx - lean - 0.1, 1.24, tz - 0.04], rot: [0, 0, 0.4], scale: [0.06, 0.24, 0.06], color: soot(C.banner, lv), seg: 4 },
-    { kind: 'cone', pos: [tx - lean + 0.02, 1.28, tz + 0.02], scale: [0.06, 0.26, 0.06], color: soot(C.gold, lv), seg: 4 },
-    { kind: 'cone', pos: [tx - lean + 0.12, 1.23, tz - 0.02], rot: [0, 0, -0.42], scale: [0.06, 0.22, 0.06], color: soot(C.banner, lv), seg: 4 },
-  ];
-}
-
-/** 가죽 건조대 */
-function dryingRack(lv: Lv): PartSpec[] {
-  const rx = -1.06;
-  const rz = 0.42;
-  const wood = soot(C.wood, lv);
-  if (lv === 2) {
-    return [
-      post(rx, 0.05, rz + 0.1, 0.05, 0.56, soot(C.woodDark, 2), 4, [0.4, 0.3, 1.45]),
-      post(rx + 0.1, 0.06, rz - 0.34, 0.05, 0.5, soot(C.woodDark, 2), 4, [1.4, 0.6, 0.2]),
-      { kind: 'box', pos: [rx + 0.12, 0.04, rz - 0.06], rot: [0, 0.5, 0.05], scale: [0.4, 0.05, 0.3], color: shade(soot(C.hide, 2), 0.7) },
-    ];
-  }
-  const parts: PartSpec[] = [
-    post(rx, 0.36, rz + 0.34, 0.085, 0.72, wood, 5, [0, 0, lv === 1 ? 0.16 : 0]),
-    post(rx, 0.36, rz - 0.38, 0.085, 0.72, wood, 5),
-    { kind: 'cyl', pos: [rx, 0.7, rz - 0.02], rot: [Math.PI / 2, 0, 0], scale: [0.05, 0.78, 0.05], color: shade(wood, 1.18), seg: 4 },
-    { kind: 'box', pos: [rx, 0.48, rz + 0.26], rot: [0, 0.06, 0], scale: [0.05, 0.38, 0.15], color: soot(shade(C.hide, 1.12), lv), hueJitter: 0.02 },
-    { kind: 'box', pos: [rx, 0.5, rz - 0.28], rot: [0, -0.08, 0], scale: [0.05, 0.34, 0.14], color: soot(C.hideDark, lv), hueJitter: 0.02 },
-  ];
-  if (lv === 0) {
-    parts.push(
-      { kind: 'box', pos: [rx, 0.52, rz - 0.02], scale: [0.045, 0.3, 0.13], color: soot(C.hide, lv) },
-      { kind: 'box', pos: [rx, 0.62, rz + 0.36], rot: [0, 0, 0.1], scale: [0.06, 0.18, 0.12], color: 0xb84a4a },
-    );
-  }
-  return parts;
-}
-
-/** 항아리·바구니 */
-function pottery(lv: Lv): PartSpec[] {
-  const px = -0.5;
-  const pz = -0.14;
-  const clay = soot(0xa9663c, lv);
-  if (lv === 2) {
-    return [
-      { kind: 'ico', pos: [px, 0.05, pz], rot: [0.4, 0.6, 0.3], scale: [0.24, 0.1, 0.22], color: clay },
-      { kind: 'ico', pos: [px + 0.24, 0.04, pz - 0.16], rot: [1.1, 0.2, 0.5], scale: [0.18, 0.08, 0.16], color: shade(clay, 0.86) },
-      { kind: 'ico', pos: [px - 0.18, 0.04, pz + 0.2], rot: [0.7, 1.2, 0.2], scale: [0.15, 0.07, 0.14], color: soot(C.rope, 2) },
-    ];
-  }
-  const parts: PartSpec[] = [
-    { kind: 'cyl', pos: [px, 0.14, pz], scale: [0.26, 0.28, 0.26], color: clay, seg: 6, hueJitter: 0.02 },
-    flare(px, 0.32, pz, 0.2, 0.1, shade(clay, 1.12)),
-    { kind: 'cyl', pos: [px + 0.34, 0.1, pz - 0.18], scale: [0.2, 0.2, 0.2], color: soot(C.rope, lv), seg: 6, hueJitter: 0.02 },
-    flare(px + 0.34, 0.22, pz - 0.18, 0.22, 0.07, soot(shade(C.rope, 0.82), lv)),
-  ];
-  if (lv === 0) {
-    parts.push(
-      { kind: 'cyl', pos: [px - 0.2, 0.09, pz + 0.26], scale: [0.18, 0.18, 0.18], color: shade(clay, 0.86), seg: 6 },
-      { kind: 'cone', pos: [px - 0.2, 0.21, pz + 0.26], scale: [0.16, 0.09, 0.16], color: soot(C.woodDark, lv), seg: 5 },
-    );
-  } else {
-    parts.push({ kind: 'ico', pos: [px - 0.22, 0.04, pz + 0.28], rot: [0.5, 0.8, 0.3], scale: [0.19, 0.08, 0.17], color: shade(clay, 0.8) });
-  }
-  return parts;
-}
-
-/** 사냥 도구 더미 — 세워둔 창 3자루 + 돌도끼 + 가죽 뭉치 */
-function toolPile(lv: Lv): PartSpec[] {
-  const sx = 0.62;
-  const sz = -0.52;
-  const wood = soot(C.wood, lv);
-  if (lv === 2) {
-    return [
-      post(sx, 0.04, sz, 0.035, 0.66, soot(C.woodDark, 2), 4, [0, 0.6, 1.52]),
-      post(sx - 0.16, 0.04, sz + 0.22, 0.035, 0.6, soot(C.woodDark, 2), 4, [0.3, 1.5, 1.5]),
-      { kind: 'cone', pos: [sx + 0.36, 0.04, sz - 0.1], rot: [0, 0.6, 1.5], scale: [0.07, 0.16, 0.07], color: soot(C.stone, 2), seg: 4 },
+      post(sx, 0.04, sz, 0.033, 0.62, soot(C.woodDark, 2), 4, [0, 0.6, 1.52]),
+      post(sx - 0.16, 0.04, sz + 0.2, 0.033, 0.56, soot(C.woodDark, 2), 4, [0.3, 1.5, 1.5]),
     ];
   }
   const parts: PartSpec[] = [];
@@ -561,132 +790,465 @@ function toolPile(lv: Lv): PartSpec[] {
     const dx = Math.cos(a) * 0.1;
     const dz = Math.sin(a) * 0.1;
     parts.push(
-      post(sx + dx, 0.32, sz + dz, 0.032, 0.64, i % 2 ? wood : soot(C.woodDark, lv), 4, [
+      post(sx + dx, 0.32, sz + dz, 0.03, 0.62, i % 2 ? wood : soot(C.woodDark, d), 4, [
         Math.sin(a) * lean,
         0,
         -Math.cos(a) * lean,
       ]),
       {
         kind: 'cone',
-        pos: [sx + dx * 2.1, 0.68, sz + dz * 2.1],
+        pos: [sx + dx * 2.1, 0.66, sz + dz * 2.1],
         rot: [Math.sin(a) * lean, 0, -Math.cos(a) * lean],
-        scale: [0.062, 0.18, 0.062],
-        color: soot(C.stone, lv),
+        scale: [0.058, 0.17, 0.058],
+        color: soot(C.stone, d),
         seg: 4,
       },
     );
   }
   parts.push(
-    post(sx + 0.3, 0.1, sz + 0.2, 0.03, 0.4, wood, 4, [0, 0.4, 1.35]),
-    { kind: 'box', pos: [sx + 0.48, 0.1, sz + 0.28], rot: [0, 0.4, 0.25], scale: [0.16, 0.09, 0.06], color: soot(C.stoneDark, lv) },
-    { kind: 'ico', pos: [sx - 0.28, 0.08, sz - 0.16], rot: [0.4, 0.7, 0.2], scale: [0.22, 0.14, 0.2], color: soot(C.hideDark, lv) },
+    post(sx + 0.28, 0.1, sz + 0.18, 0.028, 0.38, wood, 4, [0, 0.4, 1.35]),
+    { kind: 'box', pos: [sx + 0.44, 0.1, sz + 0.26], rot: [0, 0.4, 0.25], scale: [0.15, 0.09, 0.06], color: soot(C.stoneDark, d) },
   );
   return parts;
 }
 
-/** 모닥불 둘레 통나무 의자 + 고기 굽는 꼬치대 */
-function fireside(lv: Lv): PartSpec[] {
-  const wood = soot(C.wood, lv);
-  const woodD = soot(C.woodDark, lv);
-  if (lv === 2) {
-    return [
-      { kind: 'cyl', pos: [0.74, 0.08, 0.16], rot: [0, 0.5, Math.PI / 2], scale: [0.14, 0.62, 0.14], color: 0x33291f, seg: 6 },
-      { kind: 'ico', pos: [-0.7, 0.05, 0.3], rot: [0.5, 0.4, 0.2], scale: [0.26, 0.1, 0.22], color: 0x2e251c },
-      post(-0.34, 0.04, 0.62, 0.035, 0.5, 0x33291f, 4, [0.2, 0.8, 1.5]),
-    ];
+// --- Lv4: 돌담 · 깃발 · 뼈 아치 · 항아리 ------------------------------------
+
+/**
+ * 돌담 (Lv4) — 목책을 걷어내지 않고 **밑동을 돌로 받친다**.
+ * 같은 호(WALL_R)에 돌 기단 + 큰 돌덩이를 얹어 "울타리가 성벽이 됐다"로 읽히게 한다.
+ */
+function stoneWall(d: Dmg): PartSpec[] {
+  const parts: PartSpec[] = [];
+  // 목책보다 한 뼘 안쪽 — 돌덩이가 말뚝 바깥으로 나가면 바닥판을 넘는다
+  const r = WALL_R - 0.11;
+  const a0 = Math.PI * 0.08;
+  const span = Math.PI * 0.84;
+  const n = 9;
+  const stone = soot(C.stone, d);
+  const stoneD = soot(C.stoneDark, d);
+  for (let i = 0; i < n; i++) {
+    if (d === 2 && i % 3 === 1) continue;
+    const a = a0 + (i / (n - 1)) * span;
+    const px = Math.cos(a) * r;
+    const pz = -Math.sin(a) * r;
+    const h = d === 2 ? 0.16 : 0.26 + ((i * 5) % 3) * 0.04;
+    parts.push({
+      kind: 'box',
+      pos: [px, h * 0.5, pz],
+      rot: [0, -a + ((i * 7) % 3) * 0.05, 0],
+      scale: [0.3, h, 0.34],
+      color: i % 2 ? stone : stoneD,
+      hueJitter: 0.02,
+    });
+    if (d < 2 && i % 2 === 1) {
+      parts.push({
+        kind: 'ico',
+        pos: [px, h + 0.08, pz],
+        rot: [i * 0.4, i * 0.9, i * 0.3],
+        scale: [0.24, 0.19, 0.22],
+        color: i % 3 ? shade(stone, 1.08) : soot(C.rock, d),
+        hueJitter: 0.02,
+      });
+    }
   }
-  const parts: PartSpec[] = [
-    // 통나무 의자 2개
-    { kind: 'cyl', pos: [0.76, 0.12, 0.2], rot: [0, 0.42, Math.PI / 2], scale: [0.16, 0.64, 0.16], color: wood, seg: 6, hueJitter: 0.02 },
-    { kind: 'cyl', pos: [-0.72, 0.12, 0.34], rot: [0, -0.5, Math.PI / 2], scale: [0.15, 0.58, 0.15], color: woodD, seg: 6, hueJitter: 0.02 },
-    // 고기 굽는 꼬치대 — 불꽃 실루엣을 가리지 않도록 화덕 뒤쪽 가장자리로 뺀다
-    post(-0.34, 0.24, -0.5, 0.04, 0.48, woodD, 4, [0, 0, 0.16]),
-    post(0.34, 0.24, -0.5, 0.04, 0.48, woodD, 4, [0, 0, -0.16]),
-    { kind: 'cyl', pos: [0, 0.5, -0.5], rot: [0, 0, Math.PI / 2], scale: [0.03, 0.8, 0.03], color: shade(woodD, 1.2), seg: 4 },
-  ];
-  if (lv === 0) {
+  if (d === 2) {
     parts.push(
-      { kind: 'box', pos: [-0.14, 0.43, -0.5], rot: [0, 0.2, 0], scale: [0.16, 0.14, 0.11], color: 0x9c4a34 },
-      { kind: 'box', pos: [0.16, 0.44, -0.5], rot: [0, -0.3, 0], scale: [0.14, 0.13, 0.1], color: 0x8a4030 },
+      { kind: 'ico', pos: [0.86, 0.06, -0.86], rot: [0.4, 0.6, 0.2], scale: [0.3, 0.14, 0.28], color: stoneD },
+      { kind: 'ico', pos: [-0.5, 0.05, -1.02], rot: [0.9, 0.2, 0.5], scale: [0.26, 0.12, 0.24], color: stone },
     );
-  } else {
-    parts.push({ kind: 'box', pos: [0.02, 0.43, -0.5], rot: [0, 0.2, 0], scale: [0.14, 0.12, 0.1], color: 0x5c3626 });
   }
   return parts;
 }
 
-/** 바닥 잡동사니 — 돌·장작·나무 조각 (반파에선 그을린 잔해 추가) */
-function scatter(lv: Lv): PartSpec[] {
-  const parts: PartSpec[] = [
-    { kind: 'ico', pos: [-1.24, 0.05, -0.02], rot: [0.4, 0.8, 0.2], scale: [0.24, 0.14, 0.22], color: soot(C.rock, lv), hueJitter: 0.015 },
-    { kind: 'ico', pos: [1.16, 0.05, -0.6], rot: [1.1, 0.3, 0.6], scale: [0.2, 0.12, 0.19], color: soot(C.stoneDark, lv), hueJitter: 0.015 },
-    { kind: 'ico', pos: [0.02, 0.04, -0.72], rot: [0.7, 1.2, 0.3], scale: [0.17, 0.1, 0.16], color: soot(C.rock, lv) },
-    { kind: 'cyl', pos: [-0.5, 0.06, 0.72], rot: [0, 0.9, Math.PI / 2], scale: [0.07, 0.34, 0.07], color: soot(C.woodDark, lv), seg: 4 },
-    { kind: 'box', pos: [0.44, 0.03, 0.5], rot: [0, 0.7, 0], scale: [0.16, 0.05, 0.1], color: soot(C.wood, lv) },
-    { kind: 'box', pos: [-0.18, 0.03, -0.98], rot: [0, -0.5, 0], scale: [0.14, 0.05, 0.09], color: soot(C.woodDark, lv) },
+/** 깃발 (Lv4) — 목책 양끝과 마을 안쪽에 세우는 부족기 */
+function banners(d: Dmg): PartSpec[] {
+  const wood = soot(C.woodDark, d);
+  const parts: PartSpec[] = [];
+  const spots: [number, number, number, number][] = [
+    // [x, z, 깃발색, 높이]
+    [Math.cos(Math.PI * 0.1) * WALL_R, -Math.sin(Math.PI * 0.1) * WALL_R, C.banner, 0.92],
+    [Math.cos(Math.PI * 0.9) * WALL_R, -Math.sin(Math.PI * 0.9) * WALL_R, 0x3f8a4a, 0.86],
+    [-0.9, 0.56, C.gold, 0.78],
   ];
-  if (lv === 2) {
+  spots.forEach(([bx, bz, color, h], i) => {
+    if (d === 2 && i === 1) {
+      parts.push(post(bx + 0.2, 0.05, bz + 0.16, 0.035, h * 0.7, wood, 4, [0.4, 0.7, 1.44]));
+      return;
+    }
+    const lean = d === 1 ? 0.08 : 0;
+    parts.push(post(bx, h * 0.5, bz, 0.036, h, wood, 4, [0, 0, lean]));
+    // 깃대에 매달린 천 — 위가 넓고 아래가 좁은 삼각기
+    const fy = h * 0.78;
     parts.push(
-      { kind: 'ico', pos: [-0.46, 0.03, -0.86], rot: [0.3, 0.6, 0.2], scale: [0.32, 0.06, 0.28], color: 0x3e3630 },
-      { kind: 'ico', pos: [0.72, 0.03, -0.78], rot: [0.9, 0.2, 0.5], scale: [0.28, 0.05, 0.25], color: 0x342d28 },
-      // 잿더미/뼈 — 어두운 잔해 속 밝은 대비점
-      { kind: 'ico', pos: [1.0, 0.04, 0.44], rot: [0.5, 1.1, 0.3], scale: [0.3, 0.06, 0.27], color: 0xa9a49a },
-      { kind: 'ico', pos: [-0.72, 0.05, 0.62], rot: [0.2, 0.7, 0.4], scale: [0.26, 0.07, 0.24], color: 0x9a958c },
-      { kind: 'cone', pos: [0.5, 0.06, 0.8], rot: [1.45, 0.5, 0], scale: [0.09, 0.34, 0.09], color: shade(C.bone, 0.86), seg: 5 },
-      { kind: 'ico', pos: [-0.16, 0.07, 0.86], rot: [0.4, 0.3, 0.2], scale: [0.2, 0.16, 0.18], color: shade(C.bone, 0.8) },
+      {
+        kind: 'box',
+        pos: [bx - lean * 0.5 + 0.02, fy, bz + 0.12],
+        rot: [0, 0.18, lean],
+        scale: [0.05, 0.3, 0.22],
+        color: soot(color, d),
+        hueJitter: 0.03,
+      },
+      {
+        kind: 'cone',
+        pos: [bx - lean * 0.5 + 0.02, fy - 0.22, bz + 0.1],
+        rot: [Math.PI, 0.18, lean],
+        scale: [0.18, 0.16, 0.05],
+        color: soot(shade(color, 0.86), d),
+        seg: 3,
+      },
+      { kind: 'cone', pos: [bx - lean * 0.9, h + 0.06, bz], scale: [0.05, 0.14, 0.05], color: soot(C.bone, d), seg: 4 },
     );
-  } else if (lv === 1) {
-    parts.push({ kind: 'ico', pos: [-0.4, 0.03, -0.9], rot: [0.3, 0.6, 0.2], scale: [0.26, 0.05, 0.24], color: 0x4a4038 });
+  });
+  return parts;
+}
+
+/** 뼈 아치 입구 (Lv4) — 마을 정면 */
+function boneArch(d: Dmg): PartSpec[] {
+  const z = ARCH_Z;
+  if (d === 2) {
+    return [
+      post(-0.58, 0.05, z - 0.02, 0.055, 0.42, soot(C.woodDark, 2), 4, [0.3, 0.5, 1.4]),
+      { kind: 'ico', pos: [-0.18, 0.06, z + 0.02], rot: [0.6, 0.3, 0.2], scale: [0.18, 0.11, 0.16], color: soot(C.boneDark, 2) },
+      { kind: 'cone', pos: [0.22, 0.08, z - 0.04], rot: [1.4, 0.4, 0], scale: [0.09, 0.36, 0.09], color: soot(C.bone, 2), seg: 5 },
+    ];
+  }
+  const bone = soot(C.bone, d);
+  const parts: PartSpec[] = [
+    post(-0.5, 0.3, z, 0.095, 0.6, soot(C.wood, d), 5),
+    post(0.5, 0.3, z, 0.095, 0.6, soot(C.wood, d), 5),
+    { kind: 'cone', pos: [-0.4, 0.72, z], rot: [0, 0, -1.0], scale: [0.14, 0.48, 0.14], color: bone, seg: 5 },
+    { kind: 'cone', pos: [0.4, 0.72, z], rot: [0, 0, 1.0], scale: [0.14, 0.48, 0.14], color: bone, seg: 5 },
+    { kind: 'ico', pos: [0, 0.86, z], rot: [0.15, 0, 0], scale: [0.3, 0.27, 0.27], color: bone },
+    { kind: 'cone', pos: [0, 0.72, z + 0.11], rot: [1.3, 0, 0], scale: [0.1, 0.19, 0.1], color: shade(bone, 0.92), seg: 5 },
+    { kind: 'box', pos: [-0.37, 0.44, z], rot: [0, 0, 0.15], scale: [0.055, 0.25, 0.055], color: soot(C.boneDark, d) },
+  ];
+  if (d === 0) {
+    parts.push({ kind: 'box', pos: [0.37, 0.46, z], rot: [0, 0, -0.12], scale: [0.055, 0.23, 0.055], color: soot(C.boneDark, d) });
   }
   return parts;
 }
+
+/** 항아리·바구니 (Lv4) */
+function pottery(d: Dmg): PartSpec[] {
+  const px = -0.86;
+  const pz = 0.24;
+  const clay = soot(0xa9663c, d);
+  if (d === 2) {
+    return [
+      { kind: 'ico', pos: [px, 0.05, pz], rot: [0.4, 0.6, 0.3], scale: [0.22, 0.1, 0.2], color: clay },
+      { kind: 'ico', pos: [px + 0.22, 0.04, pz - 0.16], rot: [1.1, 0.2, 0.5], scale: [0.17, 0.08, 0.15], color: shade(clay, 0.86) },
+    ];
+  }
+  const parts: PartSpec[] = [
+    { kind: 'cyl', pos: [px, 0.14, pz], scale: [0.24, 0.28, 0.24], color: clay, seg: 6, hueJitter: 0.02 },
+    flare(px, 0.32, pz, 0.19, 0.1, shade(clay, 1.12)),
+    { kind: 'cyl', pos: [px + 0.3, 0.1, pz - 0.18], scale: [0.19, 0.2, 0.19], color: soot(C.rope, d), seg: 6, hueJitter: 0.02 },
+    flare(px + 0.3, 0.22, pz - 0.18, 0.21, 0.07, soot(shade(C.rope, 0.82), d)),
+  ];
+  if (d === 0) {
+    parts.push(
+      { kind: 'cyl', pos: [px - 0.16, 0.09, pz + 0.24], scale: [0.17, 0.18, 0.17], color: shade(clay, 0.86), seg: 6 },
+      { kind: 'cone', pos: [px - 0.16, 0.21, pz + 0.24], scale: [0.15, 0.09, 0.15], color: soot(C.woodDark, d), seg: 5 },
+    );
+  }
+  return parts;
+}
+
+// --- Lv5: 큰 장옥 · 망루 꼭대기 · 두개골 말뚝 -------------------------------
+
+/**
+ * 큰 장옥 (Lv5) — 마을에서 가장 큰 집. 지금까지의 원뿔/돔 움막과 **형태를 갈라**
+ * 용마루가 있는 긴 박공지붕으로 세운다. 멀리서도 "저 마을에 큰 건물이 생겼다"가 읽힌다.
+ */
+function greatHall(d: Dmg): PartSpec[] {
+  const [x, z] = HALL;
+  const wood = soot(C.wood, d);
+  const woodD = soot(C.woodDark, d);
+  const hide = soot(C.hide, d);
+  const straw = soot(C.straw, d);
+
+  if (d === 2) {
+    return [
+      { kind: 'box', pos: [x, 0.1, z], rot: [0, 0.06, 0.05], scale: [0.6, 0.2, 0.9], color: 0x4a3a2c, hueJitter: 0.02 },
+      { kind: 'box', pos: [x - 0.16, 0.24, z + 0.3], rot: [0.4, 0.2, 0.5], scale: [0.5, 0.07, 0.42], color: shade(straw, 0.62) },
+      { kind: 'box', pos: [x + 0.2, 0.16, z - 0.34], rot: [-0.5, 0.3, 0.2], scale: [0.44, 0.07, 0.38], color: shade(straw, 0.55) },
+      post(x - 0.24, 0.3, z - 0.4, 0.07, 0.62, woodD, 4, [0.3, 0, 0.6]),
+      post(x + 0.22, 0.24, z + 0.42, 0.065, 0.5, woodD, 4, [-0.5, 0.2, 0.3]),
+      { kind: 'ico', pos: [x + 0.34, 0.06, z - 0.02], rot: [0.3, 0.7, 0.2], scale: [0.34, 0.1, 0.3], color: 0x584f48 },
+    ];
+  }
+
+  const tilt = d === 1 ? 0.07 : 0;
+  const parts: PartSpec[] = [
+    // 돌 기단 — 큰 집만 갖는 요소
+    { kind: 'box', pos: [x, 0.05, z], scale: [0.7, 0.1, 1.0], color: soot(C.stoneDark, d), hueJitter: 0.02 },
+    // 통나무 벽 (가로결 4단) — 움막(높이 1.23)보다 확실히 큰 집이 되도록 벽을 높인다
+    { kind: 'box', pos: [x, 0.2, z], rot: [0, 0, tilt * 0.4], scale: [0.62, 0.2, 0.92], color: wood, hueJitter: 0.02 },
+    { kind: 'box', pos: [x, 0.4, z], rot: [0, 0, tilt * 0.4], scale: [0.62, 0.2, 0.9], color: shade(wood, 0.92), hueJitter: 0.02 },
+    { kind: 'box', pos: [x, 0.6, z], rot: [0, 0, tilt * 0.4], scale: [0.6, 0.2, 0.88], color: shade(wood, 1.06), hueJitter: 0.02 },
+    // 박공 삼각 벽 (앞/뒤)
+    { kind: 'cone', pos: [x, 0.88, z + 0.44], rot: [Math.PI / 2, 0, 0], scale: [0.66, 0.14, 0.5], color: woodD, seg: 3 },
+    { kind: 'cone', pos: [x, 0.88, z - 0.44], rot: [-Math.PI / 2, 0, 0], scale: [0.66, 0.14, 0.5], color: woodD, seg: 3 },
+  ];
+  // 박공 지붕 = 마주 기운 이엉 두 장 (용마루가 z축을 따라 길게 눕는다)
+  parts.push(
+    { kind: 'box', pos: [x - 0.2, 0.86 + tilt * 0.2, z], rot: [0, 0, 0.7 + tilt], scale: [0.62, 0.08, 1.02], color: straw, hueJitter: 0.03 },
+    { kind: 'box', pos: [x + 0.2, 0.86 + tilt * 0.2, z], rot: [0, 0, -0.7 + tilt], scale: [0.62, 0.08, 1.02], color: shade(straw, 0.84), hueJitter: 0.03 },
+    // 용마루 덮개 — 붉은 흙 이엉. 짚 움막(같은 straw)과 지붕을 색으로 갈라 준다
+    { kind: 'box', pos: [x, 1.09 + tilt * 0.2, z], scale: [0.2, 0.07, 1.04], color: soot(0xb4482e, d), hueJitter: 0.02 },
+    { kind: 'cyl', pos: [x, 1.14 + tilt * 0.2, z], rot: [Math.PI / 2, 0, 0], scale: [0.07, 1.06, 0.07], color: woodD, seg: 5 },
+  );
+  if (d === 0) {
+    // 용마루 끝 뿔 장식 + 지붕 결속 밧줄
+    parts.push(
+      { kind: 'cone', pos: [x, 1.22, z + 0.5], rot: [0.5, 0, 0.35], scale: [0.07, 0.28, 0.07], color: soot(C.bone, d), seg: 4 },
+      { kind: 'cone', pos: [x, 1.22, z - 0.5], rot: [-0.5, 0, -0.35], scale: [0.07, 0.28, 0.07], color: soot(C.bone, d), seg: 4 },
+      { kind: 'box', pos: [x - 0.2, 0.86, z + 0.26], rot: [0, 0, 0.7], scale: [0.64, 0.03, 0.06], color: soot(C.rope, d) },
+      { kind: 'box', pos: [x + 0.2, 0.86, z - 0.26], rot: [0, 0, -0.7], scale: [0.64, 0.03, 0.06], color: soot(C.rope, d) },
+    );
+  } else {
+    parts.push({ kind: 'box', pos: [x - 0.32, 0.74, z + 0.3], rot: [0, 0.4, 0.7], scale: [0.3, 0.05, 0.24], color: shade(straw, 0.6) });
+  }
+  // 출입구 (마을 안쪽 = −x)
+  parts.push(
+    { kind: 'box', pos: [x - 0.32, 0.28, z], scale: [0.06, 0.5, 0.36], color: soot(0x3a2c1c, d) },
+    post(x - 0.33, 0.3, z + 0.2, 0.05, 0.58, woodD, 4),
+    post(x - 0.33, 0.3, z - 0.2, 0.05, 0.58, woodD, 4),
+    { kind: 'box', pos: [x - 0.33, 0.6, z], scale: [0.07, 0.07, 0.48], color: shade(wood, 1.2) },
+    // 벽에 건 가죽·방패
+    { kind: 'box', pos: [x - 0.33, 0.42, z + 0.36], rot: [0, 0, 0.05], scale: [0.05, 0.26, 0.24], color: hide },
+  );
+  if (d === 0) {
+    parts.push({ kind: 'box', pos: [x - 0.33, 0.4, z - 0.36], scale: [0.05, 0.24, 0.22], color: soot(C.boneDark, d) });
+  }
+  return parts;
+}
+
+/** 망루 꼭대기층 (Lv5) — 지붕 위 깃대와 뿔, 그리고 한 단 더 높은 전망 */
+function watchTop(d: Dmg): PartSpec[] {
+  const topY = WATCH_RAIL_Y;
+  if (d === 2) {
+    return [
+      { kind: 'cone', pos: [0.34, 0.08, 0.5], rot: [1.3, 0.4, 0.2], scale: [0.13, 0.4, 0.13], color: soot(C.woodDark, 2), seg: 4 },
+      { kind: 'box', pos: [-0.4, 0.06, 0.42], rot: [0, 0.5, 0.08], scale: [0.24, 0.05, 0.18], color: soot(C.banner, 2) },
+    ];
+  }
+  const lean = d === 1 ? 0.12 : 0;
+  // 깃대는 데크 **앞 귀퉁이**에 세운다 — 가운데면 뒤편 차양을 뚫고, 무엇보다
+  // 마을에서 가장 높은 색 덩어리가 실루엣 가장자리에 서야 멀리서 눈에 걸린다
+  const fx = 0.24;
+  const fz = 0.24;
+  return [
+    post(fx, topY + 0.34, fz, 0.032, 0.62, soot(C.woodDark, d), 4, [0, 0, lean]),
+    // 부족기 — 마을에서 가장 높은 색 덩어리
+    {
+      kind: 'box',
+      pos: [fx - lean * 0.5 + 0.03, topY + 0.5, fz + 0.15],
+      rot: [0, 0.2, lean],
+      scale: [0.045, 0.27, 0.28],
+      color: soot(C.banner, d),
+      hueJitter: 0.03,
+    },
+    {
+      kind: 'cone',
+      pos: [fx - lean * 0.5 + 0.03, topY + 0.3, fz + 0.13],
+      rot: [Math.PI, 0.2, lean],
+      scale: [0.24, 0.14, 0.045],
+      color: soot(shade(C.banner, 0.84), d),
+      seg: 3,
+    },
+    { kind: 'ico', pos: [fx - lean * 0.9, topY + 0.62, fz], rot: [0.2, 0.4, 0], scale: [0.16, 0.15, 0.15], color: soot(C.bone, d) },
+    // 난간 뒤 귀퉁이의 뿔 장식
+    { kind: 'cone', pos: [-0.3, topY - 0.14, 0.3], rot: [0.4, 0, -0.4], scale: [0.06, 0.22, 0.06], color: soot(C.boneDark, d), seg: 4 },
+    { kind: 'cone', pos: [-0.3, topY - 0.14, -0.3], rot: [-0.4, 0, 0.4], scale: [0.06, 0.22, 0.06], color: soot(C.boneDark, d), seg: 4 },
+  ];
+}
+
+/** 두개골 말뚝 + 마무리 잡동사니 (Lv5) */
+function skullPosts(d: Dmg): PartSpec[] {
+  const parts: PartSpec[] = [];
+  const spots: [number, number][] = [
+    [Math.cos(Math.PI * 0.32) * (WALL_R - 0.02), -Math.sin(Math.PI * 0.32) * (WALL_R - 0.02)],
+    [Math.cos(Math.PI * 0.68) * (WALL_R - 0.02), -Math.sin(Math.PI * 0.68) * (WALL_R - 0.02)],
+  ];
+  spots.forEach(([sx, sz], i) => {
+    if (d === 2 && i === 0) {
+      parts.push({ kind: 'ico', pos: [sx * 0.8, 0.06, sz * 0.8], rot: [0.6, 0.4, 0.2], scale: [0.19, 0.14, 0.18], color: soot(C.boneDark, 2) });
+      return;
+    }
+    parts.push(
+      post(sx, 0.34, sz, 0.045, 0.68, soot(C.woodDark, d), 4),
+      { kind: 'ico', pos: [sx, 0.76, sz], rot: [0.2, i * 0.9, 0], scale: [0.2, 0.18, 0.18], color: soot(i ? C.bone : C.boneDark, d) },
+    );
+  });
+  parts.push(
+    { kind: 'cyl', pos: [-0.34, 0.06, 0.9], rot: [0, 0.9, Math.PI / 2], scale: [0.07, 0.3, 0.07], color: soot(C.woodDark, d), seg: 4 },
+    { kind: 'ico', pos: [0.9, 0.05, 0.72], rot: [1.1, 0.3, 0.6], scale: [0.19, 0.12, 0.18], color: soot(C.stoneDark, d), hueJitter: 0.015 },
+  );
+  return parts;
+}
+
+// --- 발광 불꽃 -------------------------------------------------------------
+
+/**
+ * 모닥불 불꽃 — 레벨이 오르면 커지고, 피해가 크면 작아지는 대신 잔해에 불이 붙는다.
+ * 레이어와 달리 **누적하지 않는다** (같은 자리의 불이 겹쳐 타면 안 되므로 통짜 교체).
+ */
+function flames(level: number, d: Dmg): PartSpec[] {
+  const [x, z] = HEARTH;
+  // Lv1 화톳불은 작고, Lv2에서 정식 화덕이 되며 이후 완만히 커진다
+  const grow = level <= 1 ? 0.62 : 0.86 + Math.min(3, level - 2) * 0.05;
+  const s = grow * (d === 0 ? 1 : d === 1 ? 0.76 : 0.48);
+  const parts: PartSpec[] = [
+    { kind: 'cone', pos: [x, 0.32 * s + 0.08, z], scale: [0.4 * s, 0.64 * s, 0.4 * s], color: C.fire, seg: 6 },
+    { kind: 'cone', pos: [x + 0.04, 0.26 * s + 0.08, z + 0.03], scale: [0.25 * s, 0.44 * s, 0.25 * s], color: 0xffd24a, seg: 5 },
+  ];
+  if (d === 0) {
+    parts.push(
+      { kind: 'cone', pos: [x - 0.17 * s, 0.24 * s + 0.06, z + 0.12 * s], rot: [0, 0, 0.42], scale: [0.16 * s, 0.34 * s, 0.16 * s], color: C.ember, seg: 4 },
+      { kind: 'cone', pos: [x + 0.18 * s, 0.22 * s + 0.06, z - 0.13 * s], rot: [0, 0, -0.4], scale: [0.14 * s, 0.3 * s, 0.14 * s], color: 0xffb43a, seg: 4 },
+    );
+  }
+  if (d === 2) {
+    // 무너진 구조물에 붙은 불 — 레벨이 높을수록 탈 것이 많다
+    parts.push({ kind: 'cone', pos: [HUT_A[0], 0.24, HUT_A[1] + 0.1], scale: [0.18, 0.34, 0.18], color: C.ember, seg: 4 });
+    if (level >= 2) {
+      parts.push({ kind: 'cone', pos: [HUT_B[0] + 0.1, 0.18, HUT_B[1] + 0.2], scale: [0.13, 0.26, 0.13], color: C.fire, seg: 4 });
+    }
+    if (level >= 3) {
+      parts.push({ kind: 'cone', pos: [0.2, 0.16, -0.1], scale: [0.12, 0.24, 0.12], color: 0xffb43a, seg: 4 });
+    }
+    if (level >= 5) {
+      parts.push({ kind: 'cone', pos: [HALL[0] - 0.1, 0.22, HALL[1] - 0.2], scale: [0.16, 0.3, 0.16], color: C.ember, seg: 4 });
+    }
+  }
+  return parts;
+}
+
+// --- 레벨 레이어 ----------------------------------------------------------
+
+/**
+ * 레벨 L에서 **새로 더해지는** 파트들. 낮은 레벨의 것은 여기에 다시 넣지 않는다
+ * (누적은 지오메트리 병합이 한다).
+ */
+const LAYERS: readonly ((d: Dmg) => PartSpec[])[][] = [
+  // Lv1 — 움막 하나 · 화톳불 · 사수 발판
+  [groundL1, hideHut, emberPit, watchDeck, scatterL1],
+  // Lv2 — 모닥불 · 목책 · 짚 움막 · 건조대
+  [groundL2, hearthFull, fireside, palisade, thatchHut, dryingRack],
+  // Lv3 — 망루 · 토템 · 작업장 · 도구
+  [groundL3, watchTower, totemPole, leanTo, toolPile],
+  // Lv4 — 돌담 · 깃발 · 뼈 아치 · 항아리
+  [groundL4, stoneWall, banners, boneArch, pottery],
+  // Lv5 — 큰 장옥 · 망루 꼭대기 · 두개골 말뚝
+  [groundL5, greatHall, watchTop, skullPosts],
+];
+
+export const BASECAMP_LAYER_COUNT = LAYERS.length;
 
 export function createBasecamp(): Basecamp {
   const group = new THREE.Group();
   group.name = 'basecamp';
-  const variants: THREE.Group[] = [];
-  const geos: THREE.BufferGeometry[] = [];
 
-  for (let i = 0; i <= 2; i++) {
-    const level = i as Lv;
-    const parts: PartSpec[] = [
-      ...ground(level),
-      ...hearth(level),
-      ...fireside(level),
-      ...hideHut(level),
-      ...thatchHut(level),
-      ...leanTo(level),
-      ...palisade(level),
-      ...boneArch(level),
-      ...totemPole(level),
-      ...dryingRack(level),
-      ...pottery(level),
-      ...toolPile(level),
-      ...scatter(level),
-    ];
-    const g = new THREE.Group();
-    const mainGeo = buildParts(parts, { seed: 42 + level, ao: 0.16 });
-    const main = new THREE.Mesh(mainGeo, flatMat());
-    main.castShadow = true;
-    main.receiveShadow = true;
-    const flameGeo = buildParts(flames(level), { seed: 5, ao: 0 });
-    const flameMesh = new THREE.Mesh(flameGeo, glowMat());
-    g.add(main, flameMesh);
-    g.visible = level === 0;
-    geos.push(mainGeo, flameGeo);
-    variants.push(g);
-    group.add(g);
+  // 레이어 지오메트리 캐시 (키 = `${레벨}:${피해}`) — 콜드 빌드는 필요한 것만
+  const layerGeos = new Map<string, THREE.BufferGeometry>();
+  // 병합 결과 캐시 (키 = `${레벨}:${피해}`)
+  const campGeos = new Map<string, THREE.BufferGeometry>();
+  const flameGeos = new Map<string, THREE.BufferGeometry>();
+  const owned: THREE.BufferGeometry[] = [];
+
+  function layerGeo(level: number, d: Dmg): THREE.BufferGeometry | null {
+    const key = `${level}:${d}`;
+    const hit = layerGeos.get(key);
+    if (hit) return hit;
+    const specs = LAYERS[level - 1];
+    if (!specs) return null;
+    const parts = specs.flatMap((f) => f(d));
+    if (parts.length === 0) return null;
+    const geo = buildParts(parts, { seed: 42 + level * 3 + d, ao: AO_STRENGTH, aoRange: AO_RANGE });
+    layerGeos.set(key, geo);
+    owned.push(geo);
+    return geo;
   }
 
-  let current = 0;
-  return {
+  function campGeo(level: number, d: Dmg): THREE.BufferGeometry {
+    const key = `${level}:${d}`;
+    const hit = campGeos.get(key);
+    if (hit) return hit;
+    const parts: THREE.BufferGeometry[] = [];
+    for (let l = 1; l <= level; l++) {
+      const g = layerGeo(l, d);
+      if (g) parts.push(g);
+    }
+    // 병합은 이미 구운 버퍼의 복사라 프리미티브 재생성이 없다 (헤더의 빌드 비용 근거)
+    const merged = parts.length === 1 ? parts[0]!.clone() : mergeGeometries(parts, false);
+    if (!merged) throw new Error('기지 레이어 병합 실패');
+    campGeos.set(key, merged);
+    owned.push(merged);
+    return merged;
+  }
+
+  function flameGeo(level: number, d: Dmg): THREE.BufferGeometry {
+    const key = `${level}:${d}`;
+    const hit = flameGeos.get(key);
+    if (hit) return hit;
+    const geo = buildParts(flames(level, d), { seed: 5 + level, ao: 0 });
+    flameGeos.set(key, geo);
+    owned.push(geo);
+    return geo;
+  }
+
+  const main = new THREE.Mesh(campGeo(LAYERS.length, 0), flatMat());
+  main.castShadow = true;
+  main.receiveShadow = true;
+  const flameMesh = new THREE.Mesh(flameGeo(LAYERS.length, 0), glowMat());
+  group.add(main, flameMesh);
+
+  let dmg: Dmg = 0;
+  let layer = LAYERS.length;
+  const fireOffset = new THREE.Vector3(HEARTH[0], 0.5, HEARTH[1]);
+
+  function apply(): void {
+    main.geometry = campGeo(layer, dmg);
+    flameMesh.geometry = flameGeo(layer, dmg);
+    // Lv1 화톳불은 낮다 — 연기 스폰도 같이 내려야 허공에서 피지 않는다
+    fireOffset.set(HEARTH[0], layer <= 1 ? 0.34 : 0.5, HEARTH[1]);
+  }
+
+  const camp: Basecamp = {
     group,
     setDamageLevel(level) {
-      current = level;
-      variants.forEach((v, i) => (v.visible = i === level));
+      if (dmg === level) return;
+      dmg = level;
+      apply();
     },
-    smokeLevel: () => current,
-    fireOffset: new THREE.Vector3(0, 0.5, 0),
-    dispose: () => geos.forEach((g) => g.dispose()),
+    setLevel(level, maxLevel) {
+      // 레벨 → 레이어 비율 사상. BASE_LEVELS 길이가 레이어 수와 달라도 양끝이 맞는다.
+      const span = Math.max(1, maxLevel - 1);
+      const t = Math.min(1, Math.max(0, (level - 1) / span));
+      const next = Math.min(LAYERS.length, Math.max(1, Math.round(t * (LAYERS.length - 1)) + 1));
+      if (next === layer) return;
+      layer = next;
+      apply();
+    },
+    smokeLevel: () => dmg,
+    fireOffset,
+    dispose: () => owned.forEach((g) => g.dispose()),
   };
+  return camp;
 }
+
+/** 테스트/감사 전용 — 구조물별 반경을 개별로 재기 위한 노출 (런타임 경로는 쓰지 않는다) */
+export const __BASECAMP_AUDIT__: readonly [number, string, (d: Dmg) => PartSpec[]][] = [
+  [1, 'groundL1', groundL1], [1, 'hideHut', hideHut], [1, 'emberPit', emberPit],
+  [1, 'watchDeck', watchDeck], [1, 'scatterL1', scatterL1],
+  [2, 'groundL2', groundL2], [2, 'hearthFull', hearthFull], [2, 'fireside', fireside],
+  [2, 'palisade', palisade], [2, 'thatchHut', thatchHut], [2, 'dryingRack', dryingRack],
+  [3, 'groundL3', groundL3], [3, 'watchTower', watchTower], [3, 'totemPole', totemPole],
+  [3, 'leanTo', leanTo], [3, 'toolPile', toolPile],
+  [4, 'groundL4', groundL4], [4, 'stoneWall', stoneWall], [4, 'banners', banners],
+  [4, 'boneArch', boneArch], [4, 'pottery', pottery],
+  [5, 'groundL5', groundL5], [5, 'greatHall', greatHall], [5, 'watchTop', watchTop],
+  [5, 'skullPosts', skullPosts],
+];

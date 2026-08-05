@@ -45,6 +45,15 @@ export interface BuildOpts {
   ao?: number;
   /** 면 단위 명도 지터 폭 (기본 0.045) */
   faceJitter?: number;
+  /**
+   * AO 높이 기준 구간 [minY, maxY]. 생략하면 **그 지오메트리 자신의** y 범위를 쓴다.
+   *
+   * 한 모델을 여러 조각으로 나눠 굽고 나중에 합칠 때 반드시 지정해야 한다 —
+   * 조각마다 자기 높이로 정규화하면 납작한 바닥판은 5cm 안에서 AO가 다 타 버리고
+   * 높은 망루는 같은 높이에서 훨씬 밝아, 합쳤을 때 음영이 층마다 어긋난다.
+   * (basecamp 의 레벨 레이어가 이 경우다)
+   */
+  aoRange?: [number, number];
 }
 
 function primitive(kind: PartSpec['kind'], seg: number): THREE.BufferGeometry {
@@ -143,24 +152,35 @@ export function buildParts(parts: readonly PartSpec[], opts: BuildOpts = {}): TH
   }
 
   // 바닥 AO: y가 낮을수록 최대 ao만큼 어둡게
-  if (ao > 0) applyHeightAo(merged, ao);
+  if (ao > 0) applyHeightAo(merged, ao, opts.aoRange);
 
   merged.computeVertexNormals(); // 비인덱스 → 면 노멀 = 플랫 셰이딩
   merged.computeBoundingSphere();
   return merged;
 }
 
-/** y 높이 기반 페이크 AO — 병합 후 색 감쇠 */
-export function applyHeightAo(geo: THREE.BufferGeometry, strength: number): void {
+/**
+ * y 높이 기반 페이크 AO — 병합 후 색 감쇠.
+ * range 를 주면 그 구간으로 정규화한다 (조각내 굽는 모델의 층간 음영 일치용).
+ */
+export function applyHeightAo(
+  geo: THREE.BufferGeometry,
+  strength: number,
+  range?: readonly [number, number],
+): void {
   const pos = geo.getAttribute('position');
   const col = geo.getAttribute('color');
   if (!col) return;
   let minY = Infinity;
   let maxY = -Infinity;
-  for (let i = 0; i < pos.count; i++) {
-    const y = pos.getY(i);
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
+  if (range) {
+    [minY, maxY] = range;
+  } else {
+    for (let i = 0; i < pos.count; i++) {
+      const y = pos.getY(i);
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
   }
   const span = Math.max(maxY - minY, 1e-5);
   for (let i = 0; i < pos.count; i++) {

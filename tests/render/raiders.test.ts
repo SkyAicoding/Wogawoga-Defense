@@ -1,9 +1,16 @@
 /**
- * 부족 습격대 4종의 **드로우콜 묶음**과 삼각형 예산 회귀 테스트.
+ * 한 지오메트리에 올라탄 **부족 7종**(적 습격대 4 + 아군 마을 부족원 3)의
+ * 드로우콜 묶음과 삼각형 예산 회귀 테스트.
  *
- * 이 4종은 종마다 InstancedMesh 를 두면 컬러+그림자로 드로우콜이 +8 이 되어
- * 프레임 예산(60콜)을 넘긴다. 그래서 지오메트리를 공유하고 장비만 정점 태그로
- * 골라 그린다 — 그 계약이 깨지면(예: 누가 단품 지오메트리로 되돌리면) 여기서 걸린다.
+ * 종마다 InstancedMesh 를 두면 컬러+그림자로 드로우콜이 종당 +2 씩 붙어
+ * 프레임 예산을 넘긴다. 그래서 지오메트리를 공유하고 장비만 정점 태그로
+ * 골라 그린다 — 그 계약이 깨지면(예: 누가 아군 전용 메시를 만들면) 여기서 걸린다.
+ *
+ * 3단계에서 아군이 전용 장비(변형 5~7)를 받으면서 공유본 삼각형이 930 → 1512 로 늘었다.
+ * 늘어난 582 삼각형은 **모든 인스턴스가 매 프레임 정점 셰이더에 태우는 비용**이라
+ * (자기 변형이 아닌 정점은 원점으로 접혀 축퇴 삼각형이 된다 — 래스터라이즈는 0)
+ * 상한을 여기서 잠근다. 실측 최악 프레임(적 습격대 4 + 아군 6 = 10 인스턴스)에서
+ * 이 증가분은 약 5.8k 삼각형이고 예산 150,000 안이다.
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
@@ -13,12 +20,17 @@ import { EnemyView } from '@/render/views/enemyview';
 import {
   ALL_ENEMY_IDS,
   RAIDER_GEO_KEY,
+  allyGeoKey,
+  allyRig,
+  allyVariant,
+  buildAllySolo,
   buildEnemy,
   buildEnemySolo,
   enemyGeoKey,
   enemyRig,
   enemyVariant,
 } from '@/render/meshlib/enemies';
+import { ALL_ALLY_IDS } from '@/data/allies';
 import { VARIANT_ATTR, VARIANT_SEL_ATTR } from '@/render/meshlib/gait';
 
 const RAIDERS: EnemyId[] = ['blade', 'lancer', 'archer', 'hexer'];
@@ -42,6 +54,7 @@ function enemy(id: EnemyId, o: Partial<EnemyState> = {}): EnemyState {
     pathIndex: 0,
     attackCdLeft: 0,
     towerTargetId: -1,
+    blockerAllyId: -1,
     flying: false,
     x: 2,
     z: 2,
@@ -80,7 +93,20 @@ describe('부족 습격대 렌더', () => {
     expect(attr).toBeTruthy();
     const seen = new Set<number>();
     for (let i = 0; i < attr!.count; i++) seen.add(Math.round(attr!.getX(i)));
-    expect(seen).toEqual(new Set([0, 1, 2, 3, 4])); // 0 = 공용 몸통
+    // 0 = 공용 몸통 / 1~4 = 적 습격대 / 5~7 = 아군 마을 부족원
+    expect(seen).toEqual(new Set([0, 1, 2, 3, 4, 5, 6, 7]));
+  });
+
+  it('아군 3종도 같은 지오메트리에 올라타고 변형 번호가 적과 겹치지 않는다', () => {
+    const geo = buildEnemy('blade');
+    expect(allyGeoKey()).toBe(RAIDER_GEO_KEY);
+    expect(allyRig()).toBe(enemyRig('blade'));
+    const allyVars = ALL_ALLY_IDS.map(allyVariant);
+    expect(new Set(allyVars)).toEqual(new Set([5, 6, 7])); // 서로 다르다
+    const enemyVars = new Set(RAIDERS.map(enemyVariant));
+    for (const v of allyVars) expect(enemyVars.has(v), `변형 ${v} 가 적과 겹친다`).toBe(false);
+    // 아군 단품은 갤러리 전용이라 공유본과 **다른** 객체여야 한다(장비가 7벌 다 붙지 않게)
+    for (const id of ALL_ALLY_IDS) expect(buildAllySolo(id), id).not.toBe(geo);
   });
 
   it('EnemyView 가 4종을 메시 하나로 묶는다', () => {
@@ -105,7 +131,7 @@ describe('부족 습격대 렌더', () => {
     view.dispose();
   });
 
-  it('삼각형 예산: 단품 400~700, 공유본은 4종 합보다 훨씬 작다', () => {
+  it('삼각형 예산: 단품 400~700, 공유본은 7종 합의 절반 미만', () => {
     let soloSum = 0;
     for (const id of RAIDERS) {
       const n = tris(buildEnemySolo(id));
@@ -113,11 +139,17 @@ describe('부족 습격대 렌더', () => {
       expect(n, `${id} 단품 삼각형`).toBeLessThanOrEqual(700);
       soloSum += n;
     }
+    for (const id of ALL_ALLY_IDS) {
+      const n = tris(buildAllySolo(id));
+      expect(n, `${id} 단품 삼각형`).toBeGreaterThanOrEqual(400);
+      expect(n, `${id} 단품 삼각형`).toBeLessThanOrEqual(700);
+      soloSum += n;
+    }
     const shared = tris(buildEnemy('blade'));
-    // 공유본은 몸통 1벌 + 장비 4벌이라 단품 4개 합(몸통 4벌)보다 확실히 작아야 한다.
+    // 공유본은 몸통 1벌 + 장비 7벌이라 단품 7개 합(몸통 7벌)의 절반도 안 돼야 한다.
     // 이 여유가 곧 "인스턴스마다 축퇴 삼각형을 조금 더 그리는" 비용의 상한이다.
-    expect(shared).toBeLessThan(soloSum * 0.62);
-    expect(shared, '공유 지오메트리 삼각형').toBeLessThan(1000);
+    expect(shared).toBeLessThan(soloSum * 0.5);
+    expect(shared, '공유 지오메트리 삼각형').toBeLessThan(1650);
   });
 
   it('작고 귀엽다: 키가 부족 전사의 3/4 미만이고 머리가 크다', () => {

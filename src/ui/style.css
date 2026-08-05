@@ -314,6 +314,44 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .callwave { min-height: 58px; flex-direction: column; gap: 0; padding: 6px 26px; animation: battle-glow 1.6s ease-in-out infinite; }
 .callwave-main { font-size: 1.2rem; }
 .callwave-sub { font-size: 0.75rem; font-weight: 700; opacity: 0.8; }
+/* 출동 바 (아군 부족원) — 손패 바로 위, 1탭 출동. 터치 타깃 44px 이상 유지 */
+.ally-row { display: flex; gap: 8px; width: 100%; align-items: stretch; }
+.ally-count {
+  flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-width: 48px; padding: 2px 6px; border: var(--bd); border-radius: var(--r-md);
+  background: rgba(20, 14, 8, 0.78); box-shadow: var(--pop);
+}
+.ally-count-label { font-size: 0.62rem; font-weight: 800; color: var(--cream); opacity: 0.75; }
+.ally-count-num { font-size: 0.9rem; font-weight: 900; color: #9fdcf7; }
+/* 상한에 닿으면 "왜 버튼이 안 눌리는가"의 답이 여기 있어야 한다 */
+.ally-count-num.is-full { color: #ff9d6a; }
+.ally-btn {
+  flex: 1; min-width: 0; min-height: 48px;
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  border: var(--bd); border-radius: var(--r-md); box-shadow: var(--pop);
+  background: linear-gradient(180deg, #4a6d86, #2d4a5e); color: var(--cream);
+  font-weight: 800; padding: 4px 6px; transition: transform 0.08s ease, filter 0.1s ease;
+}
+.ally-btn:active { transform: scale(0.94); }
+/* 아군은 한랭색 — 3D 인스턴스 색조(ALLY_TINT)·아군 체력바와 같은 축이다 */
+.ally-btn-ico { width: 26px; height: 26px; flex: 0 0 auto; }
+.ally-btn-ico svg { width: 100%; height: 100%; }
+.ally-btn-name { font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ally-btn-cost { font-size: 0.82rem; font-weight: 900; color: var(--gold); flex: 0 0 auto; }
+.ally-btn.is-disabled { filter: grayscale(0.8) brightness(0.55); }
+.screen--battle .ally-btn.is-disabled { pointer-events: none; }
+/*
+ * 좁은 화면(모바일 세로)에서는 이름을 접는다.
+ * 390px 기준 버튼 폭이 98px라 "몽둥이꾼"이 "몽.."으로 잘렸는데, 잘린 두 글자는
+ * 아이콘보다 정보가 적으면서 자리는 더 먹는다. 아이콘(사람+무기)과 가격만 남기면
+ * 셋이 실루엣으로 갈리고 가격이 또렷해진다. 터치 타깃 48px는 그대로 유지된다.
+ */
+@media (max-width: 480px) {
+  .ally-btn-name { display: none; }
+  .ally-btn-ico { width: 24px; height: 24px; }
+  .ally-btn { gap: 6px; }
+}
+
 .hand-row { display: flex; gap: 10px; width: 100%; align-items: stretch; }
 .hand-cards { display: flex; gap: 10px; flex: 1; }
 .tcard {
@@ -368,6 +406,13 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   box-shadow: 0 0 0 3px rgba(255, 208, 74, 0.5), 0 3px 0 rgba(0, 0, 0, 0.28);
   animation: hp-blink 0.9s ease-in-out infinite;
 }
+/* 홈타운 레벨업도 비가역 결제라 소품 제거와 **똑같은** 무장 표현을 쓴다 —
+   확인 단계의 생김새가 기능마다 다르면 "한 번 더 눌러야 나간다"를 매번 새로 배워야 한다 */
+.tp-btn--up.is-armed {
+  background: linear-gradient(180deg, #ffd94a, #ff8a1e); color: var(--ink);
+  box-shadow: 0 0 0 3px rgba(255, 208, 74, 0.5), 0 3px 0 rgba(0, 0, 0, 0.28);
+  animation: hp-blink 0.9s ease-in-out infinite;
+}
 /* 닫기 — 아이콘 하나짜리라 늘어나지 않게 고정폭 */
 .tp-btn--close {
   flex: 0 0 auto; min-width: 48px; font-size: 1.1rem;
@@ -376,7 +421,12 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .tp-btn-label { font-size: 0.85rem; }
 .tp-sub { font-size: 0.8rem; font-weight: 700; opacity: 0.8; }
 .tp-sub.is-warn { color: #ff9d8a; opacity: 1; }
+/* 현재 성능 줄 — 설명문(tp-sub)보다 한 단계 또렷하게, 숫자가 먼저 읽히도록 */
+.tp-sub--stats { color: var(--gold); opacity: 1; letter-spacing: 0.01em; }
 .tp-ico--scenery svg { width: 100%; height: 100%; }
+.tp-ico--home svg { width: 100%; height: 100%; }
+/* 홈타운 패널 — 마을 톤(따뜻한 흙빛)으로 타워 패널과 한눈에 구분 */
+.tower-panel--home { background: linear-gradient(180deg, #5d4526, var(--panel)); }
 
 /* --- 배너 ---------------------------------------------------------------- */
 .banner-host { position: absolute; left: 0; right: 0; top: 26%; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
@@ -503,6 +553,11 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   .tcard.is-selected { transform: translateY(-3px); }
   .refresh-btn { flex-basis: 60px; min-height: 54px; }
   .refresh-ico { font-size: 1.1rem; }
+  /* 가로모드: 이름을 접고 아이콘+가격만 남긴다 (44px 터치 타깃은 유지) */
+  .ally-btn { min-height: 44px; gap: 4px; }
+  .ally-btn-name { display: none; }
+  .ally-btn-ico { width: 22px; height: 22px; }
+  .ally-count { min-width: 42px; }
   .callwave { min-height: 46px; padding: 2px 20px; }
   .callwave-main { font-size: 1.05rem; }
   .tower-panel { flex-direction: row; align-items: center; gap: 10px; padding: 8px 12px; }

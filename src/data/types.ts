@@ -43,6 +43,21 @@ export type EnemyId =
   | 'trex' // 티라노사우루스 (보스)
   | 'golem'; // 화산 골렘 (화산 전용)
 
+/**
+ * 아군 부족 유닛 — 마을에서 골드로 뽑아 경로로 내보내는 **소모품** 전력.
+ * 행동 규칙 전문은 src/sim/allies.ts 헤더 주석 참조.
+ */
+export type AllyId =
+  | 'clubber' // 몽둥이꾼 (근접, 적의 발을 묶는다)
+  | 'slinger' // 돌팔매꾼 (원거리, 걸으며 쏜다, 공중도 친다)
+  | 'guardian'; // 방패 파수꾼 (근접 탱커, 오래 묶는다)
+
+/**
+ * 홈타운(기지)이 낸 피해의 출처 태그. 타워도 아군 유닛도 아니므로 고유 값을 쓴다 —
+ * TowerId/StatusKind/AllyId 어느 집합과도 이름이 겹치지 않는다.
+ */
+export type HometownSourceId = 'hometown';
+
 export type BiomeId = 'grassland' | 'jungle' | 'desert' | 'snow' | 'swamp' | 'volcano';
 export type StatusKind = 'slow' | 'burn' | 'poison' | 'stun';
 export type TargetingMode = 'first' | 'last' | 'strongest' | 'nearest';
@@ -194,8 +209,70 @@ export interface EnemyDef {
   healAura?: { radius: number; hpPerStatusTick: number };
   /** 타워 공격 능력 (없으면 타워를 무시하고 기지로 직행) */
   towerAttack?: TowerAttackSpec;
+  /**
+   * 아군 유닛에게 발이 묶였을 때의 **맞붙기(난투)** 능력.
+   * 생략하면 balance.enemyBrawlFor(cost)가 유도한다 — 16종 전부에 수치를 적지 않아도
+   * 모든 적이 반격할 수 있게 하되, 특정 종만 예외적으로 세게/약하게 하고 싶을 때
+   * 데이터로 덮어쓸 수 있는 손잡이를 남긴다. 타워 공격(towerAttack)과는 완전히 별개다
+   * (쿨다운도 따로 돈다) — "타워를 부수던 손을 멈추고 눈앞의 사람을 친다"가 규칙이다.
+   */
+  brawl?: { dmg: number; cooldownTicks: number };
   /** 웨이브젠 예산 비용 (전투력 지표) */
   cost: number;
+}
+
+// ---------------------------------------------------------------------------
+// 아군 유닛 정의 (마을에서 출동시키는 부족원)
+// ---------------------------------------------------------------------------
+export interface AllyDef {
+  id: AllyId;
+  nameKey: string;
+  descKey: string;
+  hp: number;
+  /** 타일/초 — 경로를 **역주행**하는 속도 */
+  speed: number;
+  /** 타격당 고정 피해 감소 */
+  armor: number;
+  /** 충돌/연출 반경 (타일) */
+  radius: number;
+  /** 기본 출동 비용 — 실비용은 balance.allyCostFor(base, 생존 수)가 올린다 */
+  cost: number;
+  /** 수명 틱 (다 되면 마을로 돌아간다 = allyRetired). 영구 유닛은 존재하지 않는다 */
+  lifeTicks: number;
+  dmg: number;
+  cooldownTicks: number;
+  /** 타격 사거리 (타일) */
+  range: number;
+  /** 공중 적을 때릴 수 있는가 (근접형은 false) */
+  canTargetAir: boolean;
+  /**
+   * 근접 교전형인가.
+   * true  = 타깃이 사거리에 들면 멈춰 서서 때리고 **지상 타깃의 전진을 묶는다**.
+   * false = 걸으면서 쏘고 아무도 묶지 못한다 (원거리).
+   * 규약은 적 습격대의 TowerAttackSpec.stopToAttack와 정확히 대칭이다.
+   */
+  blocks: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// 홈타운(기지) 레벨 정의
+// ---------------------------------------------------------------------------
+/**
+ * 홈타운 한 레벨의 성능. 배열 인덱스 0 = Lv1(움막 하나, 전투 시작 상태)이고,
+ * 인덱스 n의 cost는 **Lv(n)에서 Lv(n+1)로 올리는 값**이다(따라서 [0].cost는 항상 0).
+ * 수치와 근거 전문은 src/data/hometown.ts, 행동 규칙은 src/sim/hometown.ts 헤더.
+ */
+export interface BaseLevelDef {
+  /** 이 레벨로 올리는 데 드는 골드 (Lv1 = 시작 레벨이라 0) */
+  cost: number;
+  /** 최대 HP 배율 — 실제 최대 HP = round(stage.baseHp × hpMul) */
+  hpMul: number;
+  /** 화살 1발 피해 (적 armor 감산은 damageEnemy가 적용) */
+  dmg: number;
+  /** 발사 간격 틱 (30 = 1초) */
+  cooldownTicks: number;
+  /** 사거리 (타일) — 기지 셀 중심 ↔ 적 중심 */
+  range: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +389,48 @@ export interface EnemyState {
    * stopToAttack 유닛은 이 값이 0 이상인 동안 전진을 멈춘다.
    */
   towerTargetId: number;
+  /**
+   * 지금 나를 막고 있는 아군 유닛 id (-1 = 없음). 매 틱 아군 단계가 다시 계산한다.
+   * 0 이상이면 **전진이 멈추고**(유닛 충돌 대신 쓰는 봉쇄 표현) 타워 공격도 중단하며,
+   * 그 아군을 난투(brawl)로 반격한다. 공중 적에게는 절대 붙지 않는다 — 날아서 지나간다.
+   */
+  blockerAllyId: number;
+}
+
+/**
+ * 아군 유닛 상태. 경로 파라미터화는 적과 **완전히 동일**하고(dist 0 = 스폰, totalLength = 기지)
+ * 아군만 dist가 감소한다 — 즉 같은 폴리라인을 거꾸로 걷는다.
+ */
+export interface AllyState {
+  id: number;
+  defId: AllyId;
+  hp: number;
+  maxHp: number;
+  /** 경로 진행 거리 (기지 = totalLength에서 출발해 감소) */
+  dist: number;
+  /** 어느 지상 경로로 나갔는가 (StageDef.paths 인덱스) */
+  pathIndex: number;
+  /**
+   * 같은 경로 위 대기 줄에서의 자리 (0 = 맨 앞).
+   * 유닛 충돌이 없어 한계선을 공유하면 전원이 한 점에 겹치므로, 슬롯만큼 뒤로 물려 세운다.
+   * 비어 있는 가장 작은 번호를 받는다 — 앞줄이 죽으면 다음 출동이 그 자리를 메운다.
+   */
+  slot: number;
+  /** 이 유닛이 더 나아갈 수 없는 하한 dist (출격 한계선 + 슬롯 간격 — allies.ts 규칙 2) */
+  holdDist: number;
+  x: number;
+  z: number;
+  prevX: number;
+  prevZ: number;
+  /** 진행 방향 라디안 (경로 진행 방향의 반대) */
+  heading: number;
+  /** 남은 수명 틱. 0이 되면 마을로 귀환(allyRetired) */
+  lifeLeft: number;
+  /** 타격 쿨다운 잔여 틱 */
+  attackCdLeft: number;
+  /** 교전 중인 적 id (-1 = 없음). 렌더가 공격 모션에 쓴다 */
+  targetId: number;
+  alive: boolean;
 }
 
 export interface TowerState {
@@ -370,6 +489,12 @@ export interface ProjectileState {
   splash?: SplashSpec;
   status?: StatusApplySpec;
   targetFlying: boolean;
+  /**
+   * 홈타운(기지)이 쏜 화살인가. 렌더는 towerDefId의 지오메트리를 **그대로 빌려 쓰고**
+   * (전용 InstancedMesh를 만드는 순간 드로우콜 예산이 깨진다 — AGENTS.md 성능 예산)
+   * 갈라지는 것은 피해 출처뿐이다: true면 enemyDamaged.source가 'hometown'이 된다.
+   */
+  fromBase?: boolean;
   alive: boolean;
 }
 
@@ -388,6 +513,13 @@ export interface BattleStateView {
   gold: number;
   baseHp: number;
   baseHpMax: number;
+  /**
+   * 홈타운 레벨 (1-base). 1 = 움막 하나로 시작하는 상태.
+   * 레벨이 오르면 baseHpMax·공격력·사거리가 함께 오른다 (src/sim/hometown.ts).
+   */
+  baseLevel: number;
+  /** 홈타운 최대 레벨 — 도달하면 upgradeBase가 거부된다 */
+  baseLevelMax: number;
   /** prep 카운트다운 남은 틱 */
   prepTicksLeft: number;
   /** 지금 callWave 시 받을 조기 호출 보너스 골드 (prep 아닐 땐 0) */
@@ -397,6 +529,10 @@ export interface BattleStateView {
   enemies: readonly EnemyState[];
   towers: readonly TowerState[];
   projectiles: readonly ProjectileState[];
+  /** 지금 나가 있는 아군 부족원 (동시 상한 = allyCap) */
+  allies: readonly AllyState[];
+  /** 동시 출동 상한 — 이 수에 도달하면 trainAlly가 거부된다 */
+  allyCap: number;
   /** 이번 전투에서 얻은 호박 (결과 화면 표시용) */
   amberEarned: number;
   /** 무한 모드 여부 */
@@ -413,6 +549,26 @@ export type BattleCommand =
   | { type: 'refreshHand' }
   | { type: 'setTargeting'; towerId: number; mode: TargetingMode }
   | { type: 'clearScenery'; cellX: number; cellZ: number } // 골드로 나무/바위 치우기
+  | {
+      /**
+       * 마을에서 부족원 한 명을 출동시킨다 (골드 소모, 동시 상한 있음).
+       * pathIndex 생략 시 sim이 **결정론적으로** 고른다 — 기지에 가장 가까운 적이
+       * 있는 지상 경로, 동점/적 없음이면 0번 (src/sim/allies.ts 규칙 1).
+       * UI가 경로를 고르게 하지 않는 이유: 탭 하나로 즉시 나가야 하는 긴급 자원이라
+       * 선택지를 늘리면 반응 속도만 깎인다.
+       */
+      type: 'trainAlly';
+      defId: AllyId;
+      pathIndex?: number;
+    }
+  | {
+      /**
+       * 홈타운을 한 레벨 올린다 (골드 소모, 환불 없음, 최대 레벨에서 거부).
+       * 레벨을 지정하지 않는 이유: 건너뛰기가 없으므로 "다음 한 칸"이 유일한 선택지다.
+       * 비가역 결제이므로 UI는 2단 확인(is-armed)을 거쳐야 한다 — battlehud.ts 참조.
+       */
+      type: 'upgradeBase';
+    }
   | { type: 'callWave' }; // prep 스킵 (조기 호출 보너스)
 
 // ---------------------------------------------------------------------------
@@ -428,7 +584,11 @@ export type SimEvent =
       amount: number;
       x: number;
       z: number;
-      source: TowerId | StatusKind;
+      /**
+       * 피해 출처 — 타워 / 상태이상 / **아군 부족원**(AllyId) / **홈타운**('hometown').
+       * 네 집합은 이름이 겹치지 않는다.
+       */
+      source: TowerId | StatusKind | AllyId | HometownSourceId;
       shielded: boolean;
     }
   | {
@@ -528,6 +688,92 @@ export type SimEvent =
       /** 발사 타워 티어 (0~4) */
       tier: number;
     }
+  // --- 아군 부족원 (src/sim/allies.ts) ---------------------------------------
+  | {
+      /** 마을에서 부족원이 출동했다 — 기지에서 스폰 */
+      type: 'allyTrained';
+      allyId: number;
+      defId: AllyId;
+      /** 실제로 지불한 골드 */
+      cost: number;
+      pathIndex: number;
+      /** 스폰 위치 (= 기지 셀) */
+      x: number;
+      z: number;
+    }
+  | {
+      /** 아군이 적을 때렸다 — 타격 연출/사운드. 적 피해 자체는 enemyDamaged가 따로 나간다 */
+      type: 'allyAttacked';
+      allyId: number;
+      defId: AllyId;
+      targetId: number;
+      /** 때린 아군 위치 */
+      x: number;
+      z: number;
+      /** 맞은 적 위치 (투척 궤적 연출용) */
+      targetX: number;
+      targetZ: number;
+      /** 원거리 타격인가 (AllyDef.blocks === false) */
+      ranged: boolean;
+    }
+  | {
+      /** 아군이 맞았다 — 발이 묶인 적의 난투 반격 */
+      type: 'allyDamaged';
+      allyId: number;
+      defId: AllyId;
+      amount: number;
+      /** 타격 후 남은 체력 (0 하한) */
+      hpLeft: number;
+      maxHp: number;
+      x: number;
+      z: number;
+      attackerId: number;
+      attackerDefId: EnemyId;
+    }
+  | {
+      /** 아군이 쓰러졌다 (hp 0) */
+      type: 'allyDied';
+      allyId: number;
+      defId: AllyId;
+      x: number;
+      z: number;
+    }
+  | {
+      /** 수명이 다해 마을로 돌아갔다 — 사망과 구분한다(연출/사운드가 달라야 한다) */
+      type: 'allyRetired';
+      allyId: number;
+      defId: AllyId;
+      x: number;
+      z: number;
+    }
+  // --- 홈타운 (src/sim/hometown.ts) ------------------------------------------
+  | {
+      /**
+       * 홈타운이 화살을 쐈다 — 발사음/반동 연출용. 피해는 화살이 꽂힐 때
+       * projectileHit + enemyDamaged로 따로 나간다 (타워의 towerFired와 같은 구조).
+       */
+      type: 'baseFired';
+      targetId: number;
+      /** 기지 셀 (발사 위치) */
+      x: number;
+      z: number;
+      /** 발사 시점 홈타운 레벨 (1-base) — 연출 강도 */
+      level: number;
+    }
+  | {
+      /** 홈타운이 한 단계 커졌다 — 마을 외형/체력바/사운드 */
+      type: 'baseUpgraded';
+      /** 올라간 뒤 레벨 (2 이상) */
+      level: number;
+      /** 실제로 지불한 골드 */
+      cost: number;
+      /** 갱신 후 현재/최대 HP (누적 피해량은 보존된다 — hometown.ts 규칙 4) */
+      hp: number;
+      hpMax: number;
+      /** 갱신 후 화살 1발 피해 / 사거리 (패널 표시·사거리 링) */
+      dmg: number;
+      range: number;
+    }
   | { type: 'statusApplied'; enemyId: number; kind: StatusKind }
   | { type: 'baseDamaged'; amount: number; hpLeft: number }
   | { type: 'goldChanged'; gold: number; delta: number }
@@ -594,6 +840,13 @@ export interface BattleOptions {
    */
   towerDefs: Readonly<Record<TowerId, TowerDef>>;
   enemyDefs: Readonly<Record<EnemyId, EnemyDef>>;
+  allyDefs: Readonly<Record<AllyId, AllyDef>>;
+  /**
+   * 홈타운 레벨 테이블 — 인덱스 0 = Lv1(시작). 길이가 곧 최대 레벨이다.
+   * 주입식이라 통제 실험(tests/sim/arena.ts)이 기지 화력을 0으로 꺼서
+   * "타워와 습격대의 교환비"만 격리해 잴 수 있다.
+   */
+  baseLevels: readonly BaseLevelDef[];
   waveFor(wave: number): WaveDef;
 }
 
@@ -616,6 +869,21 @@ export interface BattleSim {
   hasScenery(cellX: number, cellZ: number): boolean;
   /** 지금 그 셀을 치우는 데 드는 골드 (소품이 없으면 null) — 제거 횟수에 따라 오른다 */
   clearSceneryCost(cellX: number, cellZ: number): number | null;
+  /** 지금 이 부족원을 출동시키는 데 드는 골드 (나가 있는 인원 수에 따라 오른다) */
+  allyCost(defId: AllyId): number;
+  /** 지금 출동이 가능한가 (상한 미만 + 골드 충분 + 전투 진행 중) */
+  canTrainAlly(defId: AllyId): boolean;
+  /** 홈타운을 한 단계 올리는 비용 (최대 레벨이면 null) */
+  baseUpgradeCost(): number | null;
+  /** 지금 홈타운을 올릴 수 있는가 (최대 레벨 아님 + 골드 충분 + 전투 진행 중) */
+  canUpgradeBase(): boolean;
+  /** 현재 홈타운 사거리 (타일) — 선택 시 사거리 링 표시용 */
+  baseRange(): number;
+  /**
+   * 다음 레벨이 주는 최대 HP/공격력/사거리 (최대 레벨이면 null).
+   * 비가역 결제라 "무엇을 사는가"가 확인 단계 **전에** 보여야 한다.
+   */
+  baseNextStats(): { hpMax: number; dmg: number; range: number } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -662,6 +930,10 @@ export interface BattleUiApi {
   selectedTower(): number | null;
   /** 현재 선택된 소품 셀 (없으면 null) — 제거 패널 표시용 */
   selectedScenery(): Vec2 | null;
+  /** 홈타운(기지 셀)이 선택되어 있는가 — 레벨업 패널 표시용 */
+  selectedBase(): boolean;
+  /** 홈타운 레벨업 요청 (최대 레벨/골드 부족이면 무시) */
+  requestUpgradeBase(): void;
   /** 선택된 소품 셀 제거 요청 (골드 부족/미선택이면 무시) */
   requestClearScenery(): void;
   /**
@@ -671,6 +943,8 @@ export interface BattleUiApi {
    */
   clearSelection(): void;
   requestSetTargeting(mode: TargetingMode): void;
+  /** 마을에서 부족원 출동 (골드 부족/상한이면 무시) */
+  requestTrainAlly(defId: AllyId): void;
   requestRefresh(): void;
   requestCallWave(): void;
   requestUpgradeSelected(): void;

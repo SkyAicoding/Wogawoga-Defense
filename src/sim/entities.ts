@@ -6,6 +6,8 @@
 import { DenseList, Pool } from '@/core/pool';
 import type { Rng } from '@/core/rng';
 import type {
+  AllyDef,
+  AllyState,
   BattleOptions,
   BattleStateView,
   EnemyDef,
@@ -15,11 +17,18 @@ import type {
   TowerState,
 } from '@/data/types';
 import type { BattlePath } from './path';
+import type { HometownSim } from './hometown';
 
 export interface EnemySim extends EnemyState {
   def: EnemyDef;
   /** 보스 스턴 종료 후 면역이 끝나는 틱 */
   stunImmuneUntil: number;
+  /**
+   * 난투(아군 반격) 쿨다운 잔여 틱. **towerAttack의 attackCdLeft와 일부러 분리한다** —
+   * 하나로 합치면 "타워를 때리다 아군에게 붙잡히면 반격이 한 박자 빨라지거나 늦어지는"
+   * 숨은 결합이 생기고, 두 행동은 서로 배타(봉쇄되면 타워를 안 때린다)라 공유할 이유도 없다.
+   */
+  brawlCdLeft: number;
   /**
    * 공성 피해 배율 — **무한 모드 초과분(1.06^n)만** 반영한다. 6개 스테이지의
    * 정규 웨이브(wave <= waveCount)에서는 항상 정확히 1이라 밸런스가 바뀌지 않는다.
@@ -68,9 +77,11 @@ function makeEnemy(): EnemySim {
     hpMul: 1,
     attackCdLeft: 0,
     towerTargetId: -1,
+    blockerAllyId: -1,
     def: null as unknown as EnemyDef, // 스폰 시 반드시 채워짐
     stunImmuneUntil: -1,
     siegeMul: 1,
+    brawlCdLeft: 0,
   };
 }
 
@@ -84,6 +95,45 @@ function resetEnemy(e: EnemySim): void {
   e.attackCdLeft = 0;
   e.towerTargetId = -1;
   e.siegeMul = 1;
+  e.blockerAllyId = -1;
+  e.brawlCdLeft = 0;
+}
+
+/** 아군 유닛 내부 확장 — 정의 참조만 더한다 (상태이상이 없어 EnemySim보다 얇다) */
+export interface AllySim extends AllyState {
+  def: AllyDef;
+}
+
+function makeAlly(): AllySim {
+  return {
+    id: 0,
+    defId: 'clubber',
+    hp: 1,
+    maxHp: 1,
+    dist: 0,
+    pathIndex: 0,
+    slot: 0,
+    holdDist: 0,
+    x: 0,
+    z: 0,
+    prevX: 0,
+    prevZ: 0,
+    heading: 0,
+    lifeLeft: 0,
+    attackCdLeft: 0,
+    targetId: -1,
+    alive: true,
+    def: null as unknown as AllyDef, // 출동 시 반드시 채워짐
+  };
+}
+
+function resetAlly(a: AllySim): void {
+  a.alive = true;
+  a.attackCdLeft = 0;
+  a.targetId = -1;
+  a.lifeLeft = 0;
+  a.slot = 0;
+  a.holdDist = 0;
 }
 
 function makeProjectile(): ProjectileSim {
@@ -110,6 +160,7 @@ function makeProjectile(): ProjectileSim {
     speed: 0,
     dmg: 0,
     targetFlying: false,
+    fromBase: false,
     alive: true,
   };
 }
@@ -123,16 +174,22 @@ function resetProjectile(p: ProjectileSim): void {
   p.elapsedTicks = 0;
   p.splash = undefined;
   p.status = undefined;
+  // 풀 재사용 시 이전 화살의 출처가 새어 나가면 타워 피해가 'hometown'으로 집계된다
+  p.fromBase = false;
 }
 
 export class World {
   readonly enemies = new DenseList<EnemySim>();
   readonly towers = new DenseList<TowerState>();
   readonly projectiles = new DenseList<ProjectileSim>();
+  readonly allies = new DenseList<AllySim>();
   private readonly enemyById = new Map<number, EnemySim>();
+  private readonly allyById = new Map<number, AllySim>();
   private nextId = 1;
   private readonly enemyPool = new Pool<EnemySim>(makeEnemy, resetEnemy, 32);
   private readonly projPool = new Pool<ProjectileSim>(makeProjectile, resetProjectile, 32);
+  // 동시 상한(ALLY_MAX_ACTIVE)이 한 자리 수라 프리웜도 그만큼만
+  private readonly allyPool = new Pool<AllySim>(makeAlly, resetAlly, 8);
 
   newId(): number {
     return this.nextId++;
@@ -167,6 +224,24 @@ export class World {
     this.projPool.release(this.projectiles.removeAt(index));
   }
 
+  acquireAlly(): AllySim {
+    const a = this.allyPool.acquire();
+    a.id = this.newId();
+    this.allies.add(a);
+    this.allyById.set(a.id, a);
+    return a;
+  }
+
+  removeAllyAt(index: number): void {
+    const a = this.allies.removeAt(index);
+    this.allyById.delete(a.id);
+    this.allyPool.release(a);
+  }
+
+  findAlly(id: number): AllySim | undefined {
+    return this.allyById.get(id);
+  }
+
   findTower(id: number): TowerState | undefined {
     for (const t of this.towers.items) if (t.id === id) return t;
     return undefined;
@@ -182,6 +257,11 @@ export interface SimCtx {
   readonly view: BattleStateView;
   readonly groundPaths: readonly BattlePath[];
   readonly airPaths: readonly BattlePath[];
+  /**
+   * 홈타운의 비공개 상태(발사 쿨다운·고정 타깃). 레벨은 공개 상태(view.baseLevel)가
+   * 갖는다 — 한 값을 두 곳에 두지 않기 위해 소유를 이렇게 갈랐다.
+   */
+  readonly hometown: HometownSim;
 }
 
 /** 적이 따라가는 경로 (공중이면 airPaths, 인덱스 초과 시 0번 폴백) */

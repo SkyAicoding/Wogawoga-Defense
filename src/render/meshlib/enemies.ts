@@ -16,7 +16,7 @@
  * legQuad/legBiped 에 `{ rig }` 만 넘기면 피벗·위상·보폭이 자동 계산된다.
  */
 import type * as THREE from 'three';
-import type { EnemyId } from '@/data/types';
+import type { AllyId, EnemyId } from '@/data/types';
 import { clamp } from '@/core/mathx';
 import { C } from '../palette';
 import { buildParts, cachedGeo, type PartSpec } from './factory';
@@ -1121,11 +1121,128 @@ function kitHexer(ids: RaiderIds): PartSpec[] {
   ];
 }
 
+// --- 아군 마을 부족원 3종 (clubber / slinger / guardian) ---------------------
+/**
+ * 우리 편이라는 게 **한 프레임 안에** 읽혀야 한다. 게임 줌에서 유닛은 20~40px이고,
+ * 적 습격대와 몸통·머리·팔다리를 통째로 공유하므로(드로우콜 예산) 구분은 전적으로
+ * 장비 kit 이 져야 한다. 두 축을 이렇게 갈랐다:
+ *
+ * ① 형태 축 — **적에게 없는 부위**를 준다 (다른 모자를 씌우는 게 아니라)
+ *    적 4종은 전부 "맨 어깨 + 머리에 딱 붙는 머리장식 + 머리 위로 솟은 무기"다.
+ *    즉 어깨와 등이 비어 있다. 그래서 아군에게는
+ *      · 어깨를 덮는 **흰 털 망토**(반경 0.18 — 적 조끼 어깨선 0.12보다 확실히 넓다)
+ *      · 등에서 머리 위로 솟은 **부족기**(y 0.9 — 어떤 적 장비보다 높다)
+ *    를 준다. 55° 부감 카메라에서 가장 넓게 보이는 면이 어깨 윗면이라,
+ *    "넓고 밝은 덩어리 + 그 위로 뻗은 깃발" 하나로 카테고리가 갈린다.
+ *    모자를 하나 더 얹는 방식으로는 **같은 슬롯의 다른 값**일 뿐이라 이게 안 된다.
+ *
+ * ② 색 축 — **명도**로 가른다 (색상만으로는 이미 자리가 없다)
+ *    적 염료는 붉은(0xd2492f)·청록(0x2f8a94)·이끼(0x5f8f3a)·마젠타(0xa8228c)로
+ *    색상환을 네 방향에서 점유했고, 특히 lancer 의 청록은 "차가운 색 = 아군"을
+ *    깨뜨린다. 남은 축은 명도다 — 적 염료는 L≈30~45%인 중·저명도인데
+ *    아군은 뼈흰색 털(L≈89%) + 밝은 하늘빛(L≈61%)으로 **한 단계 위 명도대**에 산다.
+ *    잔디/흙 위에서 밝은 덩어리는 어두운 덩어리보다 먼저 눈에 들어온다.
+ *
+ * 세 종의 구분(2차 판독)은 무기가 맡고, **HUD 출동 바 아이콘과 같은 물건**을 쥔다
+ * (ui/widgets/card.ts: 몽둥이 / 무릿매 돌 / 큰 방패).
+ */
+const ALLY_FUR = 0xf7f0dd;
+const ALLY_FUR_D = 0xd6cbb0;
+const ALLY_SKY = 0x4fb0e6;
+const ALLY_SKY_D = 0x2d84bd;
+
+/**
+ * 아군 3종 공통 제복 — 흰 털 어깨망토 + 하늘빛 옷 + 등에 세운 부족기 + 흰 머리띠.
+ * 세 kit 이 똑같이 부르므로 지오메트리에 3벌이 구워진다(변형 태그가 정점 단위라
+ * "5·6·7 공통"을 표현할 수단이 없다). 대신 파트를 8개로 눌러 3벌 합쳐 ~290삼각형이다.
+ */
+function allyLivery(ids: RaiderIds): PartSpec[] {
+  return [
+    // 하늘빛 짧은 옷 (적의 염료 조끼와 같은 자리 — 색만 명도대가 다르다)
+    ...tubeW([[0, 0.3, 0], [0, 0.4, 0]], [0.215, 0.205], ALLY_SKY, { flat: 0.96, hueJitter: 0.02 }),
+    // 흰 털 어깨망토 — 위에서 본 실루엣을 넓히는 주역.
+    // ⚠ 반경은 **머리(반폭 0.12)보다 조금만** 크게. 처음에 0.18로 잡았더니 부감에서
+    //   머리를 통째로 덮어 유닛이 '걸어다니는 회색 상자'로 보였다(캡처에서 확인).
+    { kind: 'cyl', pos: [-0.008, 0.438, 0], scale: [0.325, 0.066, 0.325], color: ALLY_FUR, seg: 6, hueJitter: 0.02 },
+    { kind: 'cyl', pos: [-0.014, 0.39, 0], scale: [0.285, 0.052, 0.285], color: ALLY_FUR_D, seg: 6, hueJitter: 0.02 },
+    // 등에 세운 부족기 (몸통 고정 — 팔과 따로 논다). 적에게 없는 유일한 '위로 솟은 등짐'
+    link([-0.105, 0.4, 0], [-0.16, 0.78, 0], 0.028, 0.028, C.woodDark, { kind: 'cyl', seg: 4 }),
+    { kind: 'box', pos: [-0.192, 0.79, 0], rot: [0, 0, 0.14], scale: [0.045, 0.2, 0.2], color: ALLY_SKY, hueJitter: 0.02 },
+    { kind: 'cone', pos: [-0.186, 0.665, 0], rot: [Math.PI, 0, 0.14], scale: [0.18, 0.11, 0.045], color: ALLY_SKY_D, seg: 3 },
+    ...tag(ids.head, [
+      // 하늘빛 두건 — **흰 망토 위에 다른 색**이라야 큰 머리가 어깨와 분리돼 보인다.
+      // (머리띠까지 흰색으로 두면 어깨~머리가 한 덩어리 흰 상자가 된다)
+      { kind: 'box', pos: [0.008, 0.666, 0], scale: [0.258, 0.056, 0.252], color: ALLY_SKY, hueJitter: 0.02 },
+      { kind: 'cone', pos: [-0.02, 0.72, 0], rot: [0, 0, 0.16], scale: [0.105, 0.12, 0.105], color: ALLY_FUR, seg: 5 },
+    ]),
+  ];
+}
+
+/** 몽둥이꾼 — 굵고 짧은 나무 몽둥이 (돌 박은 혹). blade 의 얇고 긴 돌칼과 실루엣이 갈린다 */
+function kitClubber(ids: RaiderIds): PartSpec[] {
+  return [
+    ...allyLivery(ids),
+    ...tag(ids.armR, [
+      link([0.1, 0.235, -0.132], [0.148, 0.47, -0.132], 0.05, 0.05, C.wood, { kind: 'cyl', seg: 5 }),
+      { kind: 'ico', pos: [0.166, 0.556, -0.132], rot: [0.3, 0.5, 0.2], scale: [0.19, 0.2, 0.175], color: C.woodDark },
+      { kind: 'cone', pos: [0.2, 0.63, -0.126], rot: [0, 0, -0.24], scale: [0.085, 0.1, 0.075], color: C.stone, seg: 4 },
+      ...mirZ([{ kind: 'cone', pos: [0.176, 0.552, -0.05], rot: [1.5, 0, 0.4], scale: [0.05, 0.09, 0.05], color: C.stoneDark, seg: 4 }]),
+    ]),
+  ];
+}
+
+/**
+ * 돌팔매꾼 — 머리 위로 돌리는 가죽 무릿매.
+ * archer 의 활은 몸 **옆에서 세로로 선 호**인데, 무릿매는 **머리 위를 가로지르는 호**라
+ * 위에서 내려다볼 때 겹치지 않는다(활은 세로선, 무릿매는 머리 위의 고리).
+ */
+function kitSlinger(ids: RaiderIds): PartSpec[] {
+  return [
+    ...allyLivery(ids),
+    ...tag(ids.armR, [
+      ...tube(arc([0.12, 0.28, -0.13], [0.36, 0.66, -0.1], [0.07, 0.84, 0.03], 3), 0.024, 0.019, C.rope, { flat: 1 }),
+      { kind: 'ico', pos: [0.06, 0.86, 0.04], scale: [0.115, 0.115, 0.11], color: C.stone },
+    ]),
+    // 허리에 찬 돌주머니 (몸통 고정) — "던질 것을 들고 다닌다"가 읽힌다
+    { kind: 'cyl', pos: [-0.06, 0.255, 0.2], rot: [0.2, 0, 0.3], scale: [0.16, 0.16, 0.15], color: RAIDER_HIDE_D, seg: 5 },
+    { kind: 'ico', pos: [-0.05, 0.33, 0.21], scale: [0.085, 0.07, 0.08], color: C.stoneDark },
+  ];
+}
+
+/**
+ * 방패 파수꾼 — 몸을 통째로 가리는 **큰 세로 방패** + 짧은 돌도끼.
+ * lancer 도 방패를 들지만 그건 작은 원형이고 무기가 머리 위로 길게 솟는다.
+ * guardian 은 정반대다: 방패가 크고 세로로 길며, **위로 솟는 선이 없다**.
+ */
+function kitGuardian(ids: RaiderIds): PartSpec[] {
+  return [
+    ...allyLivery(ids),
+    ...tag(ids.armL, [
+      { kind: 'box', pos: [0.15, 0.36, 0.168], rot: [0, 0, 0.05], scale: [0.05, 0.5, 0.38], color: C.woodDark },
+      { kind: 'box', pos: [0.178, 0.36, 0.168], rot: [0, 0, 0.05], scale: [0.035, 0.42, 0.3], color: ALLY_FUR_D, hueJitter: 0.02 },
+      { kind: 'box', pos: [0.196, 0.36, 0.168], scale: [0.03, 0.38, 0.07], color: ALLY_SKY },
+      { kind: 'cone', pos: [0.212, 0.36, 0.168], rot: [0, 0, -HALF_PI], scale: [0.095, 0.06, 0.095], color: C.stone, seg: 5 },
+    ]),
+    ...tag(ids.armR, [
+      link([0.1, 0.238, -0.132], [0.128, 0.4, -0.132], 0.042, 0.042, C.wood, { kind: 'cyl', seg: 4 }),
+      { kind: 'box', pos: [0.164, 0.442, -0.132], rot: [0, 0, -0.34], scale: [0.17, 0.085, 0.052], color: C.stoneDark },
+    ]),
+  ];
+}
+
+/**
+ * 변형 1~4 = 적 습격대, 5~7 = 아군 마을 부족원.
+ * **한 배열에 함께 사는 것이 곧 드로우콜 계약이다** — 같은 지오메트리에 구워야
+ * EnemyView 가 아군과 적을 하나의 InstancedMesh 로 그린다(views/enemyview.ts 헤더).
+ */
 const RAIDER_KITS: readonly ((ids: RaiderIds) => PartSpec[])[] = [
   kitBlade,
   kitLancer,
   kitArcher,
   kitHexer,
+  kitClubber,
+  kitSlinger,
+  kitGuardian,
 ];
 
 /** 전투용 공유 지오메트리 — 몸통 1벌 + 장비 4벌(각각 variant 태그) */
@@ -1510,6 +1627,63 @@ export function enemyGeoKey(id: EnemyId): string {
 /** 공유 지오메트리 안에서 이 종이 쓰는 변형 번호 (0 = 전용 지오메트리) */
 export function enemyVariant(id: EnemyId): number {
   return RAIDER_VARIANTS[id] ?? 0;
+}
+
+/**
+ * 아군 부족원의 **전용** 변형 번호 (3단계).
+ *
+ * 아군은 적 습격대와 **같은 지오메트리·같은 InstancedMesh**를 쓴다. 이건 임시방편이
+ * 아니라 **드로우콜 예산이 강제하는 구조 결정**이다 — 아군 전용 메시를 만드는 순간
+ * (컬러+그림자 +2콜) 예산을 넘긴다. 그래서 전용 장비를 준다는 것은 곧
+ * **같은 공유 지오메트리에 변형 5~7을 더 굽는다**는 뜻이다 (RAIDER_KITS 참조).
+ * 1단계가 남긴 계약대로 지오메트리 키(RAIDER_GEO_KEY)와 뷰/시뮬은 손대지 않았다.
+ */
+const ALLY_VARIANTS: Readonly<Record<AllyId, number>> = {
+  clubber: 5,
+  slinger: 6,
+  guardian: 7,
+};
+
+/**
+ * 아군 인스턴스 색조 (instanceColor 곱). 적은 원색 그대로(1,1,1)다.
+ *
+ * 1단계의 [0.62, 0.9, 1.35]는 **모델이 임시 배선이던 시절의 값**이다. 그때는 아군이
+ * 적 장비를 그대로 빌려 써서 색조만이 유일한 구분 수단이었고, 그래서 온몸을 파랗게
+ * 물들일 수밖에 없었다(살결까지 파래져 "얼어붙은 적"처럼 보이는 대가를 치렀다).
+ *
+ * 이제 흰 털 망토·하늘빛 옷·부족기가 **구워져 있으므로** 색조는 그 위에 얹는 보정으로
+ * 물러난다. 값을 여기까지 줄인 근거:
+ *  · 강한 파랑을 그대로 두면 흰 털(0.95,0.92,0.84)이 B 채널만 1.13으로 튀어 하늘색
+ *    덩어리가 되고, 애써 만든 **명도 대비(밝은 흰색)** 가 색상 대비로 바뀌어
+ *    lancer 의 청록과 다시 가까워진다.
+ *  · 그래도 0을 주지 않는 이유는 몸통·팔다리·머리(살결/가죽/머리카락)가 적과 **완전히
+ *    같은 정점**이기 때문이다. 거기만 살짝 차갑게 밀어 두면 무기가 가려지는 각도에서도
+ *    "따뜻한 적 / 서늘한 아군"이 남는다.
+ */
+export const ALLY_TINT: readonly [number, number, number] = [0.86, 0.98, 1.16];
+
+/** 아군이 쓰는 지오메트리 키 — 적 습격대와 같은 메시에 올라탄다 */
+export function allyGeoKey(): string {
+  return RAIDER_GEO_KEY;
+}
+
+/** 공유 지오메트리 안에서 이 아군이 쓰는 변형 번호 */
+export function allyVariant(id: AllyId): number {
+  return ALLY_VARIANTS[id];
+}
+
+/**
+ * 그 아군만 담은 단품 지오메트리 (갤러리/도감용).
+ * 전투 경로는 변형 마스킹 셰이더가 골라 그리지만 meshlab 은 공유 flatMat 을 쓰므로
+ * 공유본을 그대로 주면 장비 7벌이 한 몸에 다 붙어 나온다.
+ */
+export function buildAllySolo(id: AllyId): THREE.BufferGeometry {
+  return asset(`solo:ally:${id}`, (rig) => raiderSolo(rig, ALLY_VARIANTS[id])).geo;
+}
+
+/** 아군 보행 리그 — 몸통을 공유하므로 습격대와 같은 리그다 */
+export function allyRig(): EnemyRig {
+  return assetOf('blade').rig;
 }
 
 interface EnemyAsset {

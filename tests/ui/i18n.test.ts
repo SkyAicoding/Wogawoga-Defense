@@ -24,6 +24,21 @@ describe('i18n 문자열', () => {
     }
   });
 
+  it('홈타운 레벨업 문자열이 양쪽에 있다', () => {
+    for (const k of [
+      'battle.home.title',
+      'battle.home.stats',
+      'battle.home.desc',
+      'battle.home.next',
+      'battle.home.confirmDesc',
+      'battle.home.maxed',
+      'battle.lvOf',
+    ]) {
+      expect(ko[k], `ko.${k}`).toBeTruthy();
+      expect(en[k], `en.${k}`).toBeTruthy();
+    }
+  });
+
   it('지형지물 제거 문자열이 양쪽에 있다', () => {
     for (const k of [
       'battle.scenery.title',

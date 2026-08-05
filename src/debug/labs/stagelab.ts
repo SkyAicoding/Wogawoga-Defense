@@ -116,6 +116,7 @@ export function run(): void {
       pathIndex: 0,
       attackCdLeft: 0,
       towerTargetId: -1,
+      blockerAllyId: -1,
       flying: d.flying,
       x: sample.x,
       z: sample.z,

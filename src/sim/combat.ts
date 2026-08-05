@@ -4,8 +4,8 @@
  * 타워 피해(적 부족의 공격)도 여기 있다 — 감쇠/방어 없이 정수 피해가 그대로 들어간다.
  * 상태이상 부여는 attack/status 쪽에서 담당 (순환 임포트 방지).
  */
-import type { StatusKind, TowerId, TowerState } from '@/data/types';
-import type { EnemySim, SimCtx } from './entities';
+import type { AllyId, HometownSourceId, StatusKind, TowerId, TowerState } from '@/data/types';
+import type { AllySim, EnemySim, SimCtx } from './entities';
 
 export function addGold(ctx: SimCtx, delta: number): void {
   ctx.view.gold += delta;
@@ -20,7 +20,7 @@ export function damageEnemy(
   ctx: SimCtx,
   e: EnemySim,
   amount: number,
-  source: TowerId | StatusKind,
+  source: TowerId | StatusKind | AllyId | HometownSourceId,
   ignoreArmor = false,
 ): number {
   if (!e.alive) return 0;
@@ -107,6 +107,36 @@ export function damageTower(
       tier: t.tier,
       killerId: attacker.id,
     });
+  }
+  return dealt;
+}
+
+/**
+ * 아군 피해 — 발이 묶인 적의 난투 반격. 반환값 = 실제로 깎인 체력.
+ * 적과 같은 armor 규칙(고정 감산, 최소 1)을 쓴다 — 두 진영의 계산이 다르면
+ * 화면에 뜨는 숫자를 서로 비교할 수 없어진다.
+ * 사망해도 **여기서 리스트에서 빼지 않는다**(순회 중 제거 금지) — 회수는 battle의 사망 처리.
+ */
+export function damageAlly(ctx: SimCtx, a: AllySim, amount: number, attacker: EnemySim): number {
+  if (!a.alive) return 0;
+  const dealt = Math.max(1, Math.round(amount) - a.def.armor);
+  a.hp -= dealt;
+  ctx.events.push({
+    type: 'allyDamaged',
+    allyId: a.id,
+    defId: a.defId,
+    amount: dealt,
+    hpLeft: Math.max(0, a.hp),
+    maxHp: a.maxHp,
+    x: a.x,
+    z: a.z,
+    attackerId: attacker.id,
+    attackerDefId: attacker.defId,
+  });
+  if (a.hp <= 0) {
+    a.hp = 0;
+    a.alive = false;
+    ctx.events.push({ type: 'allyDied', allyId: a.id, defId: a.defId, x: a.x, z: a.z });
   }
   return dealt;
 }

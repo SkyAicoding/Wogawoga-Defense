@@ -1,18 +1,28 @@
 /**
- * 적 렌더 뷰 — 타입별 InstancedMesh (보스 2종은 개별 Mesh).
+ * 지상 유닛 렌더 뷰 — 타입별 InstancedMesh (보스 2종은 개별 Mesh).
  * prev→cur 보간, 보행 리그(버텍스 셰이더), 히트 플래시(instanceColor), 스폰 팝을 처리한다.
- * sim 상태는 EnemyState 배열로만 받는다 (sim 모듈 임포트 금지).
+ * sim 상태는 EnemyState/AllyState 배열로만 받는다 (sim 모듈 임포트 금지).
  *
  * 보행 위상은 시간이 아니라 이동거리(e.dist)에서 뽑는다 —
  * 그래야 발이 일정 보폭으로 꽂히고, 둔화/배속에서 걸음이 자동으로 맞는다.
+ *
+ * ── 왜 **아군까지** 이 뷰가 그리는가 (드로우콜 예산) ─────────────────────────
+ * 아군 전용 뷰를 만들면 컬러+그림자로 최소 +2콜인데, 실측 최악 프레임이 정확히 60/60이라
+ * 여유가 0이다. 아군은 적 습격대와 **같은 공유 지오메트리**를 쓰므로(meshlib/enemies.ts
+ * allyVariant) 같은 InstancedMesh의 뒤쪽 인스턴스로 이어 붙이면 **드로우콜이 늘지 않는다**.
+ * 그래서 계층상 어색함을 감수하고 여기서 함께 그린다 — 이름값보다 예산이 먼저다.
+ * 구분은 instanceColor 색조(ALLY_TINT)가 맡는다.
  */
 import * as THREE from 'three';
-import type { EnemyId, EnemyState } from '@/data/types';
+import type { AllyState, EnemyId, EnemyState } from '@/data/types';
 import { easeOutBack, lerp } from '@/core/mathx';
 import { flatMat } from '../palette';
 import {
   ALL_ENEMY_IDS,
+  ALLY_TINT,
   BOSS_ENEMIES,
+  allyGeoKey,
+  allyVariant,
   buildEnemy,
   enemyGeoKey,
   enemyRig,
@@ -173,7 +183,13 @@ export class EnemyView {
     if (a) a.flash = 1;
   }
 
-  update(enemies: readonly EnemyState[], alpha: number, cellToWorld: CellToWorld, dt: number): void {
+  update(
+    enemies: readonly EnemyState[],
+    alpha: number,
+    cellToWorld: CellToWorld,
+    dt: number,
+    allies: readonly AllyState[] = [],
+  ): void {
     this.time += dt;
     const counts = new Map<string, number>();
     const bossUsed = new Map<EnemyId, number>();
@@ -273,6 +289,8 @@ export class EnemyView {
       mesh.setColorAt(idx, _col.setRGB(f, f, f));
     }
 
+    this.updateAllies(allies, alpha, cellToWorld, dt, counts, seen);
+
     for (const [key, mesh] of this.meshes) {
       const n = counts.get(key) ?? 0;
       mesh.count = n;
@@ -301,6 +319,71 @@ export class EnemyView {
         m.visible = i < used || (this.warm > 0 && i < BOSS_WARM_SLOTS);
         if (this.warm === 0) m.frustumCulled = true; // 예열 끝 — 컬링 복구
       });
+    }
+  }
+
+  /**
+   * 아군 인스턴스를 **적 습격대와 같은 메시**의 뒤쪽에 이어 붙인다 (드로우콜 증가 0).
+   * 적 루프와 공유하는 것: counts(인스턴스 커서) · seen(애니 상태 GC) · anims(스폰 팝).
+   *
+   * 아군은 경로를 **거꾸로** 걷는다(dist가 줄어든다). 보행 위상을 e.dist처럼 그대로 쓰면
+   * 위상이 감소해 걸음이 거꾸로 돈다 — 그래서 부호를 뒤집은 -dist를 이동거리로 쓴다.
+   * 그러면 "앞으로 나아간 거리"가 되어 보폭·접지 보정이 적과 완전히 같은 식으로 맞는다.
+   */
+  private updateAllies(
+    allies: readonly AllyState[],
+    alpha: number,
+    cellToWorld: CellToWorld,
+    dt: number,
+    counts: Map<string, number>,
+    seen: Set<number>,
+  ): void {
+    if (allies.length === 0) return;
+    const key = allyGeoKey();
+    const mesh = this.meshes.get(key);
+    if (!mesh) return;
+    const rig = enemyRig('blade'); // 공유 지오메트리의 리그 (아군도 같은 몸통이다)
+    for (const a of allies) {
+      if (!a.alive) continue;
+      seen.add(a.id);
+      let anim = this.anims.get(a.id);
+      if (!anim) {
+        anim = { age: 0, flash: 0 };
+        this.anims.set(a.id, anim);
+      }
+      if (dt > 1e-3) {
+        anim.age += dt;
+        anim.flash = Math.max(0, anim.flash - dt * 5);
+      }
+      const idx = counts.get(key) ?? 0;
+      if (idx >= CAPACITY) return;
+      counts.set(key, idx + 1);
+
+      const sx = lerp(a.prevX, a.x, alpha);
+      const sz = lerp(a.prevZ, a.z, alpha);
+      cellToWorld(sx, sz, _pos);
+      const step = Math.hypot(a.x - a.prevX, a.z - a.prevZ);
+      // -dist = 기지에서 나아간 거리 (적의 `dist - step*(1-alpha)`와 부호만 반대)
+      const travel = -a.dist + step * (1 - alpha);
+      const off = phaseOffset01(a.id) * TAU;
+      // 멈춰 서서 때리는 중 — 적과 같은 규칙으로 팔을 휘두른다
+      const swinging = a.targetId >= 0 && step < STOPPED_EPS;
+      const swing = swinging ? this.time * ATTACK_SWING_RATE : 0;
+      const gait = wrapGait(travel * rig.gaitPerDist + off + swing);
+      const pop = anim.age < 0.28 ? easeOutBack(anim.age / 0.28) : 1;
+      _pos.y = groundLiftAt(rig, Math.abs(Math.sin(gait))) * pop;
+      let pitch = 0;
+      if (swinging) pitch -= Math.max(0, Math.sin(gait)) * ATTACK_LEAN;
+      _quat.setFromAxisAngle(AXIS_Y, -a.heading);
+      _quat2.setFromAxisAngle(AXIS_Z, pitch);
+      _quat.multiply(_quat2);
+      _mat.compose(_pos, _quat, _scl.setScalar(pop));
+      mesh.setMatrixAt(idx, _mat);
+      this.gaitAttrs.get(key)?.setX(idx, gait);
+      this.varAttrs.get(key)?.setX(idx, allyVariant(a.defId));
+      // 아군은 한랭 색조로 물들여 적과 즉시 갈린다. 피격 플래시는 그 위에 더한다
+      const f = anim.flash * anim.flash * 7;
+      mesh.setColorAt(idx, _col.setRGB(ALLY_TINT[0] + f, ALLY_TINT[1] + f, ALLY_TINT[2] + f));
     }
   }
 

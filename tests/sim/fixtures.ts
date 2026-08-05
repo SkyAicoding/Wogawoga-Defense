@@ -1,5 +1,8 @@
 /** 시뮬레이션 테스트용 최소 목 정의 생성기 — 실제 밸런스 데이터에 의존하지 않는다. */
 import type {
+  AllyDef,
+  AllyId,
+  BaseLevelDef,
   BattleOptions,
   BattleSim,
   EnemyDef,
@@ -107,6 +110,59 @@ export function enemyDefs(
   return out;
 }
 
+export const ALL_ALLY_IDS: AllyId[] = ['clubber', 'slinger', 'guardian'];
+
+/**
+ * 아군 목 정의 — 실제 밸런스 데이터와 무관한 "읽기 쉬운" 기본값.
+ * 근접(blocks)이 기본이고, 원거리는 개별 테스트가 overrides로 켠다.
+ */
+export function allyDef(id: AllyId, partial?: Partial<AllyDef>): AllyDef {
+  return {
+    id,
+    nameKey: id,
+    descKey: id,
+    hp: 100,
+    speed: 1,
+    armor: 0,
+    radius: 0.26,
+    cost: 50,
+    lifeTicks: 600,
+    dmg: 10,
+    cooldownTicks: 30,
+    range: 1,
+    canTargetAir: false,
+    blocks: true,
+    ...partial,
+  };
+}
+
+export function allyDefs(
+  overrides?: Partial<Record<AllyId, Partial<AllyDef>>>,
+): Record<AllyId, AllyDef> {
+  const out = {} as Record<AllyId, AllyDef>;
+  for (const id of ALL_ALLY_IDS) out[id] = allyDef(id, overrides?.[id]);
+  return out;
+}
+
+/**
+ * 홈타운 목 레벨 테이블 3단계.
+ *
+ * **기본값은 무장 해제(dmg 0 / range 0)** 다 — 의도적이다.
+ * 기존 sim 테스트 대부분이 "적이 기지에 도달하면 HP가 깎인다"를 전제로 쓰여 있는데,
+ * 기지가 기본으로 쏘면 그 전제가 조용히 무너져 무엇을 재는 테스트인지 알 수 없게 된다.
+ * 기지 사격은 그것을 재는 테스트(hometown.test.ts)가 overrides로 **켜서** 잰다.
+ * hpMul은 1/2/3이라 레벨업의 HP 정책을 눈으로 검산할 수 있다.
+ */
+export function baseLevels(overrides?: Partial<BaseLevelDef>[]): BaseLevelDef[] {
+  const base: BaseLevelDef[] = [
+    { cost: 0, hpMul: 1, dmg: 0, cooldownTicks: 30, range: 0 },
+    { cost: 100, hpMul: 2, dmg: 0, cooldownTicks: 30, range: 0 },
+    { cost: 200, hpMul: 3, dmg: 0, cooldownTicks: 30, range: 0 },
+  ];
+  if (!overrides) return base;
+  return base.map((lv, i) => ({ ...lv, ...overrides[i] }));
+}
+
 export function stageDef(partial?: Partial<StageDef>): StageDef {
   return {
     id: 1,
@@ -169,6 +225,8 @@ export function options(partial?: Partial<BattleOptions> & OptionsExtra): Battle
     seed: 42,
     towerDefs: towerDefs(),
     enemyDefs: enemyDefs(),
+    allyDefs: allyDefs(),
+    baseLevels: baseLevels(),
     waveFor: (w) => waves[Math.min(w, waves.length) - 1] as WaveDef,
   };
   return { ...base, ...partial };

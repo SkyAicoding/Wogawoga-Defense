@@ -27,7 +27,7 @@
  *    (실측: 데스크톱 기본 줌에서 채움 높이 1~2px → 4~5px).
  */
 import * as THREE from 'three';
-import type { EnemyState, TowerState } from '@/data/types';
+import type { AllyState, EnemyState, TowerState } from '@/data/types';
 import { lerp } from '@/core/mathx';
 import { BOSS_ENEMIES } from '../meshlib/enemies';
 import { towerTierScale } from '../meshlib/towers';
@@ -42,6 +42,19 @@ const CAPACITY = 160;
  */
 const TOWER_BAR_W = 0.9;
 const TOWER_BAR_H = 0.22;
+/**
+ * 아군 부족원 체력바 — **타워와 같은 kind 1**(내 편 팔레트: 청록→호박→적색)을 쓰고
+ * 크기만 유닛에 맞게 줄인다. 새 kind를 만들지 않은 이유는 의미가 정확히 같기 때문이다:
+ * 이 바가 줄어드는 건 "내가 잃고 있다"는 나쁜 소식이고, 적 바(초록→빨강)가 줄어드는 건
+ * 좋은 소식이다. 그 반전이 바로 kind 0/1을 가른 축이라(헤더 참조) 아군을 적 팔레트에
+ * 태우면 난전에서 정확히 거꾸로 읽힌다.
+ * 폭은 적 바(0.55×...)와 타워 바(0.9) 사이 — 걸어 다니는 작은 유닛이라 타워만큼 넓으면
+ * 몸통보다 바가 커진다.
+ */
+const ALLY_BAR_W = 0.5;
+const ALLY_BAR_H = 0.15;
+/** 아군 머리 위 높이 (모델 키 0.68 + 여유) */
+const ALLY_BAR_Y = 0.95;
 /** 티어 스케일에 곱하는 바 높이 — 지붕 바로 위 (towerTierScale 기준) */
 const TOWER_BAR_HEIGHT = 1.45;
 /** 지면 표식(잔해) 높이 — 지형 z-파이팅을 polygonOffset과 함께 피한다 */
@@ -195,6 +208,7 @@ if (vKind < 1.5) {
     alpha: number,
     cellToWorld: CellToWorld,
     marks: readonly TowerMark[] = [],
+    allies: readonly AllyState[] = [],
   ): void {
     let n = 0;
     _quat.identity();
@@ -221,6 +235,22 @@ if (vKind < 1.5) {
       _mat.compose(_pos, _quat, _scl.set(TOWER_BAR_W, TOWER_BAR_H, 1));
       this.mesh.setMatrixAt(n, _mat);
       this.fillAttr.setX(n, Math.max(0, t.hp) / Math.max(1, t.maxHp));
+      this.kindAttr.setX(n, 1);
+      n++;
+    }
+    // 아군 부족원 — 타워와 같은 kind 1(내 편 팔레트), 크기만 유닛에 맞춘다.
+    // **만피는 여기서도 숨긴다.** 처음엔 "몇 명이 어디 서 있는지가 판단 재료"라며
+    // 항상 띄웠는데, 실제 캡처를 보니 상한(6명)까지 채운 줄이 청록 슬래브 여섯 개로
+    // 길을 덮어 정작 교전이 안 보였다. 인원은 HUD의 '출동 n/6'이 이미 말해 주고
+    // 위치는 파랗게 물든 유닛 자체가 말해 준다 — 바까지 상시로 띄울 이유가 없다.
+    // 이 파일의 대원칙(바가 보인다 = 지금 뭔가 깎이고 있다)을 아군만 어길 근거가 없었다.
+    for (const a of allies) {
+      if (!a.alive || a.hp >= a.maxHp || n >= CAPACITY) continue;
+      cellToWorld(lerp(a.prevX, a.x, alpha), lerp(a.prevZ, a.z, alpha), _pos);
+      _pos.y = ALLY_BAR_Y;
+      _mat.compose(_pos, _quat, _scl.set(ALLY_BAR_W, ALLY_BAR_H, 1));
+      this.mesh.setMatrixAt(n, _mat);
+      this.fillAttr.setX(n, Math.max(0, a.hp) / Math.max(1, a.maxHp));
       this.kindAttr.setX(n, 1);
       n++;
     }

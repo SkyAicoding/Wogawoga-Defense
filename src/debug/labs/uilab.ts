@@ -117,10 +117,10 @@ export function run(): void {
 
   const st: BattleStateView = {
     tick: 0, phase: 'prep', waveIndex: 1, waveCount: 50, gold: 120,
-    baseHp: 100, baseHpMax: 100, prepTicksLeft: 6 * TICK_RATE,
+    baseHp: 100, baseHpMax: 100, baseLevel: 1, baseLevelMax: 5, prepTicksLeft: 6 * TICK_RATE,
     earlyCallBonusGold: Math.floor(6 * TICK_RATE * 0.15),
     hand: drawHand(), refreshCost: 0, enemies: [], towers: [mockTower],
-    projectiles: [], amberEarned: 0, endless: false,
+    projectiles: [], allies: [], allyCap: 6, amberEarned: 0, endless: false,
   };
 
   const sim: BattleSim = {
@@ -136,11 +136,19 @@ export function run(): void {
     // 목: (3,4)에만 소품이 있다고 가정 — 제거 패널 레이아웃 확인용
     hasScenery: (x, z) => x === 3 && z === 4,
     clearSceneryCost: (x, z) => (x === 3 && z === 4 ? 80 : null),
+    allyCost: () => 55,
+    canTrainAlly: () => true,
+    // 목: Lv1 → Lv2가 220골드. 골드 120이라 '부족' 표시까지 그대로 확인된다
+    baseUpgradeCost: () => 220,
+    canUpgradeBase: () => st.gold >= 220,
+    baseRange: () => 2,
+    baseNextStats: () => ({ hpMax: 140, dmg: 13, range: 2.25 }),
   };
 
   let selectedCard: number | null = null;
   let selectedTower: number | null = null;
   let selectedScenery: Vec2 | null = null;
+  let selectedBase = false;
   let waveTicksLeft = 0;
 
   const startWave = (): void => {
@@ -164,6 +172,12 @@ export function run(): void {
       selectedCard = i;
     },
     selectedCard: () => selectedCard,
+    // 목 UI 랩 — 실제 출동은 없고 버튼 레이아웃/상태만 본다
+    requestTrainAlly: () => undefined,
+    selectedBase: () => selectedBase,
+    requestUpgradeBase: () => {
+      st.baseLevel = Math.min(st.baseLevelMax, st.baseLevel + 1);
+    },
     requestRefresh: () => {
       st.hand = drawHand();
       st.refreshCost = st.refreshCost === 0 ? 20 : st.refreshCost + 10;
@@ -180,6 +194,7 @@ export function run(): void {
     clearSelection: () => {
       selectedTower = null;
       selectedScenery = null;
+      selectedBase = false;
     },
     quitToLobby: () => {
       facade.battle = null;

@@ -337,7 +337,9 @@ function pushHit(ctx: SimCtx, p: ProjectileSim, extraDmg: number): void {
 
 function impactHoming(ctx: SimCtx, p: ProjectileSim, primary: EnemySim | null): void {
   if (primary) {
-    damageEnemy(ctx, primary, p.dmg, p.towerDefId);
+    // 홈타운의 화살은 발리스타 지오메트리를 빌려 쓸 뿐 발리스타가 쏜 게 아니다
+    // (hometown.ts 규칙 6) — 피해 출처만 여기서 갈라진다.
+    damageEnemy(ctx, primary, p.dmg, p.fromBase ? 'hometown' : p.towerDefId);
     if (p.status && primary.alive) tryApplyStatus(ctx, primary, p.status, p.sourceTowerId);
   }
   let area = 0;

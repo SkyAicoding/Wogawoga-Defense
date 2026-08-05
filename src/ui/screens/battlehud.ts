@@ -5,16 +5,19 @@
  * 선택된 타워 패널: BattleUiApi 계약에 selectedTower()/requestSetTargeting()이 없어
  * 선택 확장 인터페이스로 기능 감지한다 — 없으면 패널을 숨긴다 (contractIssues 보고).
  */
-import type { BattleUiApi, GameFacade, TargetingMode, TowerState } from '@/data/types';
+import type { AllyId, BattleUiApi, GameFacade, TargetingMode, TowerState } from '@/data/types';
 import { TICK_RATE } from '@/data/types';
+import { ALL_ALLY_IDS } from '@/data';
 import type { Screen } from '@/core/fsm';
 import { h, cls, fmt, mount, unmount, uiRoot, setText } from '../dom';
 import { t } from '../i18n';
 import {
+  ALLY_ICON_SVG,
   amberSvg,
   createTowerCard,
   goldSvg,
   heartSvg,
+  hometownIconSvg,
   sceneryIconSvg,
   towerCountSvg,
   towerIconSvg,
@@ -63,6 +66,26 @@ export function createBattleHud(): Screen<GameFacade> {
   // 열린 일시정지 모달 — 화면 이탈 시 닫아 결과 화면에 잔존하지 않게 한다
   let pauseModal: ModalHandle | null = null;
 
+  /**
+   * 출동 바 — 아군 부족원 생산.
+   *
+   * **왜 상시 노출된 버튼인가 (기지 탭이 아니라)**:
+   * 아군은 수명 20초짜리 긴급 자원이라 "지금 필요하다"고 느낀 순간과 나가는 순간 사이의
+   * 탭 수가 곧 반응 속도다. 기지 탭 → 패널 → 버튼은 2탭이고, 그마저도 기지가 화면 구석에
+   * 있거나 HUD에 가려 있으면 조준부터 해야 한다. 상시 바는 1탭이고 위치가 고정이다.
+   * 카드 핸드를 쓰지 않는 이유도 같다 — 핸드는 타워 배치용 슬롯 3칸을 이미 다 쓰고 있고,
+   * 거기에 섞으면 "배치(자리를 고른다)"와 "출동(즉시 나간다)"의 조작 성격이 뒤섞인다.
+   * (2단계의 마을 레벨업은 웨이브 사이에 누르는 조작이라 기지 탭 패널이 어울린다 — 자리를 나눈다)
+   */
+  interface AllyButton {
+    el: HTMLElement;
+    costLabel: HTMLElement;
+    defId: AllyId;
+  }
+  let allyBtns: AllyButton[] = [];
+  let allyCountEl!: HTMLElement;
+  let lastAllySig = '';
+
   // 참조 요소 (enter에서 채움)
   let waveNum!: HTMLElement;
   let goldNum!: HTMLElement;
@@ -98,11 +121,32 @@ export function createBattleHud(): Screen<GameFacade> {
   let scArmed = false;
   let scArmTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // 홈타운 레벨업 패널 — 선택 타워/소품 패널과 같은 자리, 같은 톤, 같은 2단 확인
+  let htPanel!: HTMLElement;
+  let htLv!: HTMLElement;
+  let htDesc!: HTMLElement;
+  let htUpLabel!: HTMLElement;
+  let htUpBtn!: HTMLElement;
+  let htCloseBtn!: HTMLElement;
+  let htStats!: HTMLElement;
+  let lastSelBase = false;
+  /** 레벨업 확인 무장 상태 — 소품 제거와 완전히 같은 규약 */
+  let htArmed = false;
+  let htArmTimer: ReturnType<typeof setTimeout> | null = null;
+
   const disarm = (): void => {
     scArmed = false;
     if (scArmTimer) {
       clearTimeout(scArmTimer);
       scArmTimer = null;
+    }
+  };
+
+  const disarmBase = (): void => {
+    htArmed = false;
+    if (htArmTimer) {
+      clearTimeout(htArmTimer);
+      htArmTimer = null;
     }
   };
 
@@ -274,6 +318,56 @@ export function createBattleHud(): Screen<GameFacade> {
         h('div', { class: 'tp-btns' }, scClearBtn, scCloseBtn),
       );
 
+      // --- 홈타운 레벨업 패널 ----------------------------------------------
+      // 아군 출동이 "1탭 상시 바"인 것과 일부러 반대로 뒀다: 레벨업은 웨이브 사이에
+      // 누르는 되돌릴 수 없는 큰 결제라, 기지를 **조준해서 고른 다음** 확인까지
+      // 거치게 하는 편이 맞다(1단계 결론 그대로). 확인 단계는 소품 제거 패널과
+      // 완전히 같은 is-armed 규약을 쓴다 — 이 게임에서 패널이 손가락 밑에 열려
+      // 재탭이 그대로 결제가 된 사고가 실제로 있었기 때문이다.
+      htLv = h('span', { class: 'tp-lv' });
+      htStats = h('span', { class: 'tp-sub tp-sub--stats' });
+      htDesc = h('span', { class: 'tp-sub' });
+      htUpLabel = h('span', { class: 'tp-btn-label' });
+      htUpBtn = h('button', {
+        class: 'tp-btn tp-btn--up hud-item',
+        attrs: { type: 'button' },
+        onClick: () => {
+          const bb = api(facade);
+          if (!bb || !bb.sim.canUpgradeBase()) return;
+          if (!htArmed) {
+            htArmed = true;
+            if (htArmTimer) clearTimeout(htArmTimer);
+            htArmTimer = setTimeout(() => {
+              htArmed = false;
+              htArmTimer = null;
+            }, ARM_TIMEOUT_MS);
+            return;
+          }
+          disarmBase();
+          bb.requestUpgradeBase();
+        },
+      }, htUpLabel);
+      htCloseBtn = h('button', {
+        class: 'tp-btn tp-btn--close hud-item',
+        attrs: { type: 'button', 'aria-label': t('battle.close') },
+        text: '✕',
+        onClick: () => {
+          disarmBase();
+          api(facade)?.clearSelection();
+        },
+      });
+      // 소품 패널과 같은 이유로 패널 배경에는 hud-item을 주지 않는다 (포인터 통과)
+      htPanel = h('div', { class: 'tower-panel tower-panel--home', attrs: { style: 'display:none' } },
+        h('div', { class: 'tp-head' },
+          h('span', { class: 'tp-ico tp-ico--home', html: hometownIconSvg }),
+          h('span', { class: 'tp-name', text: t('battle.home.title') }),
+          htLv,
+        ),
+        htStats,
+        htDesc,
+        h('div', { class: 'tp-btns' }, htUpBtn, htCloseBtn),
+      );
+
       // --- 웨이브 시작 버튼 ------------------------------------------------
       callWaveSub = h('span', { class: 'callwave-sub' });
       callWaveBtn = h('button', {
@@ -291,10 +385,34 @@ export function createBattleHud(): Screen<GameFacade> {
         onClick: () => api(facade)?.requestRefresh(),
       }, h('span', { class: 'refresh-ico', text: '🔄' }), refreshLabel);
 
+      // --- 출동 바 (아군 부족원) -------------------------------------------
+      allyCountEl = h('span', { class: 'ally-count-num' });
+      allyBtns = ALL_ALLY_IDS.map((defId) => {
+        const costLabel = h('span', { class: 'ally-btn-cost' });
+        const el = h('button', {
+          class: 'ally-btn hud-item',
+          attrs: { type: 'button', 'aria-label': t(`ally.${defId}.name`) },
+          onClick: () => api(facade)?.requestTrainAlly(defId),
+        },
+          h('span', { class: 'ally-btn-ico', html: ALLY_ICON_SVG[defId] }),
+          h('span', { class: 'ally-btn-name', text: t(`ally.${defId}.name`) }),
+          costLabel,
+        );
+        return { el, costLabel, defId };
+      });
+      const allyRow = h('div', { class: 'ally-row' },
+        h('div', { class: 'ally-count', attrs: { title: t('battle.ally.title') } },
+          h('span', { class: 'ally-count-label', text: t('battle.ally.title') }),
+          allyCountEl),
+        ...allyBtns.map((b) => b.el),
+      );
+
       const bottom = h('div', { class: 'hud-bottom' },
         panelHost,
         scPanel,
+        htPanel,
         callWaveBtn,
+        allyRow,
         h('div', { class: 'hand-row hud-item' }, handHost, refreshBtn),
       );
 
@@ -306,11 +424,14 @@ export function createBattleHud(): Screen<GameFacade> {
       handSig = '';
       lastSelTower = null;
       lastSelScenery = '';
+      lastSelBase = false;
+      lastAllySig = '';
       if (b) this.update?.(facade, 0);
     },
 
     exit() {
       disarm();
+      disarmBase();
       pauseModal?.close();
       pauseModal = null;
       if (root) unmount(root);
@@ -318,6 +439,8 @@ export function createBattleHud(): Screen<GameFacade> {
       bannerHost = null;
       cards = [];
       handSig = '';
+      allyBtns = [];
+      lastAllySig = '';
     },
 
     update(facade) {
@@ -369,6 +492,18 @@ export function createBattleHud(): Screen<GameFacade> {
         c.setDisabled(cost > s.gold);
       });
       setText(refreshLabel, s.refreshCost === 0 ? t('common.free') : fmt(s.refreshCost));
+
+      // 출동 바 — 비용은 나가 있는 인원 수에 따라 오르므로 인원이 바뀔 때만 갱신하고,
+      // 골드는 매 프레임 바뀌니 비활성 여부는 항상 다시 본다
+      const allySig = `${s.allies.length}/${s.allyCap}`;
+      if (allySig !== lastAllySig) {
+        lastAllySig = allySig;
+        setText(allyCountEl, allySig);
+        cls(allyCountEl, 'is-full', s.allies.length >= s.allyCap);
+        for (const btn of allyBtns) setText(btn.costLabel, fmt(b.sim.allyCost(btn.defId)));
+      }
+      // canTrainAlly는 상한·골드·종료 여부를 한 번에 본다 (sim이 커맨드를 거부하는 판정 그대로)
+      for (const btn of allyBtns) cls(btn.el, 'is-disabled', !b.sim.canTrainAlly(btn.defId));
 
       // 웨이브 시작 버튼 (prep 중에만)
       const prep = s.phase === 'prep';
@@ -437,6 +572,57 @@ export function createBattleHud(): Screen<GameFacade> {
               : t('battle.scenery.desc'),
         );
         cls(scDesc, 'is-warn', short > 0 || scArmed);
+      }
+
+      // 홈타운 레벨업 패널 (타워/소품 패널과 상호배타 — placement가 보장)
+      const homeSel = over ? false : (b.selectedBase?.() ?? false);
+      if (homeSel !== lastSelBase) {
+        lastSelBase = homeSel;
+        htPanel.style.display = homeSel ? '' : 'none';
+        disarmBase(); // 패널이 닫히거나 새로 열리면 확인 무장은 무효
+      }
+      if (homeSel) {
+        setText(htLv, t('battle.lvOf', { n: s.baseLevel, m: s.baseLevelMax }));
+        // 지금 성능을 항상 보여 준다 — 레벨업이 무엇을 사는지 비교할 기준이 화면에 있어야 한다
+        setText(
+          htStats,
+          t('battle.home.stats', { hp: `${s.baseHp}/${s.baseHpMax}`, r: b.sim.baseRange().toFixed(1) }),
+        );
+        const cost = b.sim.baseUpgradeCost();
+        const maxed = cost === null;
+        const short = maxed ? 0 : cost - s.gold;
+        const blocked = maxed || short > 0;
+        if (blocked && htArmed) disarmBase(); // 도중에 골드가 모자라지면 무장 해제
+        setText(
+          htUpLabel,
+          maxed
+            ? t('common.max')
+            : htArmed
+              ? `✓ ${t('battle.scenery.confirm')} ${fmt(cost)}`
+              : `⬆ ${t('battle.upgrade')} ${fmt(cost)}`,
+        );
+        cls(htUpBtn, 'is-armed', htArmed);
+        cls(htUpBtn, 'is-disabled', blocked);
+        // 되돌릴 수 없는 결제라 **무엇을 사는지**를 확인 단계 전에 숫자로 보여 준다.
+        // (골드가 모자라거나 확인 대기 중이면 그 사정이 우선 — 그때는 이유를 띄운다)
+        const next = b.sim.baseNextStats();
+        setText(
+          htDesc,
+          maxed
+            ? t('battle.home.maxed')
+            : short > 0
+              ? t('battle.scenery.needGold', { n: fmt(short) })
+              : htArmed
+                ? t('battle.home.confirmDesc', { n: fmt(cost) })
+                : next
+                  ? t('battle.home.next', {
+                      hp: `${next.hpMax}`,
+                      d: `${next.dmg}`,
+                      r: next.range.toFixed(1),
+                    })
+                  : t('battle.home.desc'),
+        );
+        cls(htDesc, 'is-warn', short > 0 || htArmed);
       }
     },
   };

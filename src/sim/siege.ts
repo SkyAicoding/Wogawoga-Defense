@@ -10,6 +10,12 @@
  *      읽기 쉬운 규칙이 생기고, 플레이어에게 "안전하게 멀리 vs 강하게 가까이"라는
  *      실제 선택지를 준다.
  *
+ * 1-b) **발이 묶이면 타워를 때리지 않는다.**
+ *    아군 부족원이 봉쇄한 적(blockerAllyId >= 0)은 이 단계를 통째로 건너뛴다.
+ *    자세한 근거는 src/sim/allies.ts 규칙 5 — 요약하면 "눈앞의 사람을 놔두고 멀리 있는
+ *    움막을 두들기는 그림은 설명이 안 되고, 무엇보다 그게 아군 유닛을 사는 이유다".
+ *    그래서 updateAllies가 updateSiege보다 **먼저** 돈다(battle.ts 틱 순서).
+ *
  * 2) 타깃 선택 = 사거리 내 최근접, 동점은 낮은 towerId.
  *    가장 약한(hp 최소) 타워를 고르는 안도 검토했으나 버렸다 — 무리 전체가 한 타워에
  *    집중돼 순삭이 나고, 무엇보다 "눈앞의 움막을 놔두고 저 멀리를 때린다"는 그림이
@@ -142,6 +148,14 @@ export function updateSiege(ctx: SimCtx): void {
     if (spec === undefined) continue; // 타워를 무시하는 적 (기존 12종 대부분)
     if (isStunned(e)) {
       // 규칙 5) 스턴 = 완전 무력화. 쿨다운도 멈춘다
+      e.towerTargetId = -1;
+      continue;
+    }
+    if (e.blockerAllyId >= 0) {
+      // 아군 부족원에게 발이 묶였다 — 눈앞의 사람을 놔두고 멀리 있는 움막을 때리지 않는다.
+      // (allies.ts 규칙 5) 아군 유닛이 **타워의 수명을 사는** 카드가 되는 지점이다.
+      // 스턴과 달리 쿨다운은 그대로 흐른다 — 무력화가 아니라 표적 전환이기 때문이다.
+      if (e.attackCdLeft > 0) e.attackCdLeft--;
       e.towerTargetId = -1;
       continue;
     }

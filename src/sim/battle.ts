@@ -1,15 +1,28 @@
 /**
  * createBattle — BattleSim 구현. 틱 순서:
- * 웨이브 스폰(+prep 수리) → 적의 타워 공격(+저주) → 부서진 타워 회수 → 적 이동/누수
- * → 상태이상 → 버프 재계산(5틱마다) → 타워 조준/발사(침묵 감소) → 투사체 이동/명중
- * → 사망 처리 → 승패 판정.
- * 공성(적의 타워 공격)이 이동보다 앞인 이유: 근접 유닛의 "멈춰 서서 때린다"를
- * 이동 단계가 towerTargetId로 읽어야 하기 때문이다 (src/sim/siege.ts 규칙 4).
+ * 웨이브 스폰(+prep 수리) → **아군 교전/봉쇄(+적의 난투 반격)** → 적의 타워 공격(+저주)
+ * → 부서진 타워 회수 → 적 이동/누수 → **아군 이동/수명** → 상태이상
+ * → 버프 재계산(5틱마다) → 타워 조준/발사(침묵 감소) → **홈타운 조준/발사**
+ * → 투사체 이동/명중 → 사망 처리(적·아군) → 승패 판정.
+ *
+ * 세 단계의 자리는 전부 **"결정을 읽는 쪽이 뒤"** 라는 한 규칙으로 정해져 있다:
+ *  · 공성이 이동보다 앞 — 근접 적의 "멈춰 서서 때린다"를 이동이 towerTargetId로 읽는다
+ *    (src/sim/siege.ts 규칙 4).
+ *  · **아군 교전이 공성보다 앞** — 봉쇄된 적은 타워를 때리지 않으므로(allies.ts 규칙 5)
+ *    공성이 blockerAllyId를 읽으려면 봉쇄가 먼저 서 있어야 한다.
+ *  · **아군 이동이 적 이동 직후** — 교전 판정은 이미 끝났고 결과대로 걷기만 한다.
+ *    같은 틱의 같은 스냅샷으로 양쪽을 움직여야 사거리 판정이 한쪽으로 기울지 않는다.
+ *  · **홈타운 발사가 타워 발사 직후, 투사체 단계 직전** — 사수는 사수끼리 같은
+ *    스냅샷에서 쏴야 사거리 판정이 기울지 않고, 화살이 같은 틱의 투사체 단계에 실려야
+ *    비행 시간 규칙이 타워 것과 같아진다 (hometown.ts 규칙 7).
+ * 요약하면 한 틱의 인과는 **봉쇄 확정 → 공성 → 이동 → 사격**이다.
+ *
  * prep: 웨이브1 전 150틱, 이후 90틱. callWave 스킵 시 남은틱×0.15 골드(내림).
  * three/DOM 임포트 금지 — @/data/types + @/core/* 만 사용.
  */
 import { TICK_DT, STATUS_TICK_INTERVAL } from '@/data/types';
 import type {
+  AllyId,
   BattleCommand,
   BattleOptions,
   BattleSim,
@@ -20,11 +33,30 @@ import type {
   WaveDef,
 } from '@/data/types';
 import { Rng } from '@/core/rng';
+import { ALLY_MAX_ACTIVE } from '@/data/balance';
 import { isBuildableCell, rasterizePathCells, sceneryCells } from '@/data/grid';
+import {
+  allyTrainCost,
+  canTrainAlly,
+  moveAllies,
+  sweepDeadAllies,
+  trainAlly,
+  updateAllies,
+} from './allies';
 import { recomputeBuffs, updateProjectiles, updateTowers } from './attack';
 import { addGold, leakEnemy } from './combat';
 import { Economy, sceneryClearCostFor, sellRefundFor } from './economy';
 import { pathFor, World, type EnemySim, type SimCtx } from './entities';
+import {
+  baseNextStats,
+  baseUpgradeCost,
+  canUpgradeBase,
+  createHometown,
+  currentLevelDef,
+  initialBaseHp,
+  updateHometown,
+  upgradeBase,
+} from './hometown';
 import { buildPath, buildStraight } from './path';
 import {
   isRepairTick,
@@ -81,14 +113,18 @@ class Battle implements BattleSim {
         : stage.paths.map((w) => buildStraight(w[0] ?? stage.baseCell, stage.baseCell));
     const world = new World();
     const hand: CardState[] = [];
+    // 홈타운은 Lv1(움막 하나)에서 시작한다 — hpMul이 1이 아닌 테이블도 여기서 흡수된다
+    const baseHp0 = initialBaseHp(stage.baseHp, opts.baseLevels);
     const view: BattleStateView = {
       tick: 0,
       phase: 'prep',
       waveIndex: 1,
       waveCount: stage.waveCount,
       gold: stage.startGold,
-      baseHp: stage.baseHp,
-      baseHpMax: stage.baseHp,
+      baseHp: baseHp0,
+      baseHpMax: baseHp0,
+      baseLevel: 1,
+      baseLevelMax: Math.max(1, opts.baseLevels.length),
       prepTicksLeft: PREP_TICKS_FIRST,
       earlyCallBonusGold: Math.floor(PREP_TICKS_FIRST * EARLY_CALL_RATE),
       hand,
@@ -96,6 +132,8 @@ class Battle implements BattleSim {
       enemies: world.enemies.items,
       towers: world.towers.items,
       projectiles: world.projectiles.items,
+      allies: world.allies.items,
+      allyCap: ALLY_MAX_ACTIVE,
       amberEarned: 0,
       endless: opts.endless,
     };
@@ -107,6 +145,7 @@ class Battle implements BattleSim {
       view,
       groundPaths,
       airPaths,
+      hometown: createHometown(),
     };
     this.pathCells = rasterizePathCells(stage);
     this.scenery = sceneryCells(stage, this.pathCells);
@@ -131,32 +170,37 @@ class Battle implements BattleSim {
       if (v.prepTicksLeft <= 0) this.startWave();
     }
     if (v.phase === 'wave') this.spawner.update(ctx);
-    // 2) 적 부족의 타워 공격 → 부서진 타워 회수 (발사 단계보다 먼저)
+    // 2) 아군 교전/봉쇄 + 적의 난투 반격 (공성보다 **먼저** — allies.ts 규칙 5)
+    updateAllies(ctx);
+    // 3) 적 부족의 타워 공격 → 부서진 타워 회수 (발사 단계보다 먼저)
     updateSiege(ctx);
     if (sweepDestroyedTowers(ctx)) {
       this.economy.recalcCosts(ctx); // 타워 수 감소 → 핸드 실비용 하락
       recomputeBuffs(ctx); // drum이 부서졌을 수 있다 — 5틱 주기를 기다리지 않는다
     }
-    // 3) 적 이동/누수
+    // 4) 적 이동/누수 → 아군 이동/수명 (같은 스냅샷으로 양쪽을 움직인다)
     this.moveEnemies();
-    // 4) 상태이상 틱 + 힐 오라
+    moveAllies(ctx);
+    // 5) 상태이상 틱 + 힐 오라
     const enemies = ctx.world.enemies.items;
     for (let i = enemies.length - 1; i >= 0; i--) {
       const e = enemies[i] as EnemySim;
       if (e.alive) tickEnemyStatuses(ctx, e);
     }
     if (v.tick % STATUS_TICK_INTERVAL === 0) processHealAuras(ctx);
-    // 5) 버프 재계산 (5틱마다)
+    // 6) 버프 재계산 (5틱마다)
     if (v.tick % BUFF_INTERVAL === 0) recomputeBuffs(ctx);
-    // 6) 타워 조준/발사
+    // 7) 타워 조준/발사 → 홈타운 조준/발사 (사수는 같은 스냅샷에서 함께 쏜다)
     updateTowers(ctx);
-    // 7) 투사체 이동/명중
+    updateHometown(ctx);
+    // 8) 투사체 이동/명중 (타워 투사체와 홈타운 화살이 같은 단계를 탄다)
     updateProjectiles(ctx);
-    // 8) 사망 처리 (이벤트는 피해 시점에 발생, 여기서는 회수만)
+    // 9) 사망 처리 (이벤트는 피해/귀환 시점에 발생, 여기서는 회수만)
     for (let i = enemies.length - 1; i >= 0; i--) {
       if (!(enemies[i] as EnemySim).alive) ctx.world.removeEnemyAt(i);
     }
-    // 9) 승패/웨이브 완료 판정
+    sweepDeadAllies(ctx);
+    // 10) 승패/웨이브 완료 판정
     this.checkEnd();
   }
 
@@ -181,6 +225,8 @@ class Battle implements BattleSim {
       if (!e.alive) continue;
       e.prevX = e.x;
       e.prevZ = e.z;
+      // 아군에게 발이 묶였다 — 유닛 충돌 대신 쓰는 봉쇄 표현 (allies.ts 규칙 5)
+      if (e.blockerAllyId >= 0) continue;
       // 근접 부족원은 타워를 때리는 동안 그 자리에 멈춰 선다 (siege.ts 규칙 4)
       if (isSieging(e)) continue;
       const sp = effectiveSpeed(e);
@@ -255,6 +301,10 @@ class Battle implements BattleSim {
       }
       case 'clearScenery':
         return this.cmdClearScenery(cmd.cellX, cmd.cellZ);
+      case 'trainAlly':
+        return trainAlly(this.ctx, cmd.defId, cmd.pathIndex);
+      case 'upgradeBase':
+        return upgradeBase(this.ctx);
       case 'callWave': {
         // 이미 호출됨(카운트다운 0)이면 중복 호출 거부
         if (v.phase !== 'prep' || v.prepTicksLeft <= 0) return false;
@@ -368,6 +418,12 @@ class Battle implements BattleSim {
     h = mix(h, v.tick);
     h = mix(h, v.gold);
     h = mix(h, v.baseHp);
+    // 홈타운 — 레벨은 최대 HP·공격력·사거리를 한꺼번에 바꾸고, 쿨다운/타깃은
+    // "언제 누구를 쏘는가"를 바꾼다. 셋 다 빠지면 기지가 개입한 판의 발산을 해시가 놓친다
+    h = mix(h, v.baseLevel);
+    h = mix(h, v.baseHpMax);
+    h = mix(h, ctx.hometown.attackCdLeft);
+    h = mix(h, ctx.hometown.targetId);
     for (const e of ctx.world.enemies.items) {
       h = mix(h, e.id);
       h = mix(h, Math.round(e.x * 1000));
@@ -376,6 +432,22 @@ class Battle implements BattleSim {
       // 공성 상태 — 이게 빠지면 "언제 누구를 때리는가"의 발산을 해시가 못 잡는다
       h = mix(h, e.attackCdLeft);
       h = mix(h, e.towerTargetId);
+      // 봉쇄/난투 — 봉쇄는 이동·공성·반격을 동시에 바꾸므로 1틱만 어긋나도 전부 갈라진다
+      h = mix(h, e.blockerAllyId);
+      h = mix(h, e.brawlCdLeft);
+    }
+    // 아군 부족원 — 위치/체력/수명/쿨다운/타깃 전부. 하나라도 빠지면
+    // "언제 누가 죽고 언제 돌아가는가"의 발산을 해시가 놓친다.
+    // (dist는 x/z에서 유도되지만 출격 한계선에서 멈춘 뒤에도 계속 도는 유일한 값이라 따로 넣는다)
+    for (const a of ctx.world.allies.items) {
+      h = mix(h, a.id);
+      h = mix(h, Math.round(a.x * 1000));
+      h = mix(h, Math.round(a.z * 1000));
+      h = mix(h, Math.round(a.dist * 1000));
+      h = mix(h, a.hp);
+      h = mix(h, a.lifeLeft);
+      h = mix(h, a.attackCdLeft);
+      h = mix(h, a.targetId);
     }
     for (const t of ctx.world.towers.items) {
       h = mix(h, t.id);
@@ -421,6 +493,36 @@ class Battle implements BattleSim {
   clearSceneryCost(cellX: number, cellZ: number): number | null {
     if (!this.hasScenery(cellX, cellZ)) return null;
     return sceneryClearCostFor(this.clearedScenery.length);
+  }
+
+  allyCost(defId: AllyId): number {
+    const def = this.ctx.opts.allyDefs[defId];
+    return def ? allyTrainCost(this.ctx, def) : 0;
+  }
+
+  canTrainAlly(defId: AllyId): boolean {
+    const v = this.ctx.view;
+    if (v.phase === 'won' || v.phase === 'lost') return false;
+    const def = this.ctx.opts.allyDefs[defId];
+    return def ? canTrainAlly(this.ctx, def) : false;
+  }
+
+  baseUpgradeCost(): number | null {
+    return baseUpgradeCost(this.ctx);
+  }
+
+  canUpgradeBase(): boolean {
+    const v = this.ctx.view;
+    if (v.phase === 'won' || v.phase === 'lost') return false;
+    return canUpgradeBase(this.ctx);
+  }
+
+  baseRange(): number {
+    return currentLevelDef(this.ctx).range;
+  }
+
+  baseNextStats(): { hpMax: number; dmg: number; range: number } | null {
+    return baseNextStats(this.ctx);
   }
 
   towerAt(cellX: number, cellZ: number): TowerState | null {

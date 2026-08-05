@@ -10,8 +10,9 @@
  * 타워 좌표가 셀 정수라 dist 가 곧 사거리 판정 거리다 (siege 는 셀 좌표로 잰다).
  */
 import { createBattle } from '@/sim/battle';
-import { ENEMY_DEFS, TOWER_DEFS } from '@/data';
+import { ALLY_DEFS, ENEMY_DEFS, TOWER_DEFS } from '@/data';
 import type {
+  BaseLevelDef,
   BattleSim,
   EnemyId,
   SpawnGroup,
@@ -19,6 +20,16 @@ import type {
   TowerId,
   WaveDef,
 } from '@/data/types';
+
+/**
+ * 이 실험장의 기지는 **쏘지 않는다** (dmg 0 = 무장 해제).
+ * 여기서 재는 것은 "타워와 습격대의 교환비" 하나뿐인데, 기지가 경로 끝(x=23)에서
+ * 사격하면 살아 넘어간 습격대를 기지가 정리해 버려 타워의 몫과 기지의 몫이 섞인다.
+ * 홈타운 방어의 효과는 그것을 재는 자리에서 따로 잰다(tests/sim/hometown.test.ts).
+ */
+const ARENA_BASE_LEVELS: readonly BaseLevelDef[] = [
+  { cost: 0, hpMul: 1, dmg: 0, cooldownTicks: 30, range: 0 },
+];
 
 const GRID_W = 24;
 const GRID_H = 11;
@@ -163,6 +174,8 @@ export function runArena(opts: ArenaOptions): ArenaResult {
     seed: 4242,
     towerDefs: TOWER_DEFS,
     enemyDefs: ENEMY_DEFS,
+    allyDefs: ALLY_DEFS,
+    baseLevels: ARENA_BASE_LEVELS,
     waveFor: () => wave,
   });
   const invested = buildDefense(sim, opts);

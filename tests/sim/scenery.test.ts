@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createBattle } from '@/sim/battle';
-import { ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
+import { ALLY_DEFS, BASE_LEVELS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
 import { cellKey, charAt, rasterizePathCells, sceneryCells } from '@/data/grid';
 import { sceneryClearCostFor } from '@/sim/economy';
 import {
@@ -30,6 +30,8 @@ function simFor(gold = 100_000): BattleSim {
     seed: 42,
     towerDefs: TOWER_DEFS,
     enemyDefs: ENEMY_DEFS,
+    allyDefs: ALLY_DEFS,
+    baseLevels: BASE_LEVELS,
     waveFor: makeWaveFor(stage),
   });
   (sim.state as { gold: number }).gold = gold;

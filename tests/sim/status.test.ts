@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { Rng } from '@/core/rng';
 import type { BattleStateView, EnemyDef } from '@/data/types';
 import { World, type EnemySim, type SimCtx } from '@/sim/entities';
+import { createHometown } from '@/sim/hometown';
 import {
   effectiveSpeed,
   isStunned,
@@ -23,17 +24,30 @@ function miniCtx(seed = 1): SimCtx {
     gold: 0,
     baseHp: 10,
     baseHpMax: 10,
+    baseLevel: 1,
+    baseLevelMax: 1,
     prepTicksLeft: 0,
     earlyCallBonusGold: 0,
     hand: [],
     refreshCost: 0,
     enemies: world.enemies.items,
+    allies: world.allies.items,
+    allyCap: 6,
     towers: world.towers.items,
     projectiles: world.projectiles.items,
     amberEarned: 0,
     endless: false,
   };
-  return { opts: options(), rng: new Rng(seed), world, events: [], view, groundPaths: [], airPaths: [] };
+  return {
+    opts: options(),
+    rng: new Rng(seed),
+    world,
+    events: [],
+    view,
+    groundPaths: [],
+    airPaths: [],
+    hometown: createHometown(),
+  };
 }
 
 function spawn(ctx: SimCtx, def: EnemyDef, over?: Partial<EnemySim>): EnemySim {

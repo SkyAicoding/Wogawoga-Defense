@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import type { StageDef } from '@/data/types';
 import { Rng, hashSeed } from '@/core/rng';
 import { cellKey, sceneryCells } from '@/data/grid';
+import { BASE_LEVEL_MAX } from '@/data/hometown';
 import { BIOMES, flatMat } from './palette';
 import { buildParts, type PartSpec } from './meshlib/factory';
 import { buildStage as buildTerrain, type CellToWorld } from './meshlib/terrain';
@@ -37,6 +38,11 @@ export interface Stage3D {
   basecamp: Basecamp;
   /** 기지 피해 외형 0=온전/1=파손/2=반파 */
   setBaseDamageLevel(level: 0 | 1 | 2): void;
+  /**
+   * 홈타운 레벨 외형 (1-base). 지금은 마을 스케일만 커진다 —
+   * 실제 구조물 성장은 3단계가 meshlib/basecamp.ts 안에서 만든다.
+   */
+  setBaseLevel(level: number): void;
   /**
    * 소품 제거 반영 — 그 셀의 소품을 지우고 남은 소품을 재병합(드로우콜 유지),
    * 배치 하이라이트 슬롯에 셀을 편입한다. sim의 sceneryCleared 이벤트에만 반응한다.
@@ -182,6 +188,7 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
     particles,
     basecamp,
     setBaseDamageLevel: (level) => basecamp.setDamageLevel(level),
+    setBaseLevel: (level) => basecamp.setLevel(level, BASE_LEVEL_MAX),
     clearScenery(cellX: number, cellZ: number): boolean {
       if (!props.removeCell(cellX, cellZ)) return false;
       decals.addSlotCell(cellX, cellZ);
