@@ -861,15 +861,24 @@ function stoneWall(d: Dmg): PartSpec[] {
   return parts;
 }
 
-/** 깃발 (Lv4) — 목책 양끝과 마을 안쪽에 세우는 부족기 */
+/**
+ * 깃발 (Lv4) — 목책 양끝과 마을 안쪽에 세우는 **부족기**.
+ *
+ * 색은 출동하는 주민의 제복과 **같은 값**이어야 한다(C.allySky / C.allyFur).
+ * 처음엔 C.banner(0xe0512e 주황빛 붉은색) · 0x3f8a4a(초록) · C.gold 세 색이었는데,
+ * 그건 각각 blade 습격대의 염료(0xd2492f) · archer 의 이끼색(0x5f8f3a)과 사실상
+ * 같은 색이다 — **우리 마을이 쳐들어오는 부족의 깃발을 걸고 있었다.**
+ * 하늘빛으로 통일하면 "이 마을에서 저 하늘빛 주민들이 나온다"가 화면에서 이어진다.
+ * 세 깃발의 명도만 갈라 단조로움을 막는다.
+ */
 function banners(d: Dmg): PartSpec[] {
   const wood = soot(C.woodDark, d);
   const parts: PartSpec[] = [];
   const spots: [number, number, number, number][] = [
     // [x, z, 깃발색, 높이]
-    [Math.cos(Math.PI * 0.1) * WALL_R, -Math.sin(Math.PI * 0.1) * WALL_R, C.banner, 0.92],
-    [Math.cos(Math.PI * 0.9) * WALL_R, -Math.sin(Math.PI * 0.9) * WALL_R, 0x3f8a4a, 0.86],
-    [-0.9, 0.56, C.gold, 0.78],
+    [Math.cos(Math.PI * 0.1) * WALL_R, -Math.sin(Math.PI * 0.1) * WALL_R, C.allySky, 0.92],
+    [Math.cos(Math.PI * 0.9) * WALL_R, -Math.sin(Math.PI * 0.9) * WALL_R, C.allySkyDark, 0.86],
+    [-0.9, 0.56, C.allyFur, 0.78],
   ];
   spots.forEach(([bx, bz, color, h], i) => {
     if (d === 2 && i === 1) {
@@ -1031,7 +1040,7 @@ function watchTop(d: Dmg): PartSpec[] {
   if (d === 2) {
     return [
       { kind: 'cone', pos: [0.34, 0.08, 0.5], rot: [1.3, 0.4, 0.2], scale: [0.13, 0.4, 0.13], color: soot(C.woodDark, 2), seg: 4 },
-      { kind: 'box', pos: [-0.4, 0.06, 0.42], rot: [0, 0.5, 0.08], scale: [0.24, 0.05, 0.18], color: soot(C.banner, 2) },
+      { kind: 'box', pos: [-0.4, 0.06, 0.42], rot: [0, 0.5, 0.08], scale: [0.24, 0.05, 0.18], color: soot(C.allySky, 2) },
     ];
   }
   const lean = d === 1 ? 0.12 : 0;
@@ -1047,7 +1056,7 @@ function watchTop(d: Dmg): PartSpec[] {
       pos: [fx - lean * 0.5 + 0.03, topY + 0.5, fz + 0.15],
       rot: [0, 0.2, lean],
       scale: [0.045, 0.27, 0.28],
-      color: soot(C.banner, d),
+      color: soot(C.allySky, d),
       hueJitter: 0.03,
     },
     {
@@ -1055,7 +1064,7 @@ function watchTop(d: Dmg): PartSpec[] {
       pos: [fx - lean * 0.5 + 0.03, topY + 0.3, fz + 0.13],
       rot: [Math.PI, 0.2, lean],
       scale: [0.24, 0.14, 0.045],
-      color: soot(shade(C.banner, 0.84), d),
+      color: soot(shade(C.allySky, 0.84), d),
       seg: 3,
     },
     { kind: 'ico', pos: [fx - lean * 0.9, topY + 0.62, fz], rot: [0.2, 0.4, 0], scale: [0.16, 0.15, 0.15], color: soot(C.bone, d) },

@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { BASECAMP_LAYER_COUNT, BASECAMP_MAX_RADIUS, createBasecamp } from '@/render/meshlib/basecamp';
 import { BASE_LEVEL_MAX } from '@/data/hometown';
+import { STAGES } from '@/data/stages';
 
 const DAMAGE_LEVELS = [0, 1, 2] as const;
 
@@ -168,6 +169,40 @@ describe('홈타운 마을 모델', () => {
     expect(camp.fireOffset.y).toBeLessThan(full);
     expect(camp.fireOffset.y).toBeGreaterThan(0);
     camp.dispose();
+  });
+
+  /**
+   * **6개 스테이지 전부에서 만렙 마을이 섬 안에 있는가** — 3단계의 합격 조건 하나.
+   *
+   * 스크린샷 대신 기하로 잠근다. 지형은 layout 한 글자 = 1×1 타일이고 '~'는 구멍이라
+   * (terrain.ts), 셀 (x,z)가 덮는 범위는 [x±0.5, z±0.5]다. 마을이 반경 R의 원반을
+   * 차지하므로 **baseCell 중심에서 R 안의 모든 점이 단단한 타일 위**여야 한다.
+   *
+   * R = 1.45(BASECAMP_MAX_RADIUS)일 때 어디까지 닿는지:
+   *  · 축 방향  x+1.45 → 셀 x+1 안(x+0.5 ~ x+1.5). 셀 x+2는 1.5부터라 안 닿는다.
+   *  · 대각 방향 1.45/√2 ≈ 1.025 → 셀 (x+1, z+1) 안.
+   * 즉 **3×3 이웃이 전부 지상이면 충분하고, 하나라도 '~'면 마을이 허공에 뜬다.**
+   * 여유(1.5 − 1.45 = 0.05)까지 함께 보고해 다음 사람이 얼마나 남았는지 알게 한다.
+   */
+  it('만렙 마을이 6개 스테이지 어디서도 섬 밖으로 나가지 않는다', () => {
+    const solid = (s: (typeof STAGES)[number], x: number, z: number): boolean => {
+      if (x < 0 || x >= s.gridW || z < 0 || z >= s.gridH) return false;
+      return (s.layout[z]?.[x] ?? '~') !== '~';
+    };
+    expect(STAGES).toHaveLength(6);
+    for (const s of STAGES) {
+      const { x, z } = s.baseCell;
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          expect(
+            solid(s, x + dx, z + dz),
+            `스테이지${s.id} 기지(${x},${z})의 이웃 (${x + dx},${z + dz})이 지상이 아니다 — 마을이 허공에 걸친다`,
+          ).toBe(true);
+        }
+      }
+      // 3×3이 지상이면 사방으로 최소 1.5까지 땅이 있다 = 마을 반경 상한과의 여유
+      expect(1.5 - BASECAMP_MAX_RADIUS).toBeGreaterThan(0);
+    }
   });
 
   it('레벨을 오르내려도 상태가 남지 않는다 (같은 레벨이면 같은 지오메트리)', () => {
