@@ -469,11 +469,18 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
   await page.waitForTimeout(400);
   const callsWithAlly = await maxCalls();
 
+  /**
+   * 5단계: 아군은 **자기 InstancedMesh 하나**를 쓴다 — 그래서 Δ는 0이 아니라 정확히 1이다.
+   * 3단계까지는 습격대 메시에 얹어 Δ=0이었는데, 변형 마스킹은 자기 것이 아닌 장비 정점을
+   * 원점으로 접을 뿐이라 **인스턴스 하나가 장비 7벌 전부의 정점 비용을 냈다**. 습격대만
+   * 56마리가 사는 편성에서 그게 프레임을 지배해(170,341 삼각형 = 예산 150,000의 114%)
+   * 드로우콜 1개로 삼각형 3만을 사는 쪽으로 바꿨다(meshlib/enemies.ts RAIDER_KITS).
+   * 여기서 잠그는 것은 "**종이 셋이어도 메시는 하나**"다 — 종마다 만들면 Δ가 3이 된다.
+   */
   expect(
-    callsWithAlly,
-    `아군 0명 ${callsNoAlly} → ${trained}명 ${callsWithAlly} (늘어나면 공유 메시가 깨진 것)`,
-  ).toBeLessThanOrEqual(callsNoAlly);
-  expect(callsWithAlly).toBeLessThanOrEqual(60);
+    callsWithAlly - callsNoAlly,
+    `아군 0명 ${callsNoAlly} → ${trained}명 ${callsWithAlly} (종마다 메시를 만들면 3이 된다)`,
+  ).toBeLessThanOrEqual(1);
   await page.evaluate(() => window.__wgd?.pause(false));
 
   // --- 실제로 적을 막아 세우는가 -------------------------------------------
@@ -635,4 +642,184 @@ test('홈타운: 기지가 쏜다 · 레벨업 2단 확인 · 골드/최대레�
   expect(fired, '기지 화살이 실제로 날아간다').toBeGreaterThanOrEqual(3);
 
   expect(errors).toEqual([]);
+});
+
+/**
+ * **최악 프레임 예산** — 이 파일에서 가장 중요한 성능 테스트.
+ *
+ * 5단계 이전의 드로우콜 검사는 **타워를 1기만 짓고** ≤60을 어서션했다. 최악 프레임을
+ * 만들지 않으므로 구조적으로 통과할 수밖에 없었고, 그래서 "합성 최대 프레임 = 60콜,
+ * 여유 0"이라는 전제가 코드 곳곳에 근거로 인용되는 동안 아무도 그걸 재지 않았다.
+ * 실제로 재 보면 그 전제는 틀렸다:
+ *
+ *   타워 수 스윕 (적 0·아군 0·마을 Lv1, swiftshader 900×1000)
+ *     0기 11콜 · 4기 23 · 8기 36 · 12기 47 · 15기 56   → **타워 1기당 약 3콜**
+ *
+ * 즉 드로우콜 천장을 만드는 것은 오버레이도 아군도 마을도 아니라 **타워 수**이고,
+ * 타워 수에는 상한이 없다(sim/battle.ts cmdPlace는 골드와 건설 가능 셀만 본다).
+ *
+ * 진짜로 깨져 있던 것은 삼각형이었다. 개정 전 최악 프레임은 **170,341 삼각형**으로
+ * 예산 150,000의 114%였고, 원인 둘을 5단계에서 고쳤다:
+ *   1) 인스턴스 유닛의 그림자 패스 제거 (views/enemyview.ts UNIT_SHADOW)
+ *   2) 아군 장비를 별도 지오메트리로 분리 (meshlib/enemies.ts RAIDER_KITS)
+ *
+ * 이 테스트는 **실제 최악 프레임을 만들어** 두 예산을 함께 잰다.
+ * 구성: 후반 웨이브를 불러 동시 생존을 최대로(스테이지1 웨이브 49 = 56마리) 채우고,
+ * 종을 전 종으로 흩어 메시 수를 최대화하고, 만렙 T5 타워 12기 + 마을 만렙 + 아군 정원,
+ * 전부 반피로 깎아 오버레이까지 켠 뒤 얼린다.
+ */
+test('최악 프레임 예산 — 삼각형 150,000 / 드로우콜 상한', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/?test=1', { waitUntil: 'networkidle' });
+  await page.mouse.click(100, 300);
+  await page.getByRole('button', { name: /전투/ }).first().click();
+  await page.waitForFunction(() => window.__wgd !== undefined);
+  await page.waitForTimeout(900);
+
+  /** rAF 2회 뒤부터 n프레임 관측한 최대치 (renderInfo는 매 프레임 리셋된다) */
+  const sample = (): Promise<{ calls: number; tris: number }> =>
+    page.evaluate(
+      () =>
+        new Promise<{ calls: number; tris: number }>((res) => {
+          const g = window.__wgd!;
+          let calls = 0;
+          let tris = 0;
+          let i = 0;
+          const step = (): void => {
+            const r = g.renderInfo();
+            calls = Math.max(calls, r.calls);
+            tris = Math.max(tris, r.triangles);
+            if (++i >= 30) res({ calls, tris });
+            else requestAnimationFrame(step);
+          };
+          requestAnimationFrame(() => requestAnimationFrame(step));
+        }),
+    );
+
+  const built = await page.evaluate(() => {
+    const g = window.__wgd!;
+    const sim = g.sim;
+    const st = sim.state as unknown as {
+      gold: number;
+      baseHp: number;
+      baseHpMax: number;
+      waveIndex: number;
+      hand: readonly unknown[];
+      towers: { id: number; hp: number; maxHp: number }[];
+      enemies: { defId: string; hp: number; maxHp: number; dist: number }[];
+      allies: { hp: number; maxHp: number }[];
+    };
+    // 1) 만렙 T5 타워 12기
+    let n = 0;
+    outer: for (let z = 0; z < 40 && n < 12; z++) {
+      for (let x = 0; x < 40 && n < 12; x++) {
+        if (!sim.canPlaceAt(x, z)) continue;
+        st.gold = 99_999_999;
+        for (let h = 0; h < st.hand.length; h++) {
+          if (g.place(h, x, z)) {
+            n++;
+            continue outer;
+          }
+        }
+      }
+    }
+    for (let round = 0; round < 6; round++) {
+      st.gold = 99_999_999;
+      for (const t of st.towers) sim.applyCommand({ type: 'upgradeTower', towerId: t.id });
+    }
+    // 2) 마을 만렙
+    for (let i = 0; i < 8; i++) {
+      st.gold = 99_999_999;
+      g.upgradeBase();
+    }
+    // 3) 적 — 후반 웨이브를 불러 놓고 죽지도 새지도 않게 붙잡아 둔다
+    st.baseHp = 1e9;
+    st.baseHpMax = 1e9;
+    st.waveIndex = 48;
+    g.callWave();
+    for (let k = 0; k < 3000 && st.enemies.length < 60; k++) {
+      g.ff(1);
+      for (const e of st.enemies) {
+        e.maxHp = 1e7;
+        e.hp = 1e7;
+        if (e.dist > 4) e.dist = 4;
+      }
+      for (const t of st.towers) t.hp = t.maxHp;
+      st.baseHp = 1e9;
+    }
+    // 4) 종을 전부 흩어 메시 수를 최대화 (종마다 InstancedMesh가 따로다)
+    const IDS = [
+      'raptor', 'compy', 'trike', 'ptera', 'ankylo', 'boar', 'warrior', 'shaman',
+      'blade', 'lancer', 'archer', 'hexer', 'mammoth', 'spino', 'trex', 'golem',
+    ];
+    st.enemies.forEach((e, i) => {
+      e.defId = IDS[i % IDS.length]!;
+    });
+    // 5) 아군 정원
+    for (let i = 0; i < 6; i++) {
+      st.gold = 99_999_999;
+      g.trainAlly((['clubber', 'slinger', 'guardian'] as const)[i % 3]!);
+    }
+    return { towers: st.towers.length, enemies: st.enemies.length, allies: st.allies.length };
+  });
+  expect(built.towers, '타워 12기').toBeGreaterThanOrEqual(10);
+  expect(built.enemies, '동시 생존 적').toBeGreaterThanOrEqual(40);
+  expect(built.allies, '아군 정원').toBeGreaterThanOrEqual(6);
+
+  // 스폰 팝(0.28초)이 끝나도록 실시간을 흘린 뒤 얼린다 — 팝 중에는 스케일이 0에 가깝다
+  await page.waitForTimeout(1000);
+  await page.evaluate(() => {
+    const g = window.__wgd!;
+    const st = g.sim.state as unknown as {
+      enemies: { hp: number; maxHp: number }[];
+      towers: { hp: number; maxHp: number }[];
+      allies: { hp: number; maxHp: number }[];
+    };
+    g.pause(true);
+    // 반피로 깎아 오버레이(체력바)까지 켠다
+    for (const e of st.enemies) e.hp = Math.max(1, Math.round(e.maxHp * 0.5));
+    for (const t of st.towers) t.hp = Math.max(1, Math.round(t.maxHp * 0.5));
+    for (const a of st.allies) a.hp = Math.max(1, Math.round(a.maxHp * 0.5));
+    g.ff(1);
+  });
+  await page.waitForTimeout(500);
+  const worst = await sample();
+  const msg = `최악 프레임 ${JSON.stringify(worst)} 구성 ${JSON.stringify(built)}`;
+
+  // 삼각형 예산 — 이게 5단계에서 실제로 깨져 있던 축이다 (개정 전 170,341)
+  expect(worst.tris, msg).toBeGreaterThan(50_000); // 실험이 공허하지 않은지
+  expect(worst.tris, msg).toBeLessThanOrEqual(150_000);
+
+  /**
+   * 드로우콜 상한 90. 60이 아닌 이유는 위 주석대로 **60이 최악 프레임 값이었던 적이
+   * 없기 때문**이다(개정 전에도 이 구성에서 80~93콜이었다). 90은 실측 73~81에
+   * "타워 세 기어치" 남짓의 여유를 준 값이고, 메시를 새로 만들면(종당 +1) 바로 걸린다.
+   * 이 숫자를 올리려면 타워 인스턴싱처럼 **구조를 고치는 쪽**을 먼저 검토하라.
+   */
+  expect(worst.calls, msg).toBeLessThanOrEqual(90);
+
+  // 아군 정원이 예산에서 차지하는 몫 — 6명을 빼도 프레임이 크게 달라지지 않아야 한다
+  await page.evaluate(() => {
+    const g = window.__wgd!;
+    for (const a of g.sim.state.allies as unknown as { alive: boolean }[]) a.alive = false;
+    g.ff(1);
+  });
+  await page.waitForTimeout(400);
+  const noAlly = await sample();
+  expect(
+    worst.calls - noAlly.calls,
+    `아군 6명의 드로우콜 몫: ${noAlly.calls} → ${worst.calls}`,
+  ).toBeLessThanOrEqual(1);
+  expect(
+    worst.tris - noAlly.tris,
+    `아군 6명의 삼각형 몫: ${noAlly.tris} → ${worst.tris}`,
+  ).toBeLessThanOrEqual(15_000);
+
+  await page.evaluate(() => window.__wgd?.pause(false));
+  expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
 });

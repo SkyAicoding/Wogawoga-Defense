@@ -29,6 +29,38 @@
  *     "봇이 이기면 사람도 이긴다"는 하한선의 취지에 맞기 때문이다.
  *     (alwaysRush:true 로 반대 행동 재현)
  *
+ * ── 4단계: 전략별 봇 = 옵션 조합 (별도 클래스를 만들지 않는다) ──────────────
+ * 골드 배분 A/B에 쓰는 "전략 봇"은 전부 이 한 구현체의 옵션 조합이다. 갈래마다 봇을
+ * 따로 만들면 갈래 사이의 차이가 **정책 차이인지 구현 차이인지** 구분할 수 없기 때문이다.
+ * 실측에 쓴 조합과 각 봇의 행동 규칙:
+ *
+ *  · **T 타워**   `{}`
+ *    받는 골드 전부를 타워에 넣는다. 배치 상한(8)까지 채우고, 그 뒤로는 매 외곽 루프마다
+ *    **가장 많이 투자된 타워**를 한 단계 올린다(소수 정예). 기준선.
+ *
+ *  · **U 유닛**   `{ towerReserve: 600, allies: { minNear: 3 } }`
+ *    방어선이 다 선 뒤부터 잔고 600을 타워가 손대지 못하게 남기고, 0.5초마다
+ *    "기지까지 12타일 안에 지상 적이 3마리 이상"이면 정원까지 출동시킨다.
+ *    문턱 3의 근거는 minNear 주석 — 문턱 1(매 웨이브 균일 출동)은 골드의 20%를 태우고
+ *    승수를 6까지 떨어뜨린다.
+ *
+ *  · **H 기지**   `{ towerReserve: 600, base: {} }`
+ *    같은 예비비를 마을 레벨업에 쓴다. 레벨업은 **웨이브 사이의 결정**이라 외곽 루프에
+ *    두고(UI도 기지 탭 패널이다) 타워 배치 뒤·업그레이드 앞에 놓는다 —
+ *    "방어선은 세우되 강화보다 먼저"다.
+ *    예비비 없는 `{ base: {} }`("살 수 있으면 산다")도 함께 잰다 — 그쪽이 플레이어의
+ *    자연스러운 행동이고, 4단계 봉투가 그 조합을 아예 재지 않아 지배 전략을 놓쳤다.
+ *    비싼 레벨(Lv4·5)까지 보려면 `base.save` 를 켠다 (그 옵션 주석 참조).
+ *
+ *  · **S 지형**   `{ bulldoze: true }`
+ *    더 좋은 등급의 칸을 소품 제거비를 내고 산다. 등급이 **더 나을 때만** 산다.
+ *
+ *  · **B 균형**   `{ towerReserve: 500, bulldoze: true, allies: { minNear: 3 }, base: { reserve: 400 } }`
+ *    네 갈래를 동시에 쓴다. base.reserve 400은 "유닛 몫을 남기고 남는 돈으로만 마을을 올린다".
+ *
+ *  · **몰빵 대조군** `towerReserve: 2400` + 해당 정책
+ *    타워를 굶겨 한 갈래에 몰아넣는다. 봉투 7번이 이 둘의 붕괴를 잠근다.
+ *
  * 파괴 대응은 별도 로직이 필요 없다 — 배치 상한 미만이면 채우는 기존 루프가
  * 부서진 자리를 그대로 다시 짓는다(안전거리 규칙을 그대로 다시 적용하므로 재건설은
  * 자동으로 더 나은 자리를 고른다). 다만 그 골드는 업그레이드에서 빠져나가므로
@@ -83,6 +115,22 @@ export interface BotOptions {
   /** 외곽 루프 반복 상한 (1회 = 120틱) */
   maxIters?: number;
   /**
+   * **타워 예비비** — 타워 배치/업그레이드가 잔고를 이 값 아래로 떨어뜨리지 않는다.
+   *
+   * 왜 이게 없으면 배분 측정이 불가능한가: 타워 업그레이드는 T5까지 끝없이 비싸지는
+   * 무한 흡수구라, 예비비가 없으면 외곽 루프가 매 회 잔고를 0으로 훑어 간다.
+   * 실측(스테이지1 시드 20, 덱 spear+catapult+frost): 타워 99.1% · 잔고 0.9%.
+   * 그 상태에서 아군/기지 정책을 켜 봐야 **남는 돈이 없어서** 5% 언저리밖에 못 쓴다 —
+   * 즉 "아군에 투자했더니 결과가 안 변하더라"가 아니라 애초에 투자가 안 된 것이다.
+   * 예비비를 두면 그만큼이 확정적으로 다른 갈래로 흘러 A/B가 성립한다.
+   *
+   * **방어선이 다 선 뒤에만 적용된다** (towers.length >= cap). 초기 건설과 파괴 후
+   * 재건설은 예비비를 무시한다. 스테이지1 시작 골드가 300이라 예비비를 처음부터
+   * 물리면 첫 타워조차 못 짓고 웨이브 8~11에 전멸한다(실측 0/20) — 그건 배분 실험이
+   * 아니라 그냥 방치 봇이다. 사람도 "줄부터 세우고 남는 수입을 나눈다".
+   */
+  towerReserve?: number;
+  /**
    * 아군 부족원 출동 정책. 지정하지 않으면 봇은 부족원을 **한 명도** 뽑지 않는다
    * (= 1~3단계까지의 봇 그대로. 봉투의 기준선이 바뀌지 않게 기본값을 유지한다).
    */
@@ -91,6 +139,17 @@ export interface BotOptions {
     pick?: AllyPick;
     /** 기지까지 남은 거리가 이 값 이하인 지상 적이 있을 때만 출동 (타일, 기본 12) */
     trigger?: number;
+    /**
+     * **위급 판정 문턱** — trigger 안에 지상 적이 이 수 이상 있을 때만 출동한다(기본 1).
+     *
+     * 왜 필요한가: 아군은 수명 20초짜리 긴급 자원인데, 문턱이 1이면 봇은 방어선이
+     * 멀쩡한 웨이브에도 매번 뽑아 50웨이브 내내 균일하게 골드를 태운다. 실측에서
+     * 그렇게 쓴 골드 11%는 위약(효과 0) 대비 +3승어치 일을 했지만, 그 11%를 타워에서
+     * 뺀 손해가 그보다 커서 순증은 −1승이었다. **효과가 없는 게 아니라 쓸 자리가
+     * 아닌 곳에 썼다.** 문턱을 올리면 "타워가 감당 못 해 여러 마리가 마을 앞까지
+     * 밀려온 웨이브"에만 지출이 몰린다.
+     */
+    minNear?: number;
     /** 이만큼의 골드는 타워 몫으로 남긴다 (기본 0 = 몰빵) */
     reserve?: number;
     /** 동시 유지 인원 상한 (기본 sim의 allyCap) */
@@ -104,6 +163,18 @@ export interface BotOptions {
     upTo?: number;
     /** 이만큼의 골드는 타워 몫으로 남긴다 (기본 0 = 최우선) */
     reserve?: number;
+    /**
+     * **다음 레벨 값을 모은다** — 살 수 없으면 그만큼을 타워가 못 쓰게 잠근다.
+     *
+     * 왜 필요한가: 봇의 외곽 루프는 매 회 잔고를 타워 업그레이드로 훑어 간다.
+     * 그래서 "지금 못 사는 것"은 **영원히** 못 산다 — 다음 루프에도 잔고는 그 루프의
+     * 수입뿐이고, 그보다 싼 타워 업그레이드가 항상 먼저 그 돈을 가져가기 때문이다.
+     * 이 플래그가 없으면 마을은 한 루프 수입(대략 100~300골드)으로 살 수 있는 레벨까지만
+     * 올라가고(실측: upTo3·4·5가 전부 평균 Lv3.00으로 동일) 비용 곡선의 뒷부분이
+     * **구조적으로 측정 불가**가 된다. 사람은 모아서 산다 — 봇도 그 선택지를 가져야
+     * Lv4·5의 성능을 재는 A/B가 성립한다.
+     */
+    save?: boolean;
   };
 }
 
@@ -124,10 +195,46 @@ export interface BotResult {
   lostGold: number;
   /** 종료 시점 기지 체력 (이겼을 때의 여유 = 승패보다 해상도 높은 난이도 척도) */
   baseHpLeft: number;
+  /**
+   * 종료 시점 기지 **최대** 체력. 마을 레벨업이 분모를 바꾸므로, 갈래끼리 "여유"를
+   * 비교할 때는 반드시 baseHpLeft/baseHpMax로 정규화해야 한다 — 절대값끼리 대면
+   * "HP를 산 쪽이 당연히 많이 남는" 자명한 결과를 우위로 오독하게 된다.
+   */
+  baseHpMax: number;
   /** 종료 시점 홈타운 레벨 (레벨업 정책이 없으면 항상 1) */
   baseLevel: number;
   /** 출동시킨 부족원 누적 수 */
   alliesTrained: number;
+  /**
+   * 아군이 살아 있던 누적 "인원×틱". 골드가 실제로 **얼마나 오래** 전장에 있었는지.
+   * 출동 횟수만으로는 6명이 20초 서 있는 것과 1명이 2분 서 있는 것을 구분할 수 없다.
+   */
+  allyTicks: number;
+  /**
+   * 그중 **적을 붙잡고 있던 아군 인원**×틱. allyTicks 대비 비율이 곧 가동률이다.
+   * 아군의 존재 이유가 봉쇄(allies.ts 규칙 5)이므로, 이 비율이 낮으면
+   * "수치가 약하다"가 아니라 **쓰이지 않는 자리에 서 있다**는 뜻이다.
+   *
+   * ⚠ 예전에는 이 자리에서 **봉쇄당한 적의 마릿수**를 셌다. ALLY_BLOCK_CAPACITY가 3이라
+   * 아군 한 명이 한 틱에 최대 3을 올리므로 allyTicks의 부분집합이 아니었고(비율이 300%까지
+   * 나올 수 있다) 라벨과 실제가 어긋났다. 실측 대조(스테이지1 시드 1000, minNear 1):
+   * 아군틱 19,363 · 적 마릿수 기준 1,837(9.5%) · **아군 인원 기준 834(4.3%)** — 2.2배 차이다.
+   * 적 쪽 수치가 필요하면 enemyBlockedTicks를 쓴다.
+   */
+  allyBlockTicks: number;
+  /** 봉쇄당한 **적**의 마릿수×틱 (아군 한 명이 최대 ALLY_BLOCK_CAPACITY마리까지 올린다) */
+  enemyBlockedTicks: number;
+  /** 홈타운이 쏜 화살 수 — "마을 방어 기능이 실제로 작동하는가"의 직접 지표 */
+  baseShots: number;
+  /** 홈타운 화살이 넣은 누적 피해 */
+  baseDamage: number;
+  /**
+   * 홈타운 화살이 **마지막 한 대**가 된 처치 수.
+   * 이 지표가 핵심인 이유: 기지 사거리 안의 적은 어차피 곧 누수되어 사라지므로,
+   * **죽이지 못한 피해는 시뮬레이션에 아무 흔적을 남기지 않는다**(누수 피해는 적의
+   * 남은 HP와 무관하다). 즉 기지 화력의 값어치는 baseDamage가 아니라 baseKills가 잰다.
+   */
+  baseKills: number;
   /**
    * 기지가 받은 누적 누수 피해. 승패보다 해상도가 높다 —
    * 스테이지1은 웨이브 47~50에서 잔여 HP 4~20으로 판가름 나므로,
@@ -301,8 +408,18 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
   let goldAllies = 0;
   let goldBase = 0;
   let alliesTrained = 0;
+  let allyTicks = 0;
+  let allyBlockTicks = 0;
+  let enemyBlockedTicks = 0;
+  let baseShots = 0;
+  let baseDamage = 0;
+  let baseKills = 0;
   let leaked = 0;
   let leaks = 0;
+  /** 적 id → 마지막으로 피해를 준 출처. enemyDied에 출처가 없어 여기서 귀속시킨다 */
+  const lastHit = new Map<number, string>();
+  /** 봉쇄 중인 아군 id 집계용 스크래치 (매 틱 재사용 — 할당 없음) */
+  const engaged = new Set<number>();
   /** 틱 진행 직전 스냅샷 — 파괴 이벤트에는 invested가 없으므로 여기서 조회한다 */
   const investedById = new Map<number, number>();
 
@@ -311,6 +428,7 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
   const pathLens = stage.paths.map((wp) => buildPath(wp).totalLength);
   const allyPolicy = opts.allies;
   const allyTrigger = allyPolicy?.trigger ?? ALLY_TRIGGER_DIST;
+  const allyMinNear = Math.max(1, allyPolicy?.minNear ?? 1);
   const allyReserve = allyPolicy?.reserve ?? 0;
   const allyOrder: AllyId[] =
     allyPolicy === undefined || allyPolicy.pick === undefined || allyPolicy.pick === 'rotate'
@@ -329,16 +447,13 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     if (st.phase !== 'wave') return;
     const max = allyPolicy.max ?? st.allyCap;
     if (st.allies.length >= max) return;
-    let near = false;
+    let near = 0;
     for (const e of st.enemies) {
       if (e.flying) continue;
       const len = pathLens[e.pathIndex] ?? 0;
-      if (len - e.dist <= allyTrigger) {
-        near = true;
-        break;
-      }
+      if (len - e.dist <= allyTrigger) near++;
     }
-    if (!near) return;
+    if (near < allyMinNear) return;
     const defId = allyOrder[allyTurn % allyOrder.length] as AllyId;
     const cost = sim.allyCost(defId);
     if (st.gold - cost < allyReserve) return;
@@ -399,11 +514,28 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     return bestFree;
   };
 
+  const rawReserve = opts.towerReserve ?? 0;
+  /**
+   * 방어선(cap기) 이 다 서기 전에는 예비비가 없다 — 위 towerReserve 주석의 근거.
+   * base.save 가 켜져 있으면 **다음 마을 레벨 값**도 타워가 못 건드리게 얹는다.
+   */
+  const reserveNow = (): number => {
+    if (sim.state.towers.length < cap) return 0;
+    let r = rawReserve;
+    const p = opts.base;
+    if (p?.save === true && sim.state.baseLevel < (p.upTo ?? sim.state.baseLevelMax)) {
+      r += sim.baseUpgradeCost() ?? 0;
+    }
+    return r;
+  };
+
   const tryPlace = (goldFactor: number): void => {
     const st = sim.state;
     for (let h = 0; h < st.hand.length; h++) {
       const card = st.hand[h];
-      if (!card || st.gold < card.cost * goldFactor) continue;
+      if (!card) continue;
+      if (st.gold < card.cost * goldFactor) continue;
+      if (st.gold - card.cost < reserveNow()) continue;
       const cell = pickCell(card.towerId, card.cost);
       if (!cell) break;
       const paid = card.cost;
@@ -428,7 +560,7 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     let best: { id: number; inv: number; cost: number } | null = null;
     for (const t of st.towers) {
       const c = sim.upgradeCost(t.id);
-      if (c !== null && st.gold >= c && (!best || t.invested > best.inv)) {
+      if (c !== null && st.gold - c >= reserveNow() && (!best || t.invested > best.inv)) {
         best = { id: t.id, inv: t.invested, cost: c };
       }
     }
@@ -449,6 +581,17 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       if (s.phase === 'wave' && s.waveIndex >= MIN_TOWERS_FROM_WAVE && s.towers.length < minTowers) {
         minTowers = s.towers.length;
       }
+      if (s.allies.length > 0) {
+        allyTicks += s.allies.length;
+        // 라벨대로 **교전 중인 아군 인원**을 센다 (한 명이 여러 마리를 묶어도 1)
+        engaged.clear();
+        for (const e of s.enemies) {
+          if (e.blockerAllyId < 0) continue;
+          enemyBlockedTicks++;
+          engaged.add(e.blockerAllyId);
+        }
+        allyBlockTicks += engaged.size;
+      }
       // 아군만 외곽 루프가 아니라 틱 루프 안에서 본다 — 수명 20초짜리 긴급 자원이라
       // 4초 늦으면 이미 늦다 (ALLY_DECIDE_INTERVAL 주석)
       if (allyPolicy && i % ALLY_DECIDE_INTERVAL === 0) stepAllies();
@@ -461,6 +604,14 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       } else if (ev.type === 'baseDamaged') {
         leaked += ev.amount;
         leaks++;
+      } else if (ev.type === 'baseFired') {
+        baseShots++;
+      } else if (ev.type === 'enemyDamaged') {
+        if (ev.source === 'hometown') baseDamage += ev.amount;
+        lastHit.set(ev.enemyId, ev.source);
+      } else if (ev.type === 'enemyDied') {
+        if (lastHit.get(ev.enemyId) === 'hometown') baseKills++;
+        lastHit.delete(ev.enemyId);
       }
     }
   }
@@ -475,8 +626,15 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     lostTiers,
     lostGold,
     baseHpLeft: sim.state.baseHp,
+    baseHpMax: sim.state.baseHpMax,
     baseLevel: sim.state.baseLevel,
     alliesTrained,
+    allyTicks,
+    allyBlockTicks,
+    enemyBlockedTicks,
+    baseShots,
+    baseDamage,
+    baseKills,
     leaked,
     leaks,
     goldTowers,

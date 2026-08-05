@@ -23,6 +23,7 @@ import {
   allyGeoKey,
   allyRig,
   allyVariant,
+  buildAlly,
   buildAllySolo,
   buildEnemy,
   buildEnemySolo,
@@ -93,20 +94,34 @@ describe('부족 습격대 렌더', () => {
     expect(attr).toBeTruthy();
     const seen = new Set<number>();
     for (let i = 0; i < attr!.count; i++) seen.add(Math.round(attr!.getX(i)));
-    // 0 = 공용 몸통 / 1~4 = 적 습격대 / 5~7 = 아군 마을 부족원
-    expect(seen).toEqual(new Set([0, 1, 2, 3, 4, 5, 6, 7]));
+    // 0 = 공용 몸통 / 1~4 = 적 습격대. **아군(5~7)은 5단계에서 별도 지오메트리로 갈렸다**
+    expect(seen).toEqual(new Set([0, 1, 2, 3, 4]));
   });
 
-  it('아군 3종도 같은 지오메트리에 올라타고 변형 번호가 적과 겹치지 않는다', () => {
+  /**
+   * 5단계에서 아군을 **별도 지오메트리**로 갈랐다. 변형 마스킹은 자기 것이 아닌 정점을
+   * 원점으로 접을 뿐이라 한 인스턴스가 장비 7벌의 정점 비용을 매 프레임 냈고,
+   * 습격대 56마리가 동시에 사는 편성에서 그게 프레임을 지배했다(최악 170,341 삼각형).
+   * 여기서 잠그는 것은 "**갈렸지만 몸통은 여전히 같다**"이다.
+   */
+  it('아군 3종은 별도 지오메트리를 쓰되 몸통(보행 리그)은 습격대와 같다', () => {
     const geo = buildEnemy('blade');
-    expect(allyGeoKey()).toBe(RAIDER_GEO_KEY);
-    expect(allyRig()).toBe(enemyRig('blade'));
+    expect(allyGeoKey()).not.toBe(RAIDER_GEO_KEY);
+    expect(buildAlly()).not.toBe(geo);
+    // 리그는 객체가 다르되 사지 구성은 완전히 같아야 한다 (같은 raiderBody 코드)
+    const ar = allyRig();
+    const er = enemyRig('blade');
+    expect(ar.limbs.length).toBe(er.limbs.length);
+    expect(ar.gaitPerDist).toBeCloseTo(er.gaitPerDist, 6);
     const allyVars = ALL_ALLY_IDS.map(allyVariant);
-    expect(new Set(allyVars)).toEqual(new Set([5, 6, 7])); // 서로 다르다
-    const enemyVars = new Set(RAIDERS.map(enemyVariant));
-    for (const v of allyVars) expect(enemyVars.has(v), `변형 ${v} 가 적과 겹친다`).toBe(false);
-    // 아군 단품은 갤러리 전용이라 공유본과 **다른** 객체여야 한다(장비가 7벌 다 붙지 않게)
-    for (const id of ALL_ALLY_IDS) expect(buildAllySolo(id), id).not.toBe(geo);
+    expect(new Set(allyVars)).toEqual(new Set([1, 2, 3])); // 서로 다르다
+    // 아군 공유본에 아군 장비 3벌이 전부 구워져 있다
+    const attr = buildAlly().getAttribute(VARIANT_ATTR);
+    const seen = new Set<number>();
+    for (let i = 0; i < attr!.count; i++) seen.add(Math.round(attr!.getX(i)));
+    expect(seen).toEqual(new Set([0, 1, 2, 3]));
+    // 아군 단품은 갤러리 전용이라 공유본과 **다른** 객체여야 한다(장비가 3벌 다 붙지 않게)
+    for (const id of ALL_ALLY_IDS) expect(buildAllySolo(id), id).not.toBe(buildAlly());
   });
 
   it('EnemyView 가 4종을 메시 하나로 묶는다', () => {
@@ -131,45 +146,52 @@ describe('부족 습격대 렌더', () => {
     view.dispose();
   });
 
-  it('삼각형 예산: 단품 400~700, 공유본은 7종 합의 절반 미만', () => {
-    let soloSum = 0;
-    for (const id of RAIDERS) {
-      const n = tris(buildEnemySolo(id));
-      expect(n, `${id} 단품 삼각형`).toBeGreaterThanOrEqual(400);
-      expect(n, `${id} 단품 삼각형`).toBeLessThanOrEqual(700);
-      soloSum += n;
-    }
-    for (const id of ALL_ALLY_IDS) {
-      const n = tris(buildAllySolo(id));
-      expect(n, `${id} 단품 삼각형`).toBeGreaterThanOrEqual(400);
-      expect(n, `${id} 단품 삼각형`).toBeLessThanOrEqual(700);
-      soloSum += n;
-    }
-    const shared = tris(buildEnemy('blade'));
-    // 공유본은 몸통 1벌 + 장비 7벌이라 단품 7개 합(몸통 7벌)의 절반도 안 돼야 한다.
-    // 이 여유가 곧 "인스턴스마다 축퇴 삼각형을 조금 더 그리는" 비용의 상한이다.
-    expect(shared).toBeLessThan(soloSum * 0.5);
+  it('삼각형 예산: 단품 400~700, 공유본은 그 종들 합의 절반 미만', () => {
     /**
-     * 절대 상한 1650 → 1700 (3단계, 실측 근거 아래).
-     *
-     * 아군 제복이 8파트 → 12파트가 되면서 공유본이 1,650 → 1,662가 됐다. 늘어난 4파트는
-     * 진영 식별을 실제로 성립시킨 것들이다 — 흰 털 크라운/뒤통수/볼 덮개(적과 같던
-     * 살구색 머리 윗면을 덮는다)와 정수리 팀색 띠(55° 부감에서 얼굴 정면은 거의 안
-     * 잡히므로 이마띠만으로는 위에서 안 보였다). 실전투 캡처로 확인한 뒤 넣었다.
-     *
-     * 값이 프레임에서 뜻하는 비용(합성 최대 메시 프레임, swiftshader 900×1000,
-     * 만렙 T5 타워 12기 + 적 전 종 + 전부 반피 + 투사체 비운 정지 프레임):
-     *   습격대 O · 아군 6명 : 75콜 / 115,165 삼각형
-     *   습격대 O · 아군 0명 : 75콜 /  96,263 삼각형   → 아군 Δ콜 = 0
-     * 인스턴스 하나가 지는 삼각형은 공유본 × 2(컬러 + 그림자 패스)라
-     * 12삼각형 증가 = 아군 1인당 +24, 6명 다 채워도 +144다. 삼각형 예산 150,000에
-     * 대해 실측 최악이 115,165이므로 34,835의 여유가 남는다.
-     *
-     * 상한 자체를 없애지 않은 이유: 이 숫자의 목적은 "장비를 계속 얹다 보면 공유본이
-     * 소리 없이 부푼다"를 막는 것이다. 1700은 지금 값(1,662)에 파트 3개(≈38삼각형)
-     * 남짓의 여유만 준다 — 다음에 또 넘기면 그때도 실측을 다시 하라는 뜻이다.
+     * 공유본이 단품 합의 몇 배 이내여야 하는가 — **변형 수가 많을수록 이득이 커진다**
+     * (몸통 1벌만 굽고 장비만 더하므로). 그래서 상한도 종 수에 따라 다르다.
+     * 실측: 습격대 4벌 1,146 / 단품 합 2,368 = 0.48 · 아군 3벌 1,080 / 1,776 = 0.61.
      */
-    expect(shared, '공유 지오메트리 삼각형').toBeLessThan(1700);
+    const budget = (
+      label: string,
+      ids: readonly string[],
+      solo: (id: never) => THREE.BufferGeometry,
+      shared: THREE.BufferGeometry,
+      ratio: number,
+    ): number => {
+      let soloSum = 0;
+      for (const id of ids) {
+        const n = tris(solo(id as never));
+        expect(n, `${id} 단품 삼각형`).toBeGreaterThanOrEqual(400);
+        expect(n, `${id} 단품 삼각형`).toBeLessThanOrEqual(700);
+        soloSum += n;
+      }
+      const n = tris(shared);
+      // 공유본은 몸통 1벌 + 장비 n벌이라 단품 합(몸통 n벌)보다 확실히 작아야 한다.
+      // 이 여유가 곧 "인스턴스마다 축퇴 삼각형을 조금 더 그리는" 비용의 상한이다.
+      expect(n, `${label} 공유본 / 단품 합`).toBeLessThan(soloSum * ratio);
+      return n;
+    };
+    const raider = budget('습격대', RAIDERS, buildEnemySolo, buildEnemy('blade'), 0.55);
+    const ally = budget('아군', ALL_ALLY_IDS, buildAllySolo, buildAlly(), 0.7);
+
+    /**
+     * 절대 상한 1700 → **1250** (5단계). 값이 내려간 것은 장비를 줄여서가 아니라
+     * **아군 3벌을 별도 지오메트리로 갈랐기** 때문이다(1,662 → 습격대 1,146 / 아군 1,146).
+     *
+     * 왜 갈랐나: 변형 마스킹은 자기 것이 아닌 장비 정점을 원점으로 접을 뿐이라
+     * **인스턴스 하나가 장비 7벌 전부의 정점 비용을 매 프레임 낸다.** 스테이지1
+     * 웨이브 49는 습격대만 56마리가 동시에 사는 편성이라 그 낭비가 프레임을 지배했다.
+     * 실측(swiftshader 900×1000, 적 56 + 아군 6 + 만렙 T5 타워 12 + 마을 Lv5 정지 프레임):
+     *   7벌 한 몸 → 170,341 삼각형 (예산 150,000의 114%)
+     *   4벌/3벌   → 약 14만, 드로우콜 +1 (아군과 습격대가 동시에 있을 때만)
+     *
+     * 상한을 유지하는 이유는 그대로다: "장비를 계속 얹다 보면 공유본이 소리 없이 부푼다"를
+     * 막는 것. 1250은 지금 값(1,146)에 파트 여덟 개 남짓의 여유만 준다 — 또 넘긴다면
+     * 그때도 최악 프레임을 실제로 만들어 재고 그 근거를 여기 남겨라.
+     */
+    expect(raider, '습격대 공유 지오메트리 삼각형').toBeLessThan(1250);
+    expect(ally, '아군 공유 지오메트리 삼각형').toBeLessThan(1250);
   });
 
   it('작고 귀엽다: 키가 부족 전사의 3/4 미만이고 머리가 크다', () => {

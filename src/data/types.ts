@@ -745,6 +745,11 @@ export type SimEvent =
       defId: AllyId;
       x: number;
       z: number;
+      /**
+       * 귀환 환급 골드 (balance.ALLY_RETIRE_REFUND × def.cost, 내림 없는 반올림).
+       * 쓰러진 아군(allyDied)에는 없다 — 살아 돌아온 사람만 삯을 되돌려준다.
+       */
+      refund: number;
     }
   // --- 홈타운 (src/sim/hometown.ts) ------------------------------------------
   | {

@@ -7,7 +7,13 @@
  */
 import type { AllyId, BattleUiApi, GameFacade, TargetingMode, TowerState } from '@/data/types';
 import { TICK_RATE } from '@/data/types';
-import { ALL_ALLY_IDS } from '@/data';
+import {
+  ALL_ALLY_IDS,
+  ALLY_BLOCK_CAPACITY,
+  ALLY_DEFS,
+  ALLY_MAX_ACTIVE,
+  ALLY_RETIRE_REFUND,
+} from '@/data';
 import type { Screen } from '@/core/fsm';
 import { h, cls, fmt, mount, unmount, uiRoot, setText } from '../dom';
 import { t } from '../i18n';
@@ -85,6 +91,24 @@ export function createBattleHud(): Screen<GameFacade> {
   let allyBtns: AllyButton[] = [];
   let allyCountEl!: HTMLElement;
   let lastAllySig = '';
+  /**
+   * 출동 안내 패널 — **descKey를 화면에 실제로 띄우는 자리**.
+   *
+   * 5단계에서 추가했다. 그전까지 ALLY_DEFS.descKey / ko.ts / en.ts 에 설명 문자열이
+   * 다 있는데도 `t()`에 한 번도 넘어가지 않아, 플레이어가 버튼에서 읽을 수 있는 것은
+   * **이름과 가격뿐**이었다. 그 상태에서는 "수명 20초짜리 소모품"이라는 사실도,
+   * "귀환하면 절반이 돌아온다"도, "공중을 칠 수 있는 건 돌팔매꾼뿐"이라는 것도
+   * 어디에도 없어서 40골드가 그냥 싼 유닛으로 읽힌다 — 살지 말지를 판단할 정보 자체가
+   * 없는 버튼이었다.
+   *
+   * 왜 버튼 안에 두 줄로 넣지 않고 패널인가: 출동 바는 480px 이하에서 이름까지 접는
+   * 자리라(style.css) 설명을 넣을 폭이 없고, 세 버튼에 같은 규칙(수명·환급·상한)을
+   * 세 번 적는 것도 낭비다. 대신 이미 있는 "출동 n/6" 칩을 눌러 여는 패널로 만들면
+   * 선택 타워/소품/홈타운 패널과 **같은 자리·같은 톤**이 되고, 상시 1탭 출동 동선은
+   * 조금도 건드리지 않는다. 접근성 경로(title/aria-label)는 버튼에 따로 붙인다.
+   */
+  let allyInfoPanel!: HTMLElement;
+  let allyInfoOpen = false;
 
   // 참조 요소 (enter에서 채움)
   let waveNum!: HTMLElement;
@@ -149,6 +173,22 @@ export function createBattleHud(): Screen<GameFacade> {
       htArmTimer = null;
     }
   };
+
+  /**
+   * 아군 설명 — 마릿수는 문자열에 박지 않고 balance 상수에서 넘긴다.
+   * 4단계에서 규칙 5-b(정원 봉쇄)가 1마리 → 3마리로 바뀌었는데 파수꾼 문구만
+   * "한 놈"으로 남아 사실과 어긋났다. 값을 주입하면 규칙이 바뀔 때 문구가 따라온다.
+   */
+  const allyDesc = (defId: AllyId): string =>
+    t(`ally.${defId}.desc`, { n: ALLY_BLOCK_CAPACITY });
+
+  /** 세 종이 공유하는 규칙 한 줄 (수명·환급·동시 상한) */
+  const allyRules = (): string =>
+    t('battle.ally.rules', {
+      s: Math.round(ALLY_DEFS.clubber.lifeTicks / TICK_RATE),
+      p: Math.round(ALLY_RETIRE_REFUND * 100),
+      m: ALLY_MAX_ACTIVE,
+    });
 
   const api = (facade: GameFacade): BattleUiApiExt | null =>
     facade.battle as BattleUiApiExt | null;
@@ -389,9 +429,12 @@ export function createBattleHud(): Screen<GameFacade> {
       allyCountEl = h('span', { class: 'ally-count-num' });
       allyBtns = ALL_ALLY_IDS.map((defId) => {
         const costLabel = h('span', { class: 'ally-btn-cost' });
+        // 설명은 패널에서 읽는 게 기본 동선이지만, 마우스/스크린리더 경로도 같이 연다.
+        // (title은 데스크톱 호버, aria-label은 보조기기 — 둘 다 같은 문장을 쓴다)
+        const label = `${t(`ally.${defId}.name`)} — ${allyDesc(defId)} · ${allyRules()}`;
         const el = h('button', {
           class: 'ally-btn hud-item',
-          attrs: { type: 'button', 'aria-label': t(`ally.${defId}.name`) },
+          attrs: { type: 'button', 'aria-label': label, title: label },
           onClick: () => api(facade)?.requestTrainAlly(defId),
         },
           h('span', { class: 'ally-btn-ico', html: ALLY_ICON_SVG[defId] }),
@@ -400,17 +443,39 @@ export function createBattleHud(): Screen<GameFacade> {
         );
         return { el, costLabel, defId };
       });
-      const allyRow = h('div', { class: 'ally-row' },
-        h('div', { class: 'ally-count', attrs: { title: t('battle.ally.title') } },
-          h('span', { class: 'ally-count-label', text: t('battle.ally.title') }),
-          allyCountEl),
-        ...allyBtns.map((b) => b.el),
+      // 안내 패널 본문 — 종별 한 줄 + 세 종이 공유하는 규칙 한 줄
+      allyInfoPanel = h('div', { class: 'tower-panel tower-panel--ally', attrs: { style: 'display:none' } },
+        h('div', { class: 'tp-head' },
+          h('span', { class: 'tp-name', text: t('battle.ally.infoTitle') }),
+        ),
+        ...ALL_ALLY_IDS.map((defId) =>
+          h('div', { class: 'ally-info-row' },
+            h('span', { class: 'ally-info-ico', html: ALLY_ICON_SVG[defId] }),
+            h('span', { class: 'ally-info-name', text: t(`ally.${defId}.name`) }),
+            h('span', { class: 'ally-info-desc', text: allyDesc(defId) }),
+          ),
+        ),
+        h('span', { class: 'tp-sub', text: allyRules() }),
       );
+      const allyInfoBtn = h('button', {
+        class: 'ally-count hud-item',
+        attrs: { type: 'button', title: t('battle.ally.infoTitle'), 'aria-expanded': 'false' },
+        onClick: () => {
+          allyInfoOpen = !allyInfoOpen;
+          allyInfoPanel.style.display = allyInfoOpen ? '' : 'none';
+          allyInfoBtn.setAttribute('aria-expanded', allyInfoOpen ? 'true' : 'false');
+        },
+      },
+        h('span', { class: 'ally-count-label', text: t('battle.ally.title') }),
+        allyCountEl,
+      );
+      const allyRow = h('div', { class: 'ally-row' }, allyInfoBtn, ...allyBtns.map((b) => b.el));
 
       const bottom = h('div', { class: 'hud-bottom' },
         panelHost,
         scPanel,
         htPanel,
+        allyInfoPanel,
         callWaveBtn,
         allyRow,
         h('div', { class: 'hand-row hud-item' }, handHost, refreshBtn),
@@ -441,6 +506,7 @@ export function createBattleHud(): Screen<GameFacade> {
       handSig = '';
       allyBtns = [];
       lastAllySig = '';
+      allyInfoOpen = false;
     },
 
     update(facade) {

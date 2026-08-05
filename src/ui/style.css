@@ -351,6 +351,20 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   .ally-btn-ico { width: 24px; height: 24px; }
   .ally-btn { gap: 6px; }
 }
+/*
+ * 출동 안내 패널 — "출동 n/6" 칩을 눌러 여는 설명. 선택 타워/소품/홈타운 패널과
+ * 같은 .tower-panel 틀을 쓰므로 자리·여백·톤이 그대로 맞는다.
+ * 이름이 접히는 좁은 화면에서도 여기서는 전부 읽을 수 있어야 하므로 접지 않는다.
+ */
+.tower-panel--ally { gap: 4px; }
+.ally-info-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ally-info-ico { width: 22px; height: 22px; flex: 0 0 auto; }
+.ally-info-ico svg { width: 100%; height: 100%; }
+.ally-info-name { font-size: 0.76rem; font-weight: 900; color: #9fdcf7; flex: 0 0 auto; }
+.ally-info-desc {
+  font-size: 0.72rem; font-weight: 700; color: var(--cream); opacity: 0.86;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
 
 .hand-row { display: flex; gap: 10px; width: 100%; align-items: stretch; }
 .hand-cards { display: flex; gap: 10px; flex: 1; }

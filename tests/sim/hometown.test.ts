@@ -7,7 +7,7 @@ import type { BaseLevelDef, BattleSim, SimEvent, TowerTier } from '@/data/types'
 import { TICK_RATE } from '@/data/types';
 import { createBattle } from '@/sim/battle';
 import { BASE_LEVELS } from '@/data/hometown';
-import { TOWER_DEFS } from '@/data';
+import { ALLY_DEFS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
 import { baseLevels, enemyDefs, eventsOf, options, runTicks, stageDef, wave } from './fixtures';
 
 /**
@@ -252,26 +252,62 @@ describe('실제 밸런스 데이터', () => {
     expect(BASE_LEVELS[0]?.range).toBeLessThan(shooterMin);
   });
 
-  it('만렙 사거리도 최장 타워(발리스타 5.7)의 절반 남짓이다 — 문간만 지킨다', () => {
+  /**
+   * 만렙 사거리의 상한을 **발리스타**가 잡는다.
+   *
+   * 5단계 개정 전에는 `≤ 3.0`(창움막 만렙과 동일)이었다. 그 잣대는 실측으로 무너졌다:
+   * 사거리가 곧 체류 시간이고, 체류 시간이 짧으면 공격력을 아무리 올려도 한 마리를
+   * 못 죽이며, **죽이지 못한 피해는 누수 앞에서 아무 흔적도 남기지 않는다**
+   * (근거 전문 src/data/hometown.ts). 그래서 상한을 "들판 타워보다 짧다"가 아니라
+   * "가장 멀리 보는 타워보다 짧다"로 옮겼다 — 홈타운이 **최장 사거리 자리를 빼앗지
+   * 않는다**가 지켜야 할 선이고, 그건 여전히 지켜진다.
+   */
+  it('만렙 사거리도 최장 타워(발리스타)보다 짧다 — 원거리 자리를 빼앗지 않는다', () => {
     const max = BASE_LEVELS[BASE_LEVELS.length - 1] as BaseLevelDef;
-    expect(max.range).toBeLessThanOrEqual(3.0);
+    const ballistaMin = (TOWER_DEFS.ballista.tiers[0] as TowerTier).range;
+    expect(ballistaMin).toBe(5.5); // 이 값이 바뀌면 아래 주장도 다시 봐야 한다
+    expect(max.range).toBeLessThan(ballistaMin);
   });
 
   it('화력 단가는 언제나 타워보다 나쁘다 (홈타운은 화력이 아니라 보험이다)', () => {
     const spear = TOWER_DEFS.spear;
     const t1 = spear.tiers[0] as TowerTier;
-    const t5 = spear.tiers[4] as TowerTier;
     const lv1 = BASE_LEVELS[0] as BaseLevelDef;
     const lv5 = BASE_LEVELS[BASE_LEVELS.length - 1] as BaseLevelDef;
     const dps = (d: { dmg: number; cooldownTicks: number }): number =>
       (d.dmg / d.cooldownTicks) * TICK_RATE;
     // Lv1은 가장 싼 공격 타워 T1의 절반 미만 — 혼자서는 아무것도 못 잡는다
     expect(dps(lv1)).toBeLessThan(dps(t1) * 0.5);
-    // 만렙끼리 비교해도 절반 미만. 만렙 비용은 오히려 창움막 만렙과 비슷하다
-    expect(dps(lv5)).toBeLessThan(dps(t5) * 0.5);
+    /**
+     * 만렙은 **단가**로 잠근다(개정 전에는 절대 dps로 잠갔다).
+     * 절대 dps 상한은 "죽이지 못하는 화력 = 0"이라는 기전을 몰랐던 잣대라, 지키는 순간
+     * 이 상품이 존재하지 않게 된다. 값을 매기는 올바른 단위는 골드당 dps다:
+     * 홈타운 누적 4,500골드에 168dps = 26.8골드/dps, 창움막 만렙 3,100골드에 177dps =
+     * 17.5골드/dps — 홈타운이 1.5배 비싸다. 칸을 안 먹고 부서지지 않는 값이 그 웃돈이다.
+     */
     const baseTotal = BASE_LEVELS.reduce((a, lv) => a + lv.cost, 0);
     const spearTotal = spear.tiers.reduce((a, tr) => a + tr.cost, 0);
-    expect(baseTotal).toBeGreaterThan(spearTotal * 0.8);
+    const t5 = spear.tiers[4] as TowerTier;
+    const baseGoldPerDps = baseTotal / dps(lv5);
+    const spearGoldPerDps = spearTotal / dps(t5);
+    expect(baseGoldPerDps).toBeGreaterThan(spearGoldPerDps * 1.2);
+  });
+
+  /**
+   * 5단계 개정의 핵심 잣대 — **HP는 얕게 판다.**
+   * hpMul 3.2(스테이지1에서 25→80)일 때 Lv2 하나가 승수와 여유를 동시에 이기는
+   * 지배 전략이었다(봉투 시드 40에서 36/40·8.3 → 38/40·16.1). 완충 25뿐인 게임에서
+   * 최대 HP 배증은 어떤 값을 매겨도 싸다 — 그래서 이 상품이 파는 물건을 화력으로 옮기고
+   * HP 성장은 상한을 걸어 둔다. 실효는 난이도 봉투 7번(지배 전략 금지)이 잰다.
+   */
+  it('HP 성장은 얕다 — 최대 HP 배율 상한 (지배 전략 방지)', () => {
+    const max = BASE_LEVELS[BASE_LEVELS.length - 1] as BaseLevelDef;
+    expect(max.hpMul).toBeLessThanOrEqual(1.6);
+    // 레벨당 증가폭도 고르게 — 한 칸에 몰아주면 그 칸이 다시 지배 전략이 된다
+    for (let i = 1; i < BASE_LEVELS.length; i++) {
+      const d = (BASE_LEVELS[i] as BaseLevelDef).hpMul - (BASE_LEVELS[i - 1] as BaseLevelDef).hpMul;
+      expect(d, `Lv${i + 1} hpMul 증가폭`).toBeLessThanOrEqual(0.15);
+    }
   });
 });
 
@@ -301,4 +337,55 @@ describe('다음 레벨 미리보기 (비가역 결제 전 정보)', () => {
     expect(sim.state.baseLevel).toBe(sim.state.baseLevelMax);
     expect(sim.baseNextStats()).toBeNull();
   });
+});
+
+/**
+ * 아군과 함께 쓸 때의 사거리 관계 — 5단계 검증에서 나온 결함의 회귀 잠금.
+ *
+ * 아군은 기지에서 ALLY_SORTIE_RANGE(6.0타일) 앞에 줄을 서서 적을 붙잡아 죽인다.
+ * 홈타운 Lv1의 사거리는 2.0이라 **그 줄을 넘어오는 적이 없으면 한 발도 못 쏜다** —
+ * 4단계 문서가 "세 겹(타워 → 아군 6.0 → 홈타운 ≤3.0)"이라고 쓴 것은 겹을 더한 게
+ * 아니라 한 겹을 가린 것이었다(실측: 6,000틱 baseFired = 0).
+ *
+ * 그래서 잠그는 것은 "**레벨을 올리면 그 상황에서도 마을이 싸운다**"이다.
+ * Lv1이 0이라는 사실 자체는 어서션하지 않는다 — 출격 한계선을 줄이면 개선되는
+ * 방향이고, 그 개선을 이 테스트가 막아서는 안 된다.
+ */
+describe('아군과 함께 있을 때의 홈타운 사격', () => {
+  function noTowerRun(upgradeToMax: boolean): { fired: number; trained: number } {
+    const stage = stageById(1);
+    if (!stage) throw new Error('no stage 1');
+    const sim = createBattle({
+      stage,
+      stars: {},
+      deck: ['spear'],
+      endless: true,
+      seed: 4242,
+      towerDefs: TOWER_DEFS,
+      enemyDefs: ENEMY_DEFS,
+      allyDefs: ALLY_DEFS,
+      baseLevels: BASE_LEVELS,
+      waveFor: makeWaveFor(stage),
+    });
+    const mut = sim.state as unknown as { baseHp: number; gold: number };
+    let fired = 0;
+    let trained = 0;
+    for (let i = 0; i < 6000; i++) {
+      // 타워 0기로 6,000틱을 버티게 하려면 기지를 계속 되돌려야 한다 (사격만 재는 실험)
+      mut.baseHp = sim.state.baseHpMax;
+      mut.gold = 999_999;
+      if (sim.state.phase === 'prep') sim.applyCommand({ type: 'callWave' });
+      if (i % 53 === 0 && sim.applyCommand({ type: 'trainAlly', defId: 'clubber' })) trained++;
+      if (upgradeToMax && i % 601 === 0) sim.applyCommand({ type: 'upgradeBase' });
+      sim.tick();
+      for (const ev of sim.drainEvents()) if (ev.type === 'baseFired') fired++;
+    }
+    return { fired, trained };
+  }
+
+  it('만렙 마을은 아군이 길목을 잡고 있어도 화살을 쏜다', () => {
+    const maxed = noTowerRun(true);
+    expect(maxed.trained, '아군이 실제로 나가 있어야 실험이 성립한다').toBeGreaterThan(10);
+    expect(maxed.fired, `만렙 마을 발사 수: ${JSON.stringify(maxed)}`).toBeGreaterThan(0);
+  }, 60_000);
 });

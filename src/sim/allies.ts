@@ -58,7 +58,39 @@
  *
  * 6) **타게팅** — 사거리 내 최근접, 동점은 낮은 적 id. 유효한 동안 갈아타지 않는다
  *    (타워·습격대의 lockedTarget 규약과 동일). 근접형(canTargetAir=false)은 공중을 무시한다.
- *    적 쪽 타게팅은 **바뀌지 않는다** — 기지로 직행하는 적은 여전히 직행하고, 습격대는
+ *
+ *    6-b) **한 아군은 이미 다른 아군이 붙잡은 적을 골라잡지 않는다** (근접형 한정).
+ *    이 단서가 없으면 최근접 + 고정 타깃 규약이 정확히 반대로 작동한다: 맨 앞 아군이
+ *    선두의 적을 세우면 그 적은 **그 자리에 멈추므로** 뒤에 선 아군 전원에게도 계속
+ *    최근접이 되어(대기 간격 0.5 < 근접 사거리 1.0~1.15) 여섯이 한 마리에 달라붙고
+ *    나머지 웨이브는 그 옆을 그냥 지나간다.
+ *
+ *    4단계 실측 — 직선 경로, 랩터 24마리, 인원을 계속 채우며 잰 (봉쇄된 적틱 / 아군틱).
+ *    **아래 숫자는 전부 규칙 5-b(정원 봉쇄) 도입 전, 1인당 1마리 시절의 값이다**
+ *    (5-b가 들어간 뒤의 값은 balance.ALLY_BLOCK_CAPACITY 주석에 따로 있다):
+ *      1명 0.63 · 2명 0.48 · 3명 0.38 · 4명 0.32 · 5명 0.28 · 6명 0.27
+ *    즉 골드를 14배(110 → 1,588) 써도 봉쇄량은 2.5배(512 → 1,280)밖에 안 늘었다.
+ *    난이도 스윕에서도 그대로 나타났다 — 아군에 골드의 11%를 쓰면 위약(효과 0인 같은
+ *    비용의 유닛) 대비 +3승이지만 19%를 쓰면 **+0승**이었다. 상한 6명과 지수 비용이
+ *    사는 것이 아무것도 없었다는 뜻이다.
+ *
+ *    6-b만 적용한 직후(여전히 1인당 1마리): 1명 0.63 · 2명 0.61 · 3명 0.56 · 4명 0.51 ·
+ *    5명 0.46 · 6명 0.41.
+ *    총 봉쇄틱은 6명에서 1,280 → **2,044(+60%)**, 누수는 3 → 0이 됐다. 6명에서 여전히
+ *    0.41까지 처지는 건 **줄 안에 적이 여섯 마리가 늘 있지는 않기 때문**이라 정상이다
+ *    (같은 실험을 밀도가 낮은 blade×16으로 하면 0.36까지 더 내려간다) — 남은 체감은
+ *    "인원이 웨이브 밀도를 넘어서면 남는다"는 올바른 신호다.
+ *
+ *    대가도 같이 생긴다. 예전에는 여섯이 한 마리를 둘러싸도 반격은 **가장 낮은 id 하나**만
+ *    받아 나머지 다섯이 무상이었는데, 이제는 각자 자기 적에게 맞으므로 여섯 명 모두가
+ *    피를 흘린다. "많이 낼수록 많이 막고 많이 죽는다"가 되어 인원이 실제 판단이 된다.
+ *
+ *    처리 순서는 **아군 id 오름차순**이다(pickOrder). 풀은 swap-remove라 items 순서가
+ *    섞이는데, 그 순서에 따라 누가 먼저 적을 고르는지가 갈리면 규칙을 말로 적을 수 없다.
+ *    id 오름차순이면 대체로 먼저 출동한 = 앞줄(slot이 작은) 아군부터 고르게 되어
+ *    "앞줄부터 차례로 상대를 맡는다"가 그대로 성립한다.
+ *
+ *    (규칙 6 계속) 적 쪽 타게팅은 **바뀌지 않는다** — 기지로 직행하는 적은 여전히 직행하고, 습격대는
  *    여전히 타워를 노린다. 적이 아군을 '찾아다니는' 행동은 넣지 않았다:
  *    넣으면 아군 한 명으로 웨이브 전체를 낚아 세울 수 있어 그 순간 게임이 끝난다.
  *    적이 아군을 때리는 유일한 경로는 **자기가 봉쇄당했을 때의 반격**이다.
@@ -66,7 +98,13 @@
  * 7) **아군에게는 상태이상이 없다.** 적에게 상태 부여 능력이 없으므로 받을 일이 없고,
  *    없는 쪽이 규칙이 하나 적다. 아군은 타워 스플래시/오라에도 맞지 않는다(아군 오사 없음).
  *
- * 8) **환불 없음.** 죽어도 수명이 다해도 골드는 돌아오지 않는다.
+ * 8) **쓰러지면 환불 없음. 살아 돌아오면 기본 삯의 절반**(ALLY_RETIRE_REFUND).
+ *    3단계까지는 무조건 환불 없음이었는데, 그러면 "혹시 몰라 미리 내보낸다"가 언제나
+ *    손해라 플레이어가 **뚫린 뒤에** 부르게 된다 — 걸어 나가는 데만 5초가 걸리는 유닛에게
+ *    그건 이미 늦은 시점이다. 아군의 실측 가동률이 이기는 판 1.1% · 밀리는 판 3.5%로
+ *    위험도에 정비례하므로(balance.ALLY_RETIRE_REFUND 주석), 보험료는 **안 쓰였을 때
+ *    싸야** 한다. 되돌아오는 것은 정가의 절반뿐이고 지수 웃돈은 돌아오지 않으며,
+ *    싸우다 쓰러진 아군은 한 푼도 돌려주지 않는다 — 즉 값은 **실제로 싸운 만큼** 치른다.
  *
  * ── 교착(스톨) 안전성 ──────────────────────────────────────────────────────
  * 봉쇄는 웨이브 완료 조건(전원 스폰 + 생존 0)을 막을 수 있다. 무한 교착이 나지 않는 근거:
@@ -80,8 +118,10 @@
 import { TICK_DT } from '@/data/types';
 import type { AllyDef, AllyId } from '@/data/types';
 import {
+  ALLY_BLOCK_CAPACITY,
   ALLY_HOLD_SPACING,
   ALLY_MAX_ACTIVE,
+  ALLY_RETIRE_REFUND,
   ALLY_SORTIE_RANGE,
   BRAWL_COOLDOWN_TICKS,
   allyCostFor,
@@ -189,30 +229,98 @@ export function trainAlly(ctx: SimCtx, defId: AllyId, pathIndex?: number): boole
   return true;
 }
 
+/**
+ * 규칙 6-b) 이 적은 **다른** 아군이 이미 붙잡았는가.
+ * blockerAllyId는 매 틱 처음에 전부 -1로 지워지고 이 틱의 아군 루프가 순서대로 채우므로,
+ * 여기서 읽히는 값은 "나보다 앞 순서(=낮은 id)의 아군이 이미 맡았다"는 뜻이다.
+ */
+function claimedByOther(a: AllySim, e: EnemySim): boolean {
+  return e.blockerAllyId >= 0 && e.blockerAllyId !== a.id;
+}
+
 /** 규칙 6) 현재 고정 타깃이 여전히 유효하면 반환, 아니면 null (재조준 필요) */
 function lockedEnemy(ctx: SimCtx, a: AllySim, r2: number): EnemySim | null {
   if (a.targetId < 0) return null;
   const e = ctx.world.findEnemy(a.targetId);
   if (!e || !e.alive) return null;
   if (!a.def.canTargetAir && e.flying) return null;
+  // 규칙 6-b) 앞줄이 이미 맡은 적이면 고정을 풀고 다른 상대를 찾는다
+  if (a.def.blocks && claimedByOther(a, e)) return null;
   return dist2(a.x, a.z, e.x, e.z) <= r2 ? e : null;
 }
 
-/** 규칙 6) 사거리 내 최근접 적 (동점은 낮은 id — 완전 결정론) */
-function nearestEnemy(ctx: SimCtx, a: AllySim, r2: number): EnemySim | null {
+/**
+ * 규칙 6 + 6-b) 사거리 내에서 고를 적.
+ * 우선순위: (근접형만) **아무도 안 맡은 적** → 최근접 → 동점은 낮은 적 id.
+ * 원거리형(blocks=false)은 봉쇄를 하지 않으므로 이 우선순위를 쓰지 않는다 —
+ * 막지 못하는 유닛이 상대를 갈라 서면 화력만 흩어진다(집중사격이 낫다).
+ */
+function pickEnemy(ctx: SimCtx, a: AllySim, r2: number): EnemySim | null {
+  const avoidClaimed = a.def.blocks;
   let best: EnemySim | null = null;
   let bestD2 = Infinity;
+  let bestClaimed = true;
   for (const e of ctx.world.enemies.items) {
     if (!e.alive) continue;
     if (!a.def.canTargetAir && e.flying) continue;
     const d2 = dist2(a.x, a.z, e.x, e.z);
     if (d2 > r2) continue;
-    if (d2 < bestD2 || (d2 === bestD2 && best !== null && e.id < best.id)) {
+    const claimed = avoidClaimed && claimedByOther(a, e);
+    if (best === null || (bestClaimed && !claimed)) {
+      best = e;
+      bestD2 = d2;
+      bestClaimed = claimed;
+    } else if (claimed === bestClaimed && (d2 < bestD2 || (d2 === bestD2 && e.id < best.id))) {
       best = e;
       bestD2 = d2;
     }
   }
   return best;
+}
+
+/**
+ * 규칙 5-b) 봉쇄 지정 — 사거리 안의 **가까운 지상 적부터 최대 ALLY_BLOCK_CAPACITY마리**를
+ * 이 아군에게 묶는다. 이미 다른 아군이 잡은 적은 건너뛴다(이중 봉쇄 없음).
+ *
+ * 1마리 고정이었을 때 왜 안 됐는지, 무제한이면 왜 안 되는지는 balance.ALLY_BLOCK_CAPACITY 주석.
+ */
+function claimBlockade(ctx: SimCtx, a: AllySim, r2: number): void {
+  for (let k = 0; k < ALLY_BLOCK_CAPACITY; k++) {
+    let best: EnemySim | null = null;
+    let bestD2 = Infinity;
+    for (const e of ctx.world.enemies.items) {
+      if (!e.alive || e.flying || e.blockerAllyId >= 0) continue;
+      const d2 = dist2(a.x, a.z, e.x, e.z);
+      if (d2 > r2) continue;
+      if (d2 < bestD2 || (d2 === bestD2 && best !== null && e.id < best.id)) {
+        best = e;
+        bestD2 = d2;
+      }
+    }
+    if (!best) return;
+    best.blockerAllyId = a.id;
+  }
+}
+
+/**
+ * 규칙 6-b) 아군을 **id 오름차순**으로 늘어놓는 스크래치 버퍼.
+ * 풀(DenseList)은 swap-remove라 items 순서가 사망/귀환으로 섞인다. 그 순서대로 적을
+ * 고르게 두면 결정론은 유지되지만(같은 시드면 같은 순서) 규칙을 말로 적을 수 없다.
+ * 정원이 ALLY_MAX_ACTIVE(6)라 삽입 정렬이면 충분하고, 버퍼를 재사용해 매 틱 할당이 없다.
+ */
+const pickOrder: AllySim[] = [];
+
+function fillPickOrder(items: readonly AllySim[]): void {
+  pickOrder.length = 0;
+  for (const a of items) {
+    if (!a.alive) continue;
+    let i = pickOrder.length;
+    pickOrder.push(a);
+    for (; i > 0 && (pickOrder[i - 1] as AllySim).id > a.id; i--) {
+      pickOrder[i] = pickOrder[i - 1] as AllySim;
+    }
+    pickOrder[i] = a;
+  }
 }
 
 /**
@@ -231,20 +339,17 @@ export function updateAllies(ctx: SimCtx): void {
   // 봉쇄는 매 틱 새로 세운다 — 지난 틱의 값이 남으면 아군이 죽은 뒤에도 적이 굳는다
   for (const e of enemies) e.blockerAllyId = -1;
 
-  // 1단계: 아군의 조준/타격 + 봉쇄 지정
-  for (const a of allies) {
-    if (!a.alive) continue;
+  // 1단계: 아군의 조준/타격 + 봉쇄 지정 — 규칙 6-b) id 오름차순(=대체로 앞줄부터)
+  fillPickOrder(allies);
+  for (const a of pickOrder) {
     if (a.attackCdLeft > 0) a.attackCdLeft--;
     const def = a.def;
     const r2 = def.range * def.range;
-    const target = lockedEnemy(ctx, a, r2) ?? nearestEnemy(ctx, a, r2);
+    // 규칙 5-b) 몸으로 막는다 — 사거리 안의 가까운 적부터 ALLY_BLOCK_CAPACITY마리까지
+    if (def.blocks) claimBlockade(ctx, a, r2);
+    const target = lockedEnemy(ctx, a, r2) ?? pickEnemy(ctx, a, r2);
     a.targetId = target ? target.id : -1;
     if (!target) continue;
-    // 규칙 5) 근접형만 봉쇄한다. 공중은 봉쇄되지 않는다
-    if (def.blocks && !target.flying) {
-      // 여럿이 붙으면 가장 낮은 아군 id가 반격 대상이 된다 (결정론 + 상한 무력화 방지)
-      if (target.blockerAllyId < 0 || a.id < target.blockerAllyId) target.blockerAllyId = a.id;
-    }
     if (a.attackCdLeft > 0) continue;
     ctx.events.push({
       type: 'allyAttacked',
@@ -299,7 +404,11 @@ export function moveAllies(ctx: SimCtx): void {
     if (a.lifeLeft > 0) a.lifeLeft--;
     if (a.lifeLeft <= 0) {
       a.alive = false;
-      ctx.events.push({ type: 'allyRetired', allyId: a.id, defId: a.defId, x: a.x, z: a.z });
+      // 규칙 8) 살아 돌아온 사람만 **기본 삯의 일부**를 되돌려준다 (balance.ALLY_RETIRE_REFUND).
+      // 쓰러진 아군은 damageAlly 쪽에서 처리되므로 여기 오지 않는다 = 환급 없음.
+      const refund = Math.round(a.def.cost * ALLY_RETIRE_REFUND);
+      if (refund > 0) addGold(ctx, refund);
+      ctx.events.push({ type: 'allyRetired', allyId: a.id, defId: a.defId, x: a.x, z: a.z, refund });
       continue;
     }
     // 규칙 5) 근접형은 교전 중이면 그 자리에 선다. 원거리는 걸으며 쏜다

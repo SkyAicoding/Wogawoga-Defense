@@ -7,7 +7,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { AllyId, BattleSim, EnemyDef, TowerAttackSpec } from '@/data/types';
-import { ALLY_MAX_ACTIVE, ALLY_SORTIE_RANGE, allyCostFor, enemyBrawlDmgFor } from '@/data/balance';
+import {
+  ALLY_BLOCK_CAPACITY,
+  ALLY_MAX_ACTIVE,
+  ALLY_SORTIE_RANGE,
+  allyCostFor,
+  enemyBrawlDmgFor,
+} from '@/data/balance';
 import { createBattle } from '@/sim/battle';
 import { allyDefs, enemyDefs, eventsOf, options, runTicks, stageDef, towerDefs, wave } from './fixtures';
 
@@ -304,6 +310,63 @@ describe('봉쇄 — 충돌 없이 발을 묶는다 (규칙 5)', () => {
     // 공중 레인은 스폰→기지 직선이라 경로 위를 그대로 지난다 — 그래도 잡히지 않아야 한다
     for (const e of sim.state.enemies) expect(e.blockerAllyId).toBe(-1);
     expect(sim.state.allies[0]!.targetId).toBe(-1);
+  });
+
+  /**
+   * 규칙 5-b) 한 명이 여러 마리를 막는다 — 단, ALLY_BLOCK_CAPACITY까지만.
+   * 1마리 고정이던 시절 아군이 왜 어떤 수치로도 무의미했는지는 balance.ALLY_BLOCK_CAPACITY 주석.
+   * 여기서는 **상한이 실제로 걸리는지**를 본다: 정원보다 많은 적을 붙여도 초과분은 통과한다.
+   */
+  it('근접 아군 하나가 정원만큼 붙잡고, 그 이상은 못 붙잡는다', () => {
+    const over = ALLY_BLOCK_CAPACITY + 2;
+    // hp를 크게 준다 — 정원만큼 붙잡으면 그만큼 난투를 겹쳐 맞아 기본 체력으로는
+    // 관측 전에 쓰러진다(그 자체가 규칙 5-b의 대가이고, 아래 별도 항목으로 잠근다)
+    const sim = allySim({ enemy: { speed: 1 }, count: over, ally: { clubber: { hp: 1_000_000 } } });
+    train(sim);
+    sim.applyCommand({ type: 'callWave' });
+    runTicks(sim, 200);
+    const id = sim.state.allies[0]!.id;
+    const held = sim.state.enemies.filter((e) => e.blockerAllyId === id).length;
+    expect(held).toBe(ALLY_BLOCK_CAPACITY);
+    // 초과분은 붙잡히지 않았다 = 한 명이 웨이브 전체를 세우지 못한다
+    expect(sim.state.enemies.filter((e) => e.blockerAllyId < 0).length).toBeGreaterThan(0);
+  });
+
+  /**
+   * 규칙 6-b) 앞줄이 맡은 적을 뒷줄이 또 고르지 않는다.
+   * 이 단서가 없으면 최근접+고정 타깃 규약이 반대로 작동해 여섯이 한 마리에 달라붙는다
+   * (실측: 6명 봉쇄 효율 0.63 → 0.27로 붕괴 — src/sim/allies.ts 규칙 6-b 주석).
+   */
+  it('아군 둘은 서로 다른 적을 맡는다 (겹쳐 잡지 않는다)', () => {
+    const sim = allySim({ enemy: { speed: 1 }, count: 4, ally: { clubber: { hp: 1_000_000 } } });
+    train(sim);
+    train(sim);
+    sim.applyCommand({ type: 'callWave' });
+    runTicks(sim, 200);
+    const ids = sim.state.allies.map((a) => a.id);
+    expect(ids).toHaveLength(2);
+    const held = ids.map((id) => sim.state.enemies.filter((e) => e.blockerAllyId === id).length);
+    // 둘 다 제 몫을 잡고 있다 — 한쪽이 0이면 겹쳐 잡았다는 뜻
+    for (const h of held) expect(h).toBeGreaterThan(0);
+    // 한 적이 두 아군에게 동시에 걸리는 일은 없다 (blockerAllyId는 하나뿐)
+    const blocked = sim.state.enemies.filter((e) => e.blockerAllyId >= 0);
+    expect(blocked.length).toBe(held[0]! + held[1]!);
+  });
+
+  /**
+   * 규칙 5-b의 대가 — 넓게 막을수록 빨리 죽는다. 이게 없으면 정원 확대가 순이득이라
+   * "많이 붙잡는다"가 공짜가 된다(무제한 봉쇄 실험에서 한 명이 웨이브를 영구히 세웠다).
+   */
+  it('많이 붙잡을수록 난투를 겹쳐 맞아 빨리 쓰러진다', () => {
+    const hpAfter = (count: number): number => {
+      const sim = allySim({ enemy: { speed: 1 }, count, ally: { clubber: { hp: 1_000_000 } } });
+      train(sim);
+      sim.applyCommand({ type: 'callWave' });
+      runTicks(sim, 400);
+      return sim.state.allies[0]!.hp;
+    };
+    // 정원(3)만큼 붙으면 한 마리일 때보다 확실히 더 깎여 있다
+    expect(1_000_000 - hpAfter(ALLY_BLOCK_CAPACITY)).toBeGreaterThan(1_000_000 - hpAfter(1));
   });
 
   it('여럿이 붙어도 반격 대상은 가장 낮은 id 하나뿐이다', () => {

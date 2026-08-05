@@ -1,23 +1,31 @@
 /**
- * 아군 부족원 렌더 회귀 테스트 — **드로우콜 0 증가**가 이 파일의 전부다.
+ * 아군 부족원 렌더 회귀 테스트 — **메시 예산과 구조**를 잠근다.
  *
- * 실측 최악 프레임이 정확히 60/60이라 여유가 0이다. 아군 전용 InstancedMesh를 만들면
- * 컬러+그림자로 +2콜이 되어 그 자리에서 예산이 깨진다. 그래서 아군은
- *  · 3D 모델: 적 습격대와 **같은 공유 지오메트리 · 같은 InstancedMesh** (변형 태그로 장비 선택)
- *  · 체력바: 적/타워 체력바와 **같은 오버레이 메시** (barKind 1 = 내 편 팔레트)
- * 를 쓴다. 아래 테스트가 그 구조를 잠근다 — 3단계가 전용 모델을 넣을 때 새 메시를
- * 만들면 여기서 깨진다.
+ * ── 5단계 개정: "드로우콜 0 증가"에서 "삼각형이 먼저다"로 ────────────────────
+ * 1~3단계는 아군을 습격대 InstancedMesh에 얹어 그렸다. 근거는 "실측 최악 프레임이
+ * 정확히 60/60이라 여유가 0"이었는데 **그 전제가 실측으로 틀렸다**: 최악 프레임은
+ * 60콜이 아니라 73~80콜이고, 그 천장을 만드는 것은 아군이 아니라 **타워 수**다
+ * (타워 1기당 약 3콜, 상한 없음 — views/enemyview.ts 헤더에 실측 표).
  *
- * ── 실측 (합성 최대 메시 프레임, swiftshader, 900×1000) ──────────────────────
- * 만렙 T5 타워 12기 + 모든 종을 동시에 띄우고 전부 반피로 깎은(오버레이 ON) 정지 프레임에서
- * 아군 6명을 넣고 뺀 A/B. 세션을 따로 띄워 각각 첫 측정만 취했다.
- *   A) 습격대 4종 **포함**(16종 21마리): 아군 0명 79콜 → 6명 79콜   Δ = 0
- *   B) 습격대 **없음**(12종 17마리)   : 아군 0명 77콜 → 6명 79콜   Δ = +2
- * B의 +2는 아군이 꺼져 있던 습격대 메시를 켜는 값(컬러+그림자)인데, **켠 결과가 정확히
- * A와 같은 79콜**이다. 즉 아군은 천장을 올리지 못한다 — 아군 없이도 도달 가능한
- * "습격대가 화면에 있는 프레임"으로 수렴할 뿐이다. 이게 예산이 지켜지는 근거다.
- * 삼각형은 79콜 프레임에서 103,073 → 114,233 (6명 = +11,160, 1인당 약 1,860).
- * 실플레이 교전 프레임은 16콜 / 41,849 삼각형이었다.
+ * 진짜로 깨져 있던 것은 삼각형이었다. 변형 마스킹은 자기 것이 아닌 장비 정점을 원점으로
+ * 접을 뿐이라 **인스턴스 하나가 장비 7벌 전부의 정점 비용을 매 프레임 낸다.**
+ * 스테이지1 웨이브 49는 습격대만 56마리가 동시에 사는 편성이라 그 낭비가 프레임을
+ * 지배했다 — 최악 프레임 170,341 삼각형(예산 150,000의 114%).
+ *
+ * 그래서 5단계에서 구조를 둘 바꿨다:
+ *  1) **인스턴스 유닛은 그림자를 드리우지 않는다**(컬러+그림자 두 패스 → 한 패스).
+ *  2) **아군 장비 3벌을 별도 지오메트리로 갈랐다**(인스턴스당 1,662 → 1,146).
+ * 대가는 드로우콜 +1(아군과 습격대가 동시에 화면에 있을 때만)이고, 그 값으로
+ * 삼각형 3만을 샀다. 아래 테스트는 그 새 구조를 잠근다:
+ *  · 3D 모델: 아군은 **자기 InstancedMesh 하나**에 모인다(종마다 만들면 3개가 된다)
+ *  · 몸통·보행 리그는 여전히 습격대와 같은 코드에서 나온다
+ *  · 체력바: 적/타워 체력바와 **같은 오버레이 메시**(barKind 1 = 내 편 팔레트)
+ *
+ * ── 실측 (최악 프레임, swiftshader 900×1000) ────────────────────────────────
+ * 만렙 T5 타워 12기 + 적 56 + 마을 Lv5 + 전부 반피(오버레이 ON) 정지 프레임:
+ *   아군 0명 → 51콜 / 약 13.6만 삼각형   아군 6명 → 52콜 / 약 14.6만
+ * 삼각형 예산 150,000 안이다. 자세한 표와 절차는 tests/e2e/smoke.spec.ts 의
+ * '최악 프레임' 테스트에 있다.
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
@@ -28,9 +36,11 @@ import { HealthBarView } from '@/render/views/healthbars';
 import {
   RAIDER_GEO_KEY,
   allyGeoKey,
+  allyRig,
   allyVariant,
-  buildEnemy,
+  buildAlly,
   enemyGeoKey,
+  enemyRig,
   enemyVariant,
 } from '@/render/meshlib/enemies';
 import { VARIANT_ATTR } from '@/render/meshlib/gait';
@@ -121,24 +131,26 @@ function viewMeshes(view: EnemyView): Map<string, THREE.InstancedMesh> {
   return (view as unknown as { meshes: Map<string, THREE.InstancedMesh> }).meshes;
 }
 
-describe('아군 유닛 렌더 — 드로우콜 0 증가', () => {
-  it('아군은 적 습격대와 같은 지오메트리 키를 쓴다', () => {
-    expect(allyGeoKey()).toBe(RAIDER_GEO_KEY);
-    expect(allyGeoKey()).toBe(enemyGeoKey('blade'));
+describe('아군 유닛 렌더 — 메시 하나로 모인다', () => {
+  it('아군은 습격대와 다른 지오메트리를 쓰되 몸통(리그)은 같다', () => {
+    expect(allyGeoKey()).not.toBe(RAIDER_GEO_KEY);
+    expect(allyGeoKey()).not.toBe(enemyGeoKey('blade'));
+    // 갈린 것은 구워지는 단위뿐 — 사지 구성/보폭은 같은 raiderBody 코드에서 나온다
+    expect(allyRig().limbs.length).toBe(enemyRig('blade').limbs.length);
+    expect(allyRig().gaitPerDist).toBeCloseTo(enemyRig('blade').gaitPerDist, 6);
   });
 
-  it('아군 3종의 변형 번호가 서로 다르고 공유 지오메트리에 실제로 구워져 있다', () => {
+  it('아군 3종의 변형 번호가 서로 다르고 아군 지오메트리에 실제로 구워져 있다', () => {
     const variants = ALL_ALLY_IDS.map(allyVariant);
     expect(new Set(variants).size).toBe(ALL_ALLY_IDS.length); // 겹치면 두 종이 같은 장비를 낀다
-    const attr = buildEnemy('blade').getAttribute(VARIANT_ATTR);
+    const attr = buildAlly().getAttribute(VARIANT_ATTR);
     expect(attr).toBeTruthy();
     const baked = new Set<number>();
     for (let i = 0; i < attr!.count; i++) baked.add(Math.round(attr!.getX(i)));
-    // 지금은 습격대 장비(1~4)를 빌려 쓴다 — 3단계가 전용 변형을 추가하면 이 집합만 커진다
     for (const v of variants) expect(baked.has(v), `variant ${v}`).toBe(true);
   });
 
-  it('아군을 그려도 InstancedMesh가 하나도 늘지 않는다', () => {
+  it('아군 3종이 InstancedMesh 하나에만 모인다 (종마다 만들면 3개가 된다)', () => {
     const scene = new THREE.Scene();
     const view = new EnemyView(scene);
     const before = meshesOf(scene).length;
@@ -150,18 +162,23 @@ describe('아군 유닛 렌더 — 드로우콜 0 증가', () => {
       ally({ id: 103, defId: 'guardian', x: 6 }),
     ]);
 
+    // 메시는 생성 시점에 이미 다 만들어져 있고, 그릴 때 늘어나지 않는다
     expect(meshesOf(scene).length).toBe(before);
     expect(viewMeshes(view).size).toBe(beforeKeys);
+    // 아군 몫으로 존재하는 메시는 정확히 1개
+    expect(viewMeshes(view).has(allyGeoKey())).toBe(true);
+    for (const id of ALL_ALLY_IDS) expect(viewMeshes(view).has(id), id).toBe(false);
     view.dispose();
   });
 
-  it('아군 인스턴스가 습격대 메시에 들어간다 (적과 같은 메시, 뒤에 이어 붙는다)', () => {
+  it('아군은 아군 메시에, 적은 습격대 메시에 각각 쌓인다', () => {
     const scene = new THREE.Scene();
     const view = new EnemyView(scene);
-    const mesh = viewMeshes(view).get(RAIDER_GEO_KEY)!;
+    const foes = viewMeshes(view).get(RAIDER_GEO_KEY)!;
+    const mesh = viewMeshes(view).get(allyGeoKey())!;
     expect(mesh).toBeTruthy();
+    expect(mesh).not.toBe(foes);
 
-    // 적 2 + 아군 3 = 인스턴스 5, 메시는 여전히 하나
     view.update(
       [enemy({ id: 1, defId: 'blade' }), enemy({ id: 2, defId: 'archer', x: 5 })],
       1,
@@ -169,18 +186,18 @@ describe('아군 유닛 렌더 — 드로우콜 0 증가', () => {
       0.016,
       [ally({ id: 101 }), ally({ id: 102, defId: 'slinger' }), ally({ id: 103, defId: 'guardian' })],
     );
-    expect(mesh.count).toBe(5);
+    expect(foes.count).toBe(2);
+    expect(mesh.count).toBe(3);
     expect(mesh.visible).toBe(true);
 
-    // 아군 인스턴스는 적 뒤에 온다 — 변형 어트리뷰트로 확인
-    const vsel = (view as unknown as { varAttrs: Map<string, THREE.BufferAttribute> }).varAttrs.get(
-      RAIDER_GEO_KEY,
-    )!;
-    expect(vsel.getX(0)).toBe(enemyVariant('blade'));
-    expect(vsel.getX(1)).toBe(enemyVariant('archer'));
-    expect(vsel.getX(2)).toBe(allyVariant('clubber'));
-    expect(vsel.getX(3)).toBe(allyVariant('slinger'));
-    expect(vsel.getX(4)).toBe(allyVariant('guardian'));
+    const varAttrs = (view as unknown as { varAttrs: Map<string, THREE.BufferAttribute> }).varAttrs;
+    const foeSel = varAttrs.get(RAIDER_GEO_KEY)!;
+    expect(foeSel.getX(0)).toBe(enemyVariant('blade'));
+    expect(foeSel.getX(1)).toBe(enemyVariant('archer'));
+    const vsel = varAttrs.get(allyGeoKey())!;
+    expect(vsel.getX(0)).toBe(allyVariant('clubber'));
+    expect(vsel.getX(1)).toBe(allyVariant('slinger'));
+    expect(vsel.getX(2)).toBe(allyVariant('guardian'));
     view.dispose();
   });
 
@@ -199,7 +216,7 @@ describe('아군 유닛 렌더 — 드로우콜 0 증가', () => {
   it('죽은 아군은 그리지 않는다', () => {
     const scene = new THREE.Scene();
     const view = new EnemyView(scene);
-    const mesh = viewMeshes(view).get(RAIDER_GEO_KEY)!;
+    const mesh = viewMeshes(view).get(allyGeoKey())!;
     view.update([], 1, cellToWorld, 0.016, [ally({ id: 101 }), ally({ id: 102, alive: false })]);
     expect(mesh.count).toBe(1);
     view.dispose();
@@ -208,12 +225,13 @@ describe('아군 유닛 렌더 — 드로우콜 0 증가', () => {
   it('아군은 적과 다른 색조로 물든다 (instanceColor — 화면에서 즉시 갈린다)', () => {
     const scene = new THREE.Scene();
     const view = new EnemyView(scene);
-    const mesh = viewMeshes(view).get(RAIDER_GEO_KEY)!;
+    const foes = viewMeshes(view).get(RAIDER_GEO_KEY)!;
+    const mesh = viewMeshes(view).get(allyGeoKey())!;
     view.update([enemy()], 1, cellToWorld, 0.016, [ally({ id: 101 })]);
     const foe = new THREE.Color();
     const own = new THREE.Color();
-    mesh.getColorAt(0, foe);
-    mesh.getColorAt(1, own);
+    foes.getColorAt(0, foe);
+    mesh.getColorAt(0, own);
     expect(foe.getHex()).not.toBe(own.getHex());
     expect(own.b).toBeGreaterThan(own.r); // 한랭 쪽으로 밀려 있다
     view.dispose();
@@ -223,7 +241,7 @@ describe('아군 유닛 렌더 — 드로우콜 0 증가', () => {
     const scene = new THREE.Scene();
     const view = new EnemyView(scene);
     const gaits = (view as unknown as { gaitAttrs: Map<string, THREE.BufferAttribute> }).gaitAttrs;
-    const read = (): number => gaits.get(RAIDER_GEO_KEY)!.getX(0);
+    const read = (): number => gaits.get(allyGeoKey())!.getX(0);
 
     // dist가 줄어드는 것이 곧 전진이다 (기지 → 적 방향)
     view.update([], 1, cellToWorld, 0.016, [ally({ id: 101, dist: 8, x: 8, prevX: 8 })]);
@@ -293,7 +311,7 @@ describe('확장 안전망', () => {
   it('모든 아군 종이 공유 메시 하나에 들어간다', () => {
     const scene = new THREE.Scene();
     const view = new EnemyView(scene);
-    const mesh = viewMeshes(view).get(RAIDER_GEO_KEY)!;
+    const mesh = viewMeshes(view).get(allyGeoKey())!;
     const all: AllyState[] = ALL_ALLY_IDS.map((defId: AllyId, i) =>
       ally({ id: 200 + i, defId, x: 8 - i }),
     );

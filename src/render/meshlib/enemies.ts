@@ -1275,32 +1275,70 @@ function kitGuardian(ids: RaiderIds): PartSpec[] {
 }
 
 /**
- * 변형 1~4 = 적 습격대, 5~7 = 아군 마을 부족원.
- * **한 배열에 함께 사는 것이 곧 드로우콜 계약이다** — 같은 지오메트리에 구워야
- * EnemyView 가 아군과 적을 하나의 InstancedMesh 로 그린다(views/enemyview.ts 헤더).
+ * 장비 세트 — **적 습격대 4벌과 아군 3벌을 서로 다른 지오메트리에 굽는다.**
+ *
+ * ── 왜 5단계에서 갈랐는가 (한 지오메트리 → 둘) ─────────────────────────────
+ * 3단계까지는 7벌이 한 배열에 살았다. 근거는 "아군 전용 메시를 만들면 컬러+그림자
+ * +2콜이고 합성 최악 프레임이 이미 60/60이라 여유가 0"이었는데, 그 전제가 **실측으로
+ * 틀렸다**(views/enemyview.ts 헤더의 UNIT_SHADOW 절 참조 — 최악 프레임은 60이 아니라
+ * 73~80콜이고, 그 천장을 만드는 것은 아군이 아니라 타워 수다).
+ *
+ * 대신 진짜 문제는 **삼각형**이었다. 변형 마스킹은 자기 것이 아닌 정점을 원점으로 접어
+ * 축퇴 삼각형으로 만들 뿐이라, 한 인스턴스가 **7벌 전부의 정점 비용을 매 프레임 낸다**.
+ * 스테이지1 웨이브 49는 습격대만 56마리가 동시에 사는 편성이라 이 낭비가 그대로
+ * 프레임을 지배했다:
+ *   7벌 한 몸(1,662 삼각형/인스턴스) → 최악 프레임 170,341 (예산 150,000의 114%)
+ *   4벌/3벌 분리(습격대 1,146 · 아군 1,146)  → 최악 프레임 **약 14만** · 콜 +1
+ * 즉 **드로우콜 1개로 삼각형 3만을 산다**. 아군이 화면에 없으면 그 메시는 count=0이라
+ * 0콜이므로(three 의 renderInstances 는 primcount 0 에서 즉시 반환) 실제 +1은
+ * "아군과 습격대가 동시에 있는 프레임"에서만 든다.
+ *
+ * 몸통·팔다리·머리·보행 리그는 여전히 **완전히 같은 코드**(raiderBody)를 쓴다 —
+ * 갈린 것은 구워지는 단위뿐이고, 아군이 적과 같은 체형이라는 아트 계약은 그대로다.
  */
 const RAIDER_KITS: readonly ((ids: RaiderIds) => PartSpec[])[] = [
   kitBlade,
   kitLancer,
   kitArcher,
   kitHexer,
+];
+
+/** 아군 마을 부족원 장비 3벌 — 같은 몸통, 다른 지오메트리 (변형 1~3) */
+const ALLY_KITS: readonly ((ids: RaiderIds) => PartSpec[])[] = [
   kitClubber,
   kitSlinger,
   kitGuardian,
 ];
 
-/** 전투용 공유 지오메트리 — 몸통 1벌 + 장비 4벌(각각 variant 태그) */
-function raiderShared(rig: RigBuilder): PartSpec[] {
+/** 장비 배열 하나를 몸통에 얹어 굽는 공통 경로 (변형 태그 1-base) */
+function sharedWithKits(
+  rig: RigBuilder,
+  kits: readonly ((ids: RaiderIds) => PartSpec[])[],
+): PartSpec[] {
   const { parts, ids } = raiderBody(rig);
   const out = [...parts];
-  RAIDER_KITS.forEach((kit, i) => out.push(...tagVariant(i + 1, kit(ids))));
+  kits.forEach((kit, i) => out.push(...tagVariant(i + 1, kit(ids))));
   return out;
 }
 
+/** 전투용 습격대 공유 지오메트리 — 몸통 1벌 + 장비 4벌(각각 variant 태그) */
+function raiderShared(rig: RigBuilder): PartSpec[] {
+  return sharedWithKits(rig, RAIDER_KITS);
+}
+
+/** 전투용 아군 공유 지오메트리 — 같은 몸통 + 장비 3벌 */
+function allyShared(rig: RigBuilder): PartSpec[] {
+  return sharedWithKits(rig, ALLY_KITS);
+}
+
 /** 갤러리/단품용 — 그 종의 장비만 굽는다 (variant 태그 없음) */
-function raiderSolo(rig: RigBuilder, variant: number): PartSpec[] {
+function raiderSolo(
+  rig: RigBuilder,
+  variant: number,
+  kits: readonly ((ids: RaiderIds) => PartSpec[])[] = RAIDER_KITS,
+): PartSpec[] {
   const { parts, ids } = raiderBody(rig);
-  const kit = RAIDER_KITS[variant - 1];
+  const kit = kits[variant - 1];
   return kit ? [...parts, ...kit(ids)] : parts;
 }
 
@@ -1674,19 +1712,19 @@ export function enemyVariant(id: EnemyId): number {
 }
 
 /**
- * 아군 부족원의 **전용** 변형 번호 (3단계).
+ * 아군 부족원의 변형 번호 — **아군 전용 지오메트리(ALLY_GEO_KEY) 안에서의** 번호다.
  *
- * 아군은 적 습격대와 **같은 지오메트리·같은 InstancedMesh**를 쓴다. 이건 임시방편이
- * 아니라 **드로우콜 예산이 강제하는 구조 결정**이다 — 아군 전용 메시를 만드는 순간
- * (컬러+그림자 +2콜) 예산을 넘긴다. 그래서 전용 장비를 준다는 것은 곧
- * **같은 공유 지오메트리에 변형 5~7을 더 굽는다**는 뜻이다 (RAIDER_KITS 참조).
- * 1단계가 남긴 계약대로 지오메트리 키(RAIDER_GEO_KEY)와 뷰/시뮬은 손대지 않았다.
+ * 3단계까지는 습격대와 한 지오메트리를 써서 5~7이었다. 5단계에서 갈라 1~3이 됐다 —
+ * 근거는 RAIDER_KITS 주석(삼각형 3만을 드로우콜 1개로 산다). 몸통·리그는 그대로 공유한다.
  */
 const ALLY_VARIANTS: Readonly<Record<AllyId, number>> = {
-  clubber: 5,
-  slinger: 6,
-  guardian: 7,
+  clubber: 1,
+  slinger: 2,
+  guardian: 3,
 };
+
+/** 아군 공유 지오메트리 키 (EnemyId 와도 RAIDER_GEO_KEY 와도 겹치지 않는 이름) */
+export const ALLY_GEO_KEY = 'ally';
 
 /**
  * 아군 인스턴스 색조 (instanceColor 곱). 적은 원색 그대로(1,1,1)다.
@@ -1706,9 +1744,14 @@ const ALLY_VARIANTS: Readonly<Record<AllyId, number>> = {
  */
 export const ALLY_TINT: readonly [number, number, number] = [0.86, 0.98, 1.16];
 
-/** 아군이 쓰는 지오메트리 키 — 적 습격대와 같은 메시에 올라탄다 */
+/** 아군이 쓰는 지오메트리 키 — 습격대와 몸통은 같고 구워지는 단위만 다르다 */
 export function allyGeoKey(): string {
-  return RAIDER_GEO_KEY;
+  return ALLY_GEO_KEY;
+}
+
+/** 아군 공유 지오메트리 (전투용). 뷰가 전용 InstancedMesh 하나로 그린다 */
+export function buildAlly(): THREE.BufferGeometry {
+  return asset(ALLY_GEO_KEY, allyShared).geo;
 }
 
 /** 공유 지오메트리 안에서 이 아군이 쓰는 변형 번호 */
@@ -1722,12 +1765,16 @@ export function allyVariant(id: AllyId): number {
  * 공유본을 그대로 주면 장비 7벌이 한 몸에 다 붙어 나온다.
  */
 export function buildAllySolo(id: AllyId): THREE.BufferGeometry {
-  return asset(`solo:ally:${id}`, (rig) => raiderSolo(rig, ALLY_VARIANTS[id])).geo;
+  return asset(`solo:ally:${id}`, (rig) => raiderSolo(rig, ALLY_VARIANTS[id], ALLY_KITS)).geo;
 }
 
-/** 아군 보행 리그 — 몸통을 공유하므로 습격대와 같은 리그다 */
+/**
+ * 아군 보행 리그. 몸통 코드(raiderBody)가 같으므로 사지 구성도 습격대와 같지만,
+ * **접지 보정 테이블은 실제로 구운 버텍스에서 뽑히므로** 아군 지오메트리 것을 써야 한다
+ * (장비가 달라 발밑 최저점이 갈릴 수 있다 — asset()이 지오메트리별로 계산한다).
+ */
 export function allyRig(): EnemyRig {
-  return assetOf('blade').rig;
+  return asset(ALLY_GEO_KEY, allyShared).rig;
 }
 
 interface EnemyAsset {

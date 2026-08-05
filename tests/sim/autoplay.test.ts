@@ -22,10 +22,42 @@
  *  4) 배치 거리 = 실력 축 — 경로 밀착 봇은 클리어 0
  *  5) 방치(타워 0)는 웨이브 10 안에 패배 / 스테이지6 별0은 클리어 불가 (난이도 서열)
  *  6) 지형 개조가 지배 전략이 아니다 — 승수 우위 ≤ 1, 여유(기지HP)도 앞서지 않는다
+ *  7) **골드 배분 네 갈래**(4단계) — 적정 배분은 기준선 근처, 몰빵은 붕괴
+ *     + 5단계 보강: 어느 갈래도 **승수와 여유를 동시에** 이기지 못한다(불도저와 같은 잣대),
+ *       그리고 "살 수 있으면 산다"는 자연 정책도 갈래로 함께 잰다
+ *  8) **유닛 갈래가 값을 한다**(5단계 개정) — 같은 골드를 태우는 **위약 아군**보다 낫다
+ *     (4단계의 `봉쇄 틱 > 0`은 20판에 1틱만 막아도 통과하는 문턱이었다)
+ *  9) **마을 레벨업의 화력 성장이 값을 한다**(5단계) — HP만 자라는 마을보다 낫다
+ *
+ * ── 5단계: 봉투를 **조인 것에 대하여** ──────────────────────────────────────
+ * 1~6번 문턱은 이번에도 하나도 건드리지 않았다(기준선 실측 16/20 · 최소 웨이브 47 ·
+ * 파괴 186 그대로). 바꾼 것은 7·8번의 **판별력**이다 — 둘 다 통과하지만 잡으라고 만든
+ * 것을 못 잡고 있었다:
+ *  · 7번은 승수만 봐서, 승수 +2 · 잔여 기지HP +94%로 두 축을 동시에 이기던 마을 Lv2를
+ *    통과시켰다(불도저 항목은 같은 형태를 이미 금지하고 있었다).
+ *  · 8번은 `봉쇄 틱 > 0`이라, 전투 능력을 통째로 지운 위약 아군도 초록이었다.
+ * 두 항목 모두 **대조군을 두는 형태**로 바꿨다(위약 아군 · HP만 자라는 마을).
+ * 문턱을 낮춘 곳은 없다.
+ *
+ * ── 4단계에서 봉투를 **완화하지 않은 것에 대하여** ──────────────────────────
+ * 이번 작업은 아군 봉쇄 규칙 둘(규칙 5-b 정원 봉쇄 · 규칙 6-b 중복 조준 금지)과
+ * 가격 셋(아군 기본가 −27% · ALLY_COST_GROWTH 1.35→1.20 · 마을 레벨업 +36%)을 바꿨는데,
+ * 1~6번 항목의 **문턱을 하나도 건드리지 않았고 전부 그대로 통과한다**.
+ * 기준선(타워 몰빵) 실측은 16/20승 · 최소 도달 웨이브 47 · 파괴 186기로 변경 전과 같다 —
+ * 바뀐 것은 타워를 쓰지 않는 갈래들의 값어치뿐이라 기준선이 움직이지 않는 것이 정상이다.
+ * 새로 더한 7·8번의 문턱도 실측에서 유도했고 근거를 각 항목 주석에 적었다.
  */
 import { describe, expect, it } from 'vitest';
-import type { TowerId } from '@/data/types';
-import { MIN_TOWERS_FROM_WAVE, makeBotSim, runBot, type BotOptions, type BotResult } from './botharness';
+import type { AllyDef, AllyId, TowerId } from '@/data/types';
+import { ALLY_DEFS, BASE_LEVELS, stageById } from '@/data';
+import {
+  MIN_TOWERS_FROM_WAVE,
+  makeBotSim,
+  makeBotSimFor,
+  runBot,
+  type BotOptions,
+  type BotResult,
+} from './botharness';
 
 /**
  * 고정 등차수열 — 고를 여지가 없어야 표본이 정직하다.
@@ -53,6 +85,33 @@ function playAll(stageId: number, deck: TowerId[], opts: BotOptions = {}): BotRe
 
 const wins = (rs: BotResult[]): number => rs.filter((r) => r.won).length;
 const sum = (rs: BotResult[], f: (r: BotResult) => number): number => rs.reduce((a, r) => a + f(r), 0);
+
+/**
+ * **위약 아군** — 가격·수명·속도·hp는 그대로라 골드 흐름이 정확히 같고 전투 능력만 0이다.
+ * 유닛 갈래가 "값을 한다"를 증명하는 유일한 정직한 대조군이다: 같은 골드를 같은 시점에
+ * 태우면서 아무 일도 하지 않으므로, 진짜 아군이 위약을 못 이기면 그 골드는 그냥 버린 것이다.
+ */
+const PLACEBO_ALLIES: Record<AllyId, AllyDef> = (() => {
+  const kill = (d: AllyDef): AllyDef => ({ ...d, dmg: 0, blocks: false, canTargetAir: false, range: 0 });
+  return {
+    clubber: kill(ALLY_DEFS.clubber),
+    slinger: kill(ALLY_DEFS.slinger),
+    guardian: kill(ALLY_DEFS.guardian),
+  };
+})();
+
+/** 아군 정의만 갈아 끼운 같은 스윕 (스테이지1 고정) */
+function playAllWithAllies(
+  deck: TowerId[],
+  opts: BotOptions,
+  allyDefs: Record<AllyId, AllyDef>,
+): BotResult[] {
+  const stage = stageById(1);
+  if (!stage) throw new Error('no stage 1');
+  return SEEDS.map((seed) =>
+    runBot(makeBotSimFor(stage, seed, deck, 0, false, BASE_LEVELS, allyDefs), stage, opts),
+  );
+}
 
 describe('autoplay 난이도 봉투', () => {
   it('스테이지1: 넓은 시드 20개에서 과반이 완주하고, 전부 웨이브 40을 넘긴다', () => {
@@ -152,6 +211,129 @@ describe('autoplay 난이도 봉투', () => {
       sum(dozer, (r) => r.baseHpLeft) > sum(plain, (r) => r.baseHpLeft);
     expect(better, `불도저가 승수와 여유 둘 다에서 앞선다 = 지배 전략: ${msg}`).toBe(false);
   }, 240_000);
+
+  /**
+   * ── 4단계: 골드 배분 네 갈래 ────────────────────────────────────────────────
+   * 타워 / 유닛 / 기지 / 지형 중 **하나가 지배 전략이 되면 나머지 셋이 죽는다.**
+   * 여기서 잠그는 것은 두 가지뿐이고, 둘 다 실측에서 나온 값이다(시드 20, 스테이지1):
+   *
+   *  (1) **적정 배분은 판을 무너뜨리지 않는다** — 유닛/기지/지형에 골드의 5~8%를 쓰는
+   *      봇이 타워 몰빵 기준선 근처에 머문다. 실측 타워 16 · 유닛 14 · 기지 16 · 지형 17.
+   *      하한을 기준선 −3으로 두는 이유: 20시드에서 승수 ±1은 핸드 드로우 노이즈이고
+   *      (autoplay 헤더), 유닛은 그중 가장 약한 갈래라 −2가 실측이다.
+   *  (2) **몰빵은 확실히 벌을 받는다** — 예비비를 2,400까지 올려 타워를 굶기면
+   *      유닛 0/20(평균 웨이브 32.9) · 기지 2/20(39.8)로 무너진다.
+   *      이쪽이 봉투의 핵심이다: 새 소비처가 "타워 대신 사도 되는 것"이 되면
+   *      타워 디펜스가 아니게 된다.
+   *
+   * 상한(기준선 +1)도 같이 건다 — 어느 갈래든 타워보다 **확실히 낫다**면 그 순간
+   * 지배 전략이고 나머지 셋이 죽는다. 불도저 항목이 이미 같은 형태로 잠겨 있다.
+   *
+   * ── 5단계 보강: **"승수만" 보던 상한을 불도저와 같은 두 축으로 올린다** ──────
+   * 4단계의 이 항목은 승수만 봤다. 그래서 실제로 있던 지배 전략을 통과시켰다:
+   * 마을 Lv2까지만 올리는 봇이 **승수 38/40(기준선 36) · 잔여 기지HP 16.1(기준선 8.3)**
+   * 로 두 축을 동시에 이겼는데(골드의 1.3%), 승수 +2가 상한 +1을 넘겨야 걸리는 구조라
+   * 40시드에서만 드러나고 20시드 봉투에서는 조용했다. 바로 위 불도저 항목(:160-163)이
+   * 같은 상황을 "승수와 여유 둘 다에서 앞선다 = 지배 전략"으로 정확히 잡고 있었는데
+   * 새 세 갈래에는 그 잣대가 이식되지 않았던 것이다. 이제 이식한다.
+   *
+   * 또 하나 — 4단계는 기지 갈래를 `{towerReserve:600, base:{}}` **하나로만** 쟀다.
+   * 그건 예비비 때문에 과투자하는 조합이라, 플레이어의 자연스러운 행동(**살 수 있으면
+   * 산다** = 예비비 없음)은 재지 않았다. 그 자연 정책을 별도 갈래로 추가한다.
+   */
+  it('골드 배분 네 갈래 — 적정 배분은 살아 있고, 몰빵은 무너진다', () => {
+    const tower = playAll(1, STAGE1_DECK);
+    const branches: [string, BotResult[]][] = [
+      ['유닛', playAll(1, STAGE1_DECK, { towerReserve: 600, allies: { minNear: 3 } })],
+      ['기지', playAll(1, STAGE1_DECK, { towerReserve: 600, base: {} })],
+      ['지형', playAll(1, STAGE1_DECK, { bulldoze: true })],
+      // 예비비 없이 "살 수 있으면 산다" — 플레이어가 실제로 하는 행동
+      ['기지(자연)', playAll(1, STAGE1_DECK, { base: {} })],
+    ];
+    for (const [name, rs] of branches) {
+      const msg = `${name}: ${wins(rs)}/20 (타워 ${wins(tower)}/20) ${JSON.stringify(rs)}`;
+      expect(wins(rs), msg).toBeGreaterThanOrEqual(wins(tower) - 3);
+      expect(wins(rs), msg).toBeLessThanOrEqual(wins(tower) + 1);
+      // 지배 전략 금지 — 승수와 여유(잔여 기지 HP) 둘 다에서 앞서면 실패 (불도저와 같은 잣대)
+      const dominant =
+        wins(rs) > wins(tower) && sum(rs, (r) => r.baseHpLeft) > sum(tower, (r) => r.baseHpLeft);
+      expect(dominant, `${name} 갈래가 승수와 여유 둘 다에서 앞선다 = 지배 전략: ${msg}`).toBe(false);
+    }
+    // 검증이 공허하지 않은지 — 각 갈래가 실제로 골드를 썼어야 한다
+    expect(sum(branches[0]![1], (r) => r.goldAllies)).toBeGreaterThan(0);
+    expect(sum(branches[1]![1], (r) => r.goldBase)).toBeGreaterThan(0);
+    expect(sum(branches[2]![1], (r) => r.goldScenery)).toBeGreaterThan(0);
+    expect(sum(branches[3]![1], (r) => r.goldBase)).toBeGreaterThan(0);
+
+    const unitAll = playAll(1, STAGE1_DECK, { towerReserve: 2400, allies: { minNear: 1 } });
+    const baseAll = playAll(1, STAGE1_DECK, { towerReserve: 2400, base: {} });
+    expect(wins(unitAll), `유닛 몰빵: ${JSON.stringify(unitAll)}`).toBeLessThanOrEqual(3);
+    expect(wins(baseAll), `기지 몰빵: ${JSON.stringify(baseAll)}`).toBeLessThanOrEqual(5);
+  }, 900_000);
+
+  /**
+   * 유닛 갈래가 **골드값을 하는지**를 잠근다.
+   *
+   * 4단계 판본은 `allyBlockTicks > 0` 하나였다 — 20판 통틀어 1틱만 봉쇄해도 통과하는
+   * 문턱이고, `blocks`만 남기고 dmg·수명·사거리를 전부 망가뜨리면 그대로 초록이었다.
+   * 그래서 대조군을 **위약 아군**(가격·수명·속도·hp는 그대로, 전투 능력만 0)으로 바꿨다.
+   * 골드 흐름이 같으므로 차이는 전투 능력에서만 나온다 — 아군을 통째로 무력화하면
+   * 위약과 같아지고 이 항목이 걸린다.
+   *
+   * 문턱은 "**위약보다 못하지는 않다**"로 둔다(같거나 낫다). 실측(시드 20, minNear 1,
+   * 예비비 600): 진짜 아군 15/20 · 봉쇄 인원틱 8,020 대 위약 12/20 · 0.
+   * 승수 차이는 시드 20개에서 노이즈에 잠길 수 있으므로 **봉쇄 인원틱**을 같이 건다 —
+   * 이쪽은 결정론적이고 위약에서 정확히 0이 된다.
+   */
+  it('유닛 갈래가 값을 한다 — 같은 골드를 태우는 위약 아군보다 낫다', () => {
+    const opts: BotOptions = { towerReserve: 600, allies: { minNear: 1 } };
+    const real = playAll(1, STAGE1_DECK, opts);
+    const sham = playAllWithAllies(STAGE1_DECK, opts, PLACEBO_ALLIES);
+    const msg = `진짜 ${wins(real)}/20 (봉쇄 ${sum(real, (r) => r.allyBlockTicks)}) / 위약 ${wins(sham)}/20 (봉쇄 ${sum(sham, (r) => r.allyBlockTicks)})`;
+    // 실험이 공허하지 않은지 — 둘 다 실제로 아군을 뽑고 비슷한 골드를 태웠어야 한다
+    expect(sum(real, (r) => r.alliesTrained), msg).toBeGreaterThan(0);
+    expect(sum(sham, (r) => r.alliesTrained), msg).toBeGreaterThan(0);
+    expect(sum(sham, (r) => r.goldAllies), msg).toBeGreaterThan(sum(real, (r) => r.goldAllies) * 0.7);
+    // 위약은 정의상 한 틱도 못 막는다. 진짜 아군은 막아야 한다
+    expect(sum(sham, (r) => r.allyBlockTicks), msg).toBe(0);
+    expect(sum(real, (r) => r.allyBlockTicks), msg).toBeGreaterThan(0);
+    // 그리고 그 봉쇄가 결과로 이어져야 한다 — 위약보다 못하면 골드를 버린 것이다
+    expect(wins(real), msg).toBeGreaterThanOrEqual(wins(sham));
+  }, 600_000);
+
+  /**
+   * 마을 레벨업의 **공격력·사거리 성장이 값을 하는지**를 잠근다.
+   *
+   * 4단계까지는 이 축이 통째로 죽어 있었다: Lv2의 dmg/사거리만 Lv1 값으로 고정한 위약과
+   * 정품이 40시드에서 **모든 자릿수까지 같은 결과**를 냈다. 기전은 "기지 사거리 안의 적은
+   * 어차피 곧 누수되어 사라지고, **죽이지 못한 피해는 아무 흔적도 남기지 않는다**"이다
+   * (src/data/hometown.ts). 5단계에서 화력·사거리를 실제로 죽일 수 있는 크기로 올렸고,
+   * 그게 유지되는지를 여기서 본다.
+   *
+   * 대조군은 **HP만 자라는 마을**(공격력·쿨다운·사거리를 Lv1에 고정, 비용·HP는 그대로).
+   * 실측(시드 20, 만렙까지 모아 사는 봇): 정품 9/20 · 기지 처치 909 대 HP만 3/20 · 처치 27.
+   */
+  it('마을 레벨업의 화력 성장이 값을 한다 (HP만 자라는 마을보다 낫다)', () => {
+    const stage = stageById(1);
+    if (!stage) throw new Error('no stage 1');
+    const lv1 = BASE_LEVELS[0]!;
+    const hpOnly = BASE_LEVELS.map((d, i) =>
+      i === 0 ? { ...d } : { ...d, dmg: lv1.dmg, cooldownTicks: lv1.cooldownTicks, range: lv1.range },
+    );
+    const opts: BotOptions = { base: { upTo: 5, save: true } };
+    const run = (levels: typeof BASE_LEVELS): BotResult[] =>
+      SEEDS.map((seed) => runBot(makeBotSimFor(stage, seed, STAGE1_DECK, 0, false, levels), stage, opts));
+    const real = run(BASE_LEVELS);
+    const sham = run(hpOnly);
+    const msg = `정품 ${wins(real)}/20 (기지 처치 ${sum(real, (r) => r.baseKills)}) / HP만 ${wins(sham)}/20 (처치 ${sum(sham, (r) => r.baseKills)})`;
+    // 실험이 공허하지 않은지 — 둘 다 실제로 레벨을 올리고 화살을 쐈어야 한다
+    expect(sum(real, (r) => r.goldBase), msg).toBeGreaterThan(0);
+    expect(sum(sham, (r) => r.goldBase), msg).toBeGreaterThan(0);
+    expect(sum(real, (r) => r.baseShots), msg).toBeGreaterThan(0);
+    // 화력 성장이 실제로 적을 죽여야 하고, 그게 결과로 이어져야 한다
+    expect(sum(real, (r) => r.baseKills), msg).toBeGreaterThan(sum(sham, (r) => r.baseKills) * 2);
+    expect(wins(real), msg).toBeGreaterThan(wins(sham));
+  }, 600_000);
 
   it('불도저 봇도 스테이지6은 클리어 불가 (지형 개조가 서열을 뒤집지 않는다)', () => {
     const { sim, stage } = makeBotSim(6, 11, ALL_DECK);

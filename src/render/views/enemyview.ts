@@ -6,12 +6,38 @@
  * 보행 위상은 시간이 아니라 이동거리(e.dist)에서 뽑는다 —
  * 그래야 발이 일정 보폭으로 꽂히고, 둔화/배속에서 걸음이 자동으로 맞는다.
  *
- * ── 왜 **아군까지** 이 뷰가 그리는가 (드로우콜 예산) ─────────────────────────
- * 아군 전용 뷰를 만들면 컬러+그림자로 최소 +2콜인데, 실측 최악 프레임이 정확히 60/60이라
- * 여유가 0이다. 아군은 적 습격대와 **같은 공유 지오메트리**를 쓰므로(meshlib/enemies.ts
- * allyVariant) 같은 InstancedMesh의 뒤쪽 인스턴스로 이어 붙이면 **드로우콜이 늘지 않는다**.
- * 그래서 계층상 어색함을 감수하고 여기서 함께 그린다 — 이름값보다 예산이 먼저다.
- * 구분은 instanceColor 색조(ALLY_TINT)가 맡는다.
+ * ── 왜 **아군까지** 이 뷰가 그리는가 ─────────────────────────────────────────
+ * 아군은 적 습격대와 **같은 몸통·같은 보행 리그·같은 머티리얼 구성**을 쓴다
+ * (meshlib/enemies.ts raiderBody). 뷰를 따로 두면 보간·보행 위상·스폰 팝·히트 플래시가
+ * 두 벌이 되고 둘이 어긋나는 순간 아군만 미끄러진다. 그래서 인스턴스 커서(counts)와
+ * 애니 상태(anims)를 공유하는 이 뷰가 함께 그린다.
+ * 지오메트리는 5단계에서 갈랐다(장비 4벌 / 3벌) — 근거는 아래 addAllyMesh 주석.
+ * 구분은 구워진 장비 + instanceColor 색조(ALLY_TINT)가 함께 맡는다.
+ *
+ * ── UNIT_SHADOW: 인스턴스 유닛은 그림자를 드리우지 않는다 ────────────────────
+ * castShadow=true 이면 같은 지오메트리가 **컬러 패스 + 그림자 패스 두 번** 그려진다.
+ * 유닛은 인스턴스라 드로우콜은 패스당 1개뿐이지만 **삼각형은 인스턴스 수만큼 두 배**다.
+ * 웨이브 스폰 상한이 60이고(balance.WAVE_MAX_SPAWNS) 실제로 스테이지1 웨이브 49에서
+ * 동시 생존 45마리·무한 모드 웨이브 72에서 60마리가 관측되므로(sim 실측), 모델당
+ * 800~1,700 삼각형 × 60마리 × 2패스 = 20만 삼각형이 유닛만으로 나온다.
+ *
+ * 실측(swiftshader 900×1000, 적 48 + 아군 6 + 만렙 타워 12 + 마을 Lv5 정지 프레임):
+ *   그림자 ON  → 73~93콜 · **247,781 삼각형** (예산 150,000의 165%)
+ *   그림자 OFF → 60~80콜 · **139,445 삼각형** (예산의 93%)
+ * 즉 유닛 그림자 하나가 프레임 삼각형의 **36%**였다. 이 게임의 카메라는 55° 부감이고
+ * 유닛은 화면에서 20~40px이라 발밑 그림자가 가려지는 면적이 크다 — 반면 나무·타워·마을은
+ * 크고 고정이라 그림자가 공간을 만든다. 그래서 **고정물은 남기고 유닛만 끈다**.
+ * (towers.ts가 이미 같은 판단을 한다: "그림자 캐스터는 타워당 정확히 1개, action/장식은
+ *  그림자 미참여" — 그림자 패스를 먼저 깎는 것이 이 프로젝트의 규칙이다.)
+ *
+ * 보스(개별 Mesh)는 **예외로 그림자를 유지한다**: 동시 2마리 이하라 비용이 2×1,400
+ * 삼각형뿐이고, 크고 느려서 그림자가 실제로 읽힌다.
+ *
+ * 버린 대안 — "낮폴리 그림자 프록시 InstancedMesh 하나를 따로 둔다"(유닛당 12삼각형
+ * 상자를 그림자 패스에만 태운다): 삼각형은 1.4k로 끝나지만 컬러 패스에서 colorWrite=false
+ * 로라도 한 번 그려야 해서 **드로우콜이 +2**다. 드로우콜 쪽이 지금 더 빡빡하고
+ * (아래 실측 참조) 무엇보다 나무·타워의 날카로운 실루엣 그림자 옆에 유닛만 뭉툭한 상자
+ * 그림자가 깔려 스타일이 갈린다.
  */
 import * as THREE from 'three';
 import type { AllyState, EnemyId, EnemyState } from '@/data/types';
@@ -22,7 +48,9 @@ import {
   ALLY_TINT,
   BOSS_ENEMIES,
   allyGeoKey,
+  allyRig,
   allyVariant,
+  buildAlly,
   buildEnemy,
   enemyGeoKey,
   enemyRig,
@@ -169,12 +197,45 @@ export class EnemyView {
       // instanceColor 초기화 (히트 플래시용)
       for (let i = 0; i < CAPACITY; i++) mesh.setColorAt(i, _col.setRGB(1, 1, 1));
       mesh.count = 0;
-      mesh.castShadow = true;
+      // 규칙: **인스턴스 유닛은 그림자를 드리우지 않는다** (아래 UNIT_SHADOW 주석 참조)
+      mesh.castShadow = false;
       mesh.frustumCulled = false;
       this.meshes.set(key, mesh);
       this.group.add(mesh);
     }
+    this.addAllyMesh();
     scene.add(this.group);
+  }
+
+  /**
+   * 아군 전용 InstancedMesh — 습격대와 **몸통은 같고 장비만 다른** 별도 지오메트리.
+   *
+   * 3단계까지는 습격대 메시에 얹어 그렸다("드로우콜 +0"). 5단계에 갈랐다:
+   * 변형 마스킹은 자기 것이 아닌 정점을 원점으로 접을 뿐이라 한 인스턴스가 장비 7벌의
+   * 정점 비용을 매 프레임 낸다. 습격대가 56마리 동시에 사는 편성(스테이지1 웨이브 49)에서
+   * 그 낭비가 프레임을 지배했다 — 최악 프레임 170,341 삼각형(예산 150,000의 114%).
+   * 4벌/3벌로 갈라 구우면 인스턴스당 1,662 → 1,146이 되어 최악 프레임이 예산 안으로 들어온다.
+   * 대가는 **드로우콜 +1**, 그것도 아군과 습격대가 동시에 화면에 있을 때뿐이다
+   * (아군이 없으면 count=0 → three 가 즉시 반환해 0콜). 근거 전문은
+   * meshlib/enemies.ts 의 RAIDER_KITS 주석.
+   */
+  private addAllyMesh(): void {
+    const key = allyGeoKey();
+    if (this.meshes.has(key)) return;
+    const geo = buildAlly();
+    const rig = allyRig();
+    this.gaitAttrs.set(key, instAttr(geo, GAIT_ATTR));
+    this.varAttrs.set(key, instAttr(geo, VARIANT_SEL_ATTR));
+    const gm = cachedGaitMaterials(key, rig, true);
+    const mesh = new THREE.InstancedMesh(geo, gm.color, CAPACITY);
+    mesh.customDepthMaterial = gm.depth;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < CAPACITY; i++) mesh.setColorAt(i, _col.setRGB(1, 1, 1));
+    mesh.count = 0;
+    mesh.castShadow = false; // UNIT_SHADOW — 인스턴스 유닛은 그림자를 드리우지 않는다
+    mesh.frustumCulled = false;
+    this.meshes.set(key, mesh);
+    this.group.add(mesh);
   }
 
   /** 피격 순간 호출 — 흰색 플래시 후 원색 복귀 */
@@ -342,7 +403,7 @@ export class EnemyView {
     const key = allyGeoKey();
     const mesh = this.meshes.get(key);
     if (!mesh) return;
-    const rig = enemyRig('blade'); // 공유 지오메트리의 리그 (아군도 같은 몸통이다)
+    const rig = allyRig(); // 몸통은 습격대와 같고 접지 보정만 아군 지오메트리 것을 쓴다
     for (const a of allies) {
       if (!a.alive) continue;
       seen.add(a.id);
@@ -401,6 +462,8 @@ export class EnemyView {
     } else {
       mesh = new THREE.Mesh(buildEnemy(id), flatMat().clone());
     }
+    // UNIT_SHADOW 예외 — 보스는 동시 2마리 이하라 그림자 패스가 2×1,400 삼각형뿐이고,
+    // 크고 느려서 그림자가 실제로 읽힌다 (헤더 주석 참조)
     mesh.castShadow = true;
     pool.push(mesh);
     this.group.add(mesh);

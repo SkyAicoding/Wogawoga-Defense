@@ -90,8 +90,19 @@ describe('보행 리그', () => {
       // 다리 2 + 팔 2 + 머리 = 최소 5그룹
       expect(groups.size, `${id} 리그 그룹 수`).toBeGreaterThanOrEqual(5);
     }
-    // 뷰는 아군을 blade 리그로 돌린다(enemyview.updateAllies) — 같은 객체여야 한다
-    expect(allyRig()).toBe(enemyRig('blade'));
+    /**
+     * 5단계에서 아군을 별도 지오메트리로 갈랐으므로 리그도 **다른 객체**다.
+     * 하지만 몸통 코드(raiderBody)가 같으니 사지 구성·보폭은 완전히 같아야 한다 —
+     * 여기가 갈리면 아군만 다른 보폭으로 걸어 미끄러진다.
+     * (접지 보정 표는 실제 구운 버텍스에서 뽑히므로 장비 차이만큼 달라질 수 있어 제외)
+     */
+    const ar = allyRig();
+    const er = enemyRig('blade');
+    expect(ar.gaitPerDist).toBeCloseTo(er.gaitPerDist, 6);
+    expect(ar.limbs.length).toBe(er.limbs.length);
+    for (let i = 0; i < ar.limbs.length; i++) {
+      expect(ar.limbs[i], `limb ${i}`).toEqual(er.limbs[i]);
+    }
   });
 
   it('보행 한 주기 내내 발이 지면을 뚫지 않고 디딤발은 지면에 닿는다', () => {
