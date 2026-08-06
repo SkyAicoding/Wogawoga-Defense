@@ -1006,7 +1006,10 @@ function kitBlade(ids: RaiderIds): PartSpec[] {
   const dye = 0xd2492f;
   return [
     ...tag(ids.head, [
-      { kind: 'box', pos: [0.008, 0.658, 0], scale: [0.258, 0.055, 0.25], color: dye, hueJitter: 0.02 },
+      // 머리띠 — y 0.658이면 윗면(0.6855)이 두상 윗면과 **정확히 같은 평면**이라
+      // 카메라가 움직일 때마다 z-fighting 으로 반짝인다(사용자 피드백: "머리 윗부분이
+      // 반짝거린다"). 0.636으로 내려 두상 안쪽에 두르는 띠로 만든다.
+      { kind: 'box', pos: [0.008, 0.636, 0], scale: [0.258, 0.055, 0.25], color: dye, hueJitter: 0.02 },
       { kind: 'cone', pos: [-0.09, 0.74, 0.05], rot: [0.35, 0, 0.6], scale: [0.034, 0.15, 0.024], color: C.gold, seg: 4 },
       // 볼 전투 문양 — 좌우 대칭이라 어느 각도에서도 "칠한 얼굴"이 보인다
       ...mirZ([{ kind: 'box', pos: [0.128, 0.578, 0.088], rot: [0, 0, 0.45], scale: [0.022, 0.075, 0.05], color: dye }]),

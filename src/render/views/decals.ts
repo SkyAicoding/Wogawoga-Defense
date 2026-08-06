@@ -46,7 +46,9 @@ export class Decals {
   private sortieGeo: THREE.BufferGeometry | null = null;
   private sortieSig = '';
   /** 지금 마커가 무엇을 가리키는가 — 호흡 애니메이션 규칙이 갈린다 */
-  private markerMode: 'cell' | 'sortie' = 'cell';
+  private markerMode: 'cell' | 'sortie' | 'tower' = 'cell';
+  /** 모드별 링 기본 배율 (호흡 스케일이 이 위에 곱해진다) */
+  private markerBaseScale = 1;
   private time = 0;
   private disposables: (THREE.BufferGeometry | THREE.Material)[] = [];
 
@@ -77,9 +79,11 @@ export class Decals {
     this.chevronMat = groundMat(0xfff2c0, 0.0);
 
     // 선택 마커 — 사거리 링과 구분되게 주황 계열.
-    // 링(지면) + 수직 기둥 + 정수리 다이아몬드를 **하나로 병합**해 드로우콜 1을 지킨다.
-    // 하단 HUD 패널이 그 셀을 덮어도 기둥/다이아가 패널 위로 솟아 "여기다"가 보인다.
-    const markerGeo = buildMarkerGeo();
+    // 소품/타워 선택은 **지면 링만** 쓴다. 예전에는 수직 기둥+정수리 다이아를 얹어
+    // "패널이 셀을 덮어도 위로 솟게" 했는데, 지금은 패널이 열리면 카메라가 판을 위로
+    // 밀어(camera.setLift) 가림 자체가 없어졌다. 기둥은 목적을 잃고 시야만 어지럽힌다.
+    // (출격 한계선 봉수대는 여전히 기둥을 쓴다 — 빈 길 위 한 점이라 링만으로는 안 보인다)
+    const markerGeo = buildMarkerGeo(undefined, false);
     this.cellMarkerGeo = markerGeo;
     this.markerMat = groundMat(MARKER_COLOR_CELL, 0.9);
     // 소품·지형에 가려지면 선택 표시로서 쓸모가 없다 — 항상 위에 그린다
@@ -174,7 +178,26 @@ export class Decals {
     this.marker.geometry = this.cellMarkerGeo;
     this.markerMat.color.setHex(MARKER_COLOR_CELL);
     this.markerMode = 'cell';
+    this.markerBaseScale = 1;
     this.marker.position.set(v.x + offsetX, DECAL_Y + 0.04, v.z + offsetZ);
+    this.marker.visible = true;
+  }
+
+  /**
+   * 선택한 타워 발밑 링.
+   *
+   * 사거리 링만으로는 **어느 타워를 골랐는지**가 안 읽힌다 — 타워가 붙어 있으면
+   * 큰 원 하나가 여러 기를 함께 감싸 중심이 어디인지 모호해진다(사용자 피드백).
+   * 그래서 사거리 링(무엇에 영향을 주는가)과 별개로 발밑 링(무엇을 골랐는가)을 둔다.
+   * 소품 마커와 같은 메시를 돌려 쓰므로 드로우콜은 늘지 않는다(선택은 상호배타).
+   */
+  showTowerMarker(cellX: number, cellZ: number): void {
+    const v = this.cellToWorld(cellX, cellZ);
+    this.marker.geometry = this.cellMarkerGeo;
+    this.markerMat.color.setHex(MARKER_COLOR_TOWER);
+    this.markerMode = 'tower';
+    this.markerBaseScale = MARKER_SCALE_TOWER;
+    this.marker.position.set(v.x, DECAL_Y + 0.04, v.z);
     this.marker.visible = true;
   }
 
@@ -272,8 +295,8 @@ export class Decals {
     // 출격선 모드는 좌표가 지오메트리에 구워져 있어 스케일이 곧 원점 기준 확대다
     // (봉수대가 판 위를 미끄러진다) — 그래서 밝기만 호흡시킨다.
     if (this.marker.visible) {
-      if (this.markerMode === 'cell') {
-        const s = 1 + Math.sin(this.time * 6) * 0.09;
+      if (this.markerMode !== 'sortie') {
+        const s = this.markerBaseScale * (1 + Math.sin(this.time * 6) * 0.09);
         this.marker.scale.set(s, 1, s);
       }
       this.markerMat.opacity = 0.72 + Math.sin(this.time * 6) * 0.22;
@@ -301,18 +324,32 @@ export class Decals {
  * 생략하면 원점 기준이고, 그때 위치는 mesh.position이 옮긴다(소품 마커가 이 경로다).
  */
 const MARKER_BEACON_H = 2.2;
-/** 소품 선택 = 주황(사거리 링과 구분) / 출격 한계선 = 한랭색(아군 톤과 같은 축) */
+/**
+ * 소품 선택 = 주황(사거리 링과 구분) / 출격 한계선 = 한랭색(아군 톤과 같은 축)
+ * 타워 선택 = 노랑. 사거리 링(청록)과 색으로 갈리고, 소품 선택(주황)과도 갈린다 —
+ * 셋이 한 화면에 동시에 뜨진 않지만 "지금 고른 게 뭐냐"가 색만으로 읽혀야 한다.
+ */
 const MARKER_COLOR_CELL = 0xffa63c;
 const MARKER_COLOR_SORTIE = 0x9fdcf7;
+const MARKER_COLOR_TOWER = 0xffe45c;
+/**
+ * 타워 링 배율 — 타워 실루엣은 T1 0.9 ~ T5 1.4셀이라 소품용 링(외경 0.46)은
+ * 받침 밑에 깔려 안 보인다. 1.6배면 외경 0.74로 만렙 받침(반경 약 0.69) 바깥에 선다.
+ */
+const MARKER_SCALE_TOWER = 1.6;
 
-function buildMarkerGeo(at?: THREE.Vector3): THREE.BufferGeometry {
+function buildMarkerGeo(at?: THREE.Vector3, withBeacon = true): THREE.BufferGeometry {
   const ring = new THREE.RingGeometry(0.3, 0.46, 24);
   ring.rotateX(-Math.PI / 2);
-  const shaft = new THREE.CylinderGeometry(0.028, 0.05, MARKER_BEACON_H, 4, 1, true);
-  shaft.translate(0, MARKER_BEACON_H / 2, 0);
-  const tip = new THREE.OctahedronGeometry(0.13);
-  tip.translate(0, MARKER_BEACON_H + 0.12, 0);
-  const merged = mergeGeos([ring, shaft, tip]);
+  const parts: THREE.BufferGeometry[] = [ring];
+  if (withBeacon) {
+    const shaft = new THREE.CylinderGeometry(0.028, 0.05, MARKER_BEACON_H, 4, 1, true);
+    shaft.translate(0, MARKER_BEACON_H / 2, 0);
+    const tip = new THREE.OctahedronGeometry(0.13);
+    tip.translate(0, MARKER_BEACON_H + 0.12, 0);
+    parts.push(shaft, tip);
+  }
+  const merged = mergeGeos(parts);
   if (at) merged.translate(at.x, DECAL_Y + 0.04, at.z);
   return merged;
 }

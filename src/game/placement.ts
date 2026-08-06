@@ -181,6 +181,9 @@ export class PlacementController {
     const stars = this.stars[t.defId] ?? 0;
     const range = tier.range * (1 + stars * (def.starBonus.rangePct ?? 0));
     this.stage3d.decals.showRange(t.cellX, t.cellZ, range);
+    // 사거리 링과 별개로 발밑 링 — 타워가 붙어 있으면 사거리 원 하나가 여러 기를
+    // 함께 감싸 "어느 걸 골랐는지"가 안 읽힌다
+    this.stage3d.decals.showTowerMarker(t.cellX, t.cellZ);
   }
 
   /** HUD 카드 탭 → 배치 모드 진입/해제 */
@@ -260,6 +263,7 @@ export class PlacementController {
   }
 
   clearTowerSelection(): void {
+    if (this.selectedTowerId !== null) this.stage3d.decals.hideCellMarker();
     this.selectedTowerId = null;
     this.stage3d.decals.hideRange();
   }
