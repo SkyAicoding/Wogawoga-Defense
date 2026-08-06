@@ -157,9 +157,13 @@ export class BattleController {
       selectedTower: () => self.placement.selectedTower(),
       selectedScenery: () => self.placement.selectedScenery(),
       selectedBase: () => self.placement.selectedBase(),
+      selectBase: () => self.placement.selectBase(),
       requestUpgradeBase: () => {
         // 성공하면 baseUpgraded 이벤트가 연출/외형을, 여기서 사거리 링을 갱신한다
         if (self.sim.applyCommand({ type: 'upgradeBase' })) self.placement.refreshBaseSelection();
+      },
+      reportPanelTop: (y) => {
+        self.panelTopPx = y;
       },
       requestClearScenery: () => {
         const c = self.placement.selectedScenery();
@@ -315,11 +319,53 @@ export class BattleController {
     s3.projectiles.update(st.projectiles, alpha, dt);
     s3.towers.aim(st.towers, st.enemies, alpha);
     s3.update(dt);
+    this.updatePanelLift();
     this.camera.update(realDt);
     this.renderer.render(s3.scene, this.camera.camera);
   }
 
   private fitBox = new THREE.Box3();
+  /** UI가 알려 준 하단 패널의 화면 y (닫혔으면 null) — reportPanelTop */
+  private panelTopPx: number | null = null;
+  /** 마지막 fit에 쓴 플레이필드 창의 위쪽 y — 비켜서기 상한의 기준 */
+  private fitRectTop = 0;
+  /** 비켜선 뒤 관심 지점과 패널 사이에 남길 여백 (px) */
+  private static readonly LIFT_MARGIN_PX = 14;
+
+  /**
+   * 마을 패널이 마을 셀·출격 봉수대를 덮으면 판을 그만큼 위로 비켜세운다 (8단계).
+   * 필요량은 **비켜서기를 되돌린 좌표**로 잰다(현재 화면 y + 지금 적용된 lift) —
+   * 그러지 않으면 "덮였나?"의 답이 자기 자신의 결과에 의존해 진동한다.
+   */
+  private updatePanelLift(): void {
+    const top = this.panelTopPx;
+    if (top === null || !this.placement.selectedBase()) {
+      this.camera.setLift(0);
+      return;
+    }
+    const applied = this.camera.liftPx;
+    let lowest = this.cellScreenY(this.stage.baseCell.x, this.stage.baseCell.z) + applied;
+    for (const p of this.sim.allySortiePoints()) {
+      const y = this.cellScreenY(p.x, p.z) + applied;
+      if (y > lowest) lowest = y;
+    }
+    const need = lowest + BattleController.LIFT_MARGIN_PX - top;
+    // 상한: 관심 지점이 **상단 HUD 예약 밑**까지만 올라간다. 그 위로 더 밀면
+    // 보이지도 않는 곳으로 판을 던지는 셈이고, 스폰 쪽이 필요 이상으로 잘린다.
+    const max = Math.max(0, lowest - (this.fitRectTop + BattleController.LIFT_MARGIN_PX));
+    this.camera.setLift(Math.max(0, Math.min(need, max)));
+  }
+
+  private liftProbe = new THREE.Vector3();
+
+  /** 셀 → 화면 y (CSS px). cellToScreen(테스트 훅)과 같은 투영을 쓴다 */
+  private cellScreenY(x: number, z: number): number {
+    const v = this.liftProbe;
+    this.stage3d.cellToWorld(x, z, v);
+    v.project(this.camera.camera);
+    const r = this.canvas.getBoundingClientRect();
+    return r.top + (-v.y * 0.5 + 0.5) * r.height;
+  }
 
   resize(cssW: number, cssH: number): void {
     // 낮은 높이(가로모드)에서는 세로형 예약값(118/27%/208)이 화면 대부분을 잡아먹어
@@ -339,6 +385,7 @@ export class BattleController {
     this.fitBox.copy(this.stage3d.aabb);
     this.fitBox.min.y = Math.max(this.fitBox.min.y, -0.9);
     this.fitBox.max.y = Math.max(this.fitBox.max.y, 1.4);
+    this.fitRectTop = rect.y;
     this.camera.fitToPlayfield(this.fitBox, rect, cssW, cssH);
   }
 

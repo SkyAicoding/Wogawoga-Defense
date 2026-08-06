@@ -73,15 +73,28 @@ export function createBattleHud(): Screen<GameFacade> {
   let pauseModal: ModalHandle | null = null;
 
   /**
-   * 출동 바 — 아군 부족원 생산.
+   * 출동 버튼 — 아군 부족원 생산. **마을 패널 안**에 산다 (6단계 개편).
    *
-   * **왜 상시 노출된 버튼인가 (기지 탭이 아니라)**:
-   * 아군은 수명 20초짜리 긴급 자원이라 "지금 필요하다"고 느낀 순간과 나가는 순간 사이의
-   * 탭 수가 곧 반응 속도다. 기지 탭 → 패널 → 버튼은 2탭이고, 그마저도 기지가 화면 구석에
-   * 있거나 HUD에 가려 있으면 조준부터 해야 한다. 상시 바는 1탭이고 위치가 고정이다.
-   * 카드 핸드를 쓰지 않는 이유도 같다 — 핸드는 타워 배치용 슬롯 3칸을 이미 다 쓰고 있고,
-   * 거기에 섞으면 "배치(자리를 고른다)"와 "출동(즉시 나간다)"의 조작 성격이 뒤섞인다.
-   * (2단계의 마을 레벨업은 웨이브 사이에 누르는 조작이라 기지 탭 패널이 어울린다 — 자리를 나눈다)
+   * ── 무엇이 바뀌었나 ────────────────────────────────────────────────────────
+   * 5단계까지는 손패 위에 상시 떠 있는 '출동 바'였다. 근거는 "아군은 수명 20초짜리
+   * 긴급 자원이라 탭 수가 곧 반응 속도"였고, 그 판단 자체는 지금도 틀리지 않다.
+   * 그럼에도 마을 패널로 옮긴 이유는 **사용자의 명시적 요청**이다:
+   * "아군은 기본 UI 화면에서 만들게 하지말고, 마을을 선택했을때 아군을 선택하거나
+   * 마을을 업그레이드 하도록 바꿔줘".
+   *
+   * ── 대가와 그것을 줄인 방법 ────────────────────────────────────────────────
+   * 대가는 분명하다. 첫 출동이 1탭에서 2탭이 되고, 기지 셀을 조준해야 한다.
+   * 그 마찰을 줄이려고 셋을 했다:
+   *  · **패널이 닫히지 않는다** — 출동 버튼은 hud-item이라 탭이 캔버스로 새지 않는다.
+   *    한 번 열면 세 명을 연속으로 내보낼 수 있고, 인원이 차 비활성이 된 버튼도
+   *    포인터를 삼킨다(style.css). 즉 2탭은 **첫 한 명에게만** 붙는 값이다.
+   *  · **전투 중에도 열린다** — 마을 선택은 웨이브 중에도 그대로 되고, 패널은
+   *    승패가 확정될 때만 닫힌다.
+   *  · **한 패널에서 둘 다** — 레벨업과 출동이 같은 자리에 있어, 마을에 투자하면
+   *    부족원이 더 멀리 나간다는 관계(allies.ts 규칙 2)가 손으로도 이어진다.
+   *
+   * 출동에는 **2단 확인을 넣지 않는다**. 소모품이고 수명이 짧아 반응 속도가 곧 성능이며,
+   * 잘못 눌러도 잃는 것은 40~70골드다 (레벨업·소품 제거는 비가역 대형 결제라 확인을 건다).
    */
   interface AllyButton {
     el: HTMLElement;
@@ -91,24 +104,6 @@ export function createBattleHud(): Screen<GameFacade> {
   let allyBtns: AllyButton[] = [];
   let allyCountEl!: HTMLElement;
   let lastAllySig = '';
-  /**
-   * 출동 안내 패널 — **descKey를 화면에 실제로 띄우는 자리**.
-   *
-   * 5단계에서 추가했다. 그전까지 ALLY_DEFS.descKey / ko.ts / en.ts 에 설명 문자열이
-   * 다 있는데도 `t()`에 한 번도 넘어가지 않아, 플레이어가 버튼에서 읽을 수 있는 것은
-   * **이름과 가격뿐**이었다. 그 상태에서는 "수명 20초짜리 소모품"이라는 사실도,
-   * "귀환하면 절반이 돌아온다"도, "공중을 칠 수 있는 건 돌팔매꾼뿐"이라는 것도
-   * 어디에도 없어서 40골드가 그냥 싼 유닛으로 읽힌다 — 살지 말지를 판단할 정보 자체가
-   * 없는 버튼이었다.
-   *
-   * 왜 버튼 안에 두 줄로 넣지 않고 패널인가: 출동 바는 480px 이하에서 이름까지 접는
-   * 자리라(style.css) 설명을 넣을 폭이 없고, 세 버튼에 같은 규칙(수명·환급·상한)을
-   * 세 번 적는 것도 낭비다. 대신 이미 있는 "출동 n/6" 칩을 눌러 여는 패널로 만들면
-   * 선택 타워/소품/홈타운 패널과 **같은 자리·같은 톤**이 되고, 상시 1탭 출동 동선은
-   * 조금도 건드리지 않는다. 접근성 경로(title/aria-label)는 버튼에 따로 붙인다.
-   */
-  let allyInfoPanel!: HTMLElement;
-  let allyInfoOpen = false;
 
   // 참조 요소 (enter에서 채움)
   let waveNum!: HTMLElement;
@@ -117,8 +112,11 @@ export function createBattleHud(): Screen<GameFacade> {
   let hpNum!: HTMLElement;
   let towerNum!: HTMLElement;
   let towerPill!: HTMLElement;
+  let allyPillNum!: HTMLElement;
+  let allyPill!: HTMLButtonElement;
   /** 직전 프레임의 타워 수 — 줄어든 순간에만 경보 클래스를 붙인다 */
   let lastTowerCount = -1;
+  let lastAllyPillSig = '';
   let hpFill!: HTMLElement;
   let speedBtn!: HTMLElement;
   let autoBtn!: HTMLElement;
@@ -145,7 +143,7 @@ export function createBattleHud(): Screen<GameFacade> {
   let scArmed = false;
   let scArmTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // 홈타운 레벨업 패널 — 선택 타워/소품 패널과 같은 자리, 같은 톤, 같은 2단 확인
+  // 마을 패널 — 선택 타워/소품 패널과 같은 자리, 같은 톤. 레벨업(2단 확인) + 출동(1탭)
   let htPanel!: HTMLElement;
   let htLv!: HTMLElement;
   let htDesc!: HTMLElement;
@@ -222,6 +220,7 @@ export function createBattleHud(): Screen<GameFacade> {
       amberNum = h('span', { class: 'pill-num' });
       hpNum = h('span', { class: 'hp-num' });
       towerNum = h('span', { class: 'pill-num' });
+      allyPillNum = h('span', { class: 'pill-num' });
       hpFill = h('div', { class: 'hp-fill' });
 
       const top = h('div', { class: 'hud-top' },
@@ -244,10 +243,30 @@ export function createBattleHud(): Screen<GameFacade> {
           h('div', { class: 'pill pill--amber hud-item' },
             h('span', { class: 'pill-ico', html: amberSvg }), amberNum),
         ),
-        h('div', { class: 'hud-hp hud-item' },
-          h('span', { class: 'hp-heart', html: heartSvg }),
-          h('div', { class: 'hp-bar' }, hpFill),
+        h('div', { class: 'hud-hp' },
+          h('span', { class: 'hp-heart hud-item', html: heartSvg }),
+          h('div', { class: 'hp-bar hud-item' }, hpFill),
           hpNum,
+          /*
+           * 부족 칩 — 나가 있는 인원 n/6 + **마을 패널로 가는 상시 입구**.
+           *
+           * 6단계에서 상시 출동 바를 걷어내면서 인원 표시까지 패널 안으로 들어갔다.
+           * 그 대가가 "탭 하나 더"가 아니라 **기능의 발견 가능성 0**이었다(8단계 검증):
+           * 기본 HUD에 아군의 존재를 알리는 요소가 하나도 없고, 유일한 입구인 판 위의
+           * 움막 한 칸에는 배지도 글로우도 없다. 웨이브 중 몇 명이 나가 있는지도
+           * 화면 어디에도 없었다.
+           *
+           * 이건 출동 바가 아니다 — 종도 가격도 없고 **아무도 출동시키지 않는다**.
+           * 바로 옆 타워 수 칩과 같은 종류(상태 표시)이고, 누르면 판 위의 움막을 탭한
+           * 것과 같은 경로로 마을을 고른다(api.selectBase). 그래서 "급할 때 첫 한 명"의
+           * 동선이 2탭으로 돌아온다 — 출동 버튼 자체는 여전히 패널 안에만 있다.
+           */
+          (allyPill = h('button', {
+            class: 'pill pill--ally hud-item',
+            attrs: { type: 'button', 'aria-label': t('battle.ally.pillHint'), title: t('battle.ally.pillHint') },
+            onClick: () => api(facade)?.selectBase?.(),
+          },
+            h('span', { class: 'pill-ico', html: ALLY_ICON_SVG.clubber }), allyPillNum) as HTMLButtonElement),
         ),
       );
 
@@ -358,12 +377,12 @@ export function createBattleHud(): Screen<GameFacade> {
         h('div', { class: 'tp-btns' }, scClearBtn, scCloseBtn),
       );
 
-      // --- 홈타운 레벨업 패널 ----------------------------------------------
-      // 아군 출동이 "1탭 상시 바"인 것과 일부러 반대로 뒀다: 레벨업은 웨이브 사이에
-      // 누르는 되돌릴 수 없는 큰 결제라, 기지를 **조준해서 고른 다음** 확인까지
-      // 거치게 하는 편이 맞다(1단계 결론 그대로). 확인 단계는 소품 제거 패널과
-      // 완전히 같은 is-armed 규약을 쓴다 — 이 게임에서 패널이 손가락 밑에 열려
-      // 재탭이 그대로 결제가 된 사고가 실제로 있었기 때문이다.
+      // --- 마을 패널: 레벨업 + 아군 출동 ------------------------------------
+      // 레벨업은 웨이브 사이에 누르는 되돌릴 수 없는 큰 결제라, 기지를 **조준해서
+      // 고른 다음** 확인까지 거치게 한다. 확인 단계는 소품 제거 패널과 완전히 같은
+      // is-armed 규약을 쓴다 — 이 게임에서 패널이 손가락 밑에 열려 재탭이 그대로
+      // 결제가 된 사고가 실제로 있었기 때문이다.
+      // 출동은 같은 패널 아래쪽에 있지만 **확인 없이 1탭**이다 (위 AllyButton 주석).
       htLv = h('span', { class: 'tp-lv' });
       htStats = h('span', { class: 'tp-sub tp-sub--stats' });
       htDesc = h('span', { class: 'tp-sub' });
@@ -396,16 +415,68 @@ export function createBattleHud(): Screen<GameFacade> {
           api(facade)?.clearSelection();
         },
       });
-      // 소품 패널과 같은 이유로 패널 배경에는 hud-item을 주지 않는다 (포인터 통과)
-      htPanel = h('div', { class: 'tower-panel tower-panel--home', attrs: { style: 'display:none' } },
-        h('div', { class: 'tp-head' },
-          h('span', { class: 'tp-ico tp-ico--home', html: hometownIconSvg }),
-          h('span', { class: 'tp-name', text: t('battle.home.title') }),
-          htLv,
+      // --- 마을 패널의 출동 구역 --------------------------------------------
+      allyCountEl = h('span', { class: 'ally-count-num' });
+      allyBtns = ALL_ALLY_IDS.map((defId) => {
+        const costLabel = h('span', { class: 'ally-btn-cost' });
+        // 설명은 아래 안내 줄에서 읽는 게 기본 동선이지만, 마우스/스크린리더 경로도 같이 연다.
+        // (title은 데스크톱 호버, aria-label은 보조기기 — 둘 다 같은 문장을 쓴다)
+        const label = `${t(`ally.${defId}.name`)} — ${allyDesc(defId)} · ${allyRules()}`;
+        const el = h('button', {
+          class: 'ally-btn hud-item',
+          attrs: { type: 'button', 'aria-label': label, title: label },
+          onClick: () => api(facade)?.requestTrainAlly(defId),
+        },
+          h('span', { class: 'ally-btn-ico', html: ALLY_ICON_SVG[defId] }),
+          h('span', { class: 'ally-btn-name', text: t(`ally.${defId}.name`) }),
+          costLabel,
+        );
+        return { el, costLabel, defId };
+      });
+      /**
+       * 출동 구역만 hud-item(포인터 흡수)이다 — 패널의 나머지(정보 줄)는 그대로 통과시킨다.
+       *
+       * 패널 배경이 포인터를 삼키면 그 밑의 셀 탭이 죽는다(실측: 세로 9/40 · 가로 13/40).
+       * 그런데 출동은 **연속으로 누르는 조작**이라, 버튼 사이 여백을 스치기만 해도 탭이
+       * 캔버스로 새어 마을 선택이 풀리고 패널이 닫힌다 — 손이 가장 자주 오가는 구역에서
+       * 가장 나쁜 실패다. 그래서 이 구역만 삼키고, 정보 줄(체력/미리보기)은 통과시켜
+       * 가려진 셀을 살린다.
+       */
+      const allySection = h('div', { class: 'home-ally hud-item' },
+        h('div', { class: 'home-ally-head' },
+          h('span', { class: 'ally-count-label', text: t('battle.ally.title') }),
+          allyCountEl,
+          h('span', { class: 'tp-sub home-ally-rules', text: allyRules() }),
         ),
-        htStats,
-        htDesc,
-        h('div', { class: 'tp-btns' }, htUpBtn, htCloseBtn),
+        h('div', { class: 'ally-row' }, ...allyBtns.map((b) => b.el)),
+        // 종별 한 줄 — descKey를 화면에 실제로 띄우는 자리. 5단계의 '출동 안내 패널'을
+        // 여기로 흡수했다: 별도 패널이면 마을 패널과 배타 규칙이 어긋나고(둘 다 열릴 수
+        // 있었다) 같은 정보가 두 자리에 흩어진다.
+        ...ALL_ALLY_IDS.map((defId) =>
+          h('div', { class: 'ally-info-row' },
+            h('span', { class: 'ally-info-ico', html: ALLY_ICON_SVG[defId] }),
+            h('span', { class: 'ally-info-name', text: t(`ally.${defId}.name`) }),
+            h('span', { class: 'ally-info-desc', text: allyDesc(defId) }),
+          ),
+        ),
+      );
+
+      // 소품 패널과 같은 이유로 패널 배경에는 hud-item을 주지 않는다 (포인터 통과).
+      // 마을 쪽(.home-main)과 출동 쪽(.home-ally)을 감싸 두 덩어리로 나눈 이유는 가로모드다:
+      // 세로로 다 쌓으면 390px 높이에서 손패까지 밀려 내려가 화면 밖으로 나간다(실측).
+      // 두 덩어리면 가로에서 나란히 눕고 세로에서는 그대로 위아래로 쌓인다.
+      htPanel = h('div', { class: 'tower-panel tower-panel--home', attrs: { style: 'display:none' } },
+        h('div', { class: 'home-main' },
+          h('div', { class: 'tp-head' },
+            h('span', { class: 'tp-ico tp-ico--home', html: hometownIconSvg }),
+            h('span', { class: 'tp-name', text: t('battle.home.title') }),
+            htLv,
+          ),
+          htStats,
+          htDesc,
+          h('div', { class: 'tp-btns' }, htUpBtn, htCloseBtn),
+        ),
+        allySection,
       );
 
       // --- 웨이브 시작 버튼 ------------------------------------------------
@@ -425,59 +496,11 @@ export function createBattleHud(): Screen<GameFacade> {
         onClick: () => api(facade)?.requestRefresh(),
       }, h('span', { class: 'refresh-ico', text: '🔄' }), refreshLabel);
 
-      // --- 출동 바 (아군 부족원) -------------------------------------------
-      allyCountEl = h('span', { class: 'ally-count-num' });
-      allyBtns = ALL_ALLY_IDS.map((defId) => {
-        const costLabel = h('span', { class: 'ally-btn-cost' });
-        // 설명은 패널에서 읽는 게 기본 동선이지만, 마우스/스크린리더 경로도 같이 연다.
-        // (title은 데스크톱 호버, aria-label은 보조기기 — 둘 다 같은 문장을 쓴다)
-        const label = `${t(`ally.${defId}.name`)} — ${allyDesc(defId)} · ${allyRules()}`;
-        const el = h('button', {
-          class: 'ally-btn hud-item',
-          attrs: { type: 'button', 'aria-label': label, title: label },
-          onClick: () => api(facade)?.requestTrainAlly(defId),
-        },
-          h('span', { class: 'ally-btn-ico', html: ALLY_ICON_SVG[defId] }),
-          h('span', { class: 'ally-btn-name', text: t(`ally.${defId}.name`) }),
-          costLabel,
-        );
-        return { el, costLabel, defId };
-      });
-      // 안내 패널 본문 — 종별 한 줄 + 세 종이 공유하는 규칙 한 줄
-      allyInfoPanel = h('div', { class: 'tower-panel tower-panel--ally', attrs: { style: 'display:none' } },
-        h('div', { class: 'tp-head' },
-          h('span', { class: 'tp-name', text: t('battle.ally.infoTitle') }),
-        ),
-        ...ALL_ALLY_IDS.map((defId) =>
-          h('div', { class: 'ally-info-row' },
-            h('span', { class: 'ally-info-ico', html: ALLY_ICON_SVG[defId] }),
-            h('span', { class: 'ally-info-name', text: t(`ally.${defId}.name`) }),
-            h('span', { class: 'ally-info-desc', text: allyDesc(defId) }),
-          ),
-        ),
-        h('span', { class: 'tp-sub', text: allyRules() }),
-      );
-      const allyInfoBtn = h('button', {
-        class: 'ally-count hud-item',
-        attrs: { type: 'button', title: t('battle.ally.infoTitle'), 'aria-expanded': 'false' },
-        onClick: () => {
-          allyInfoOpen = !allyInfoOpen;
-          allyInfoPanel.style.display = allyInfoOpen ? '' : 'none';
-          allyInfoBtn.setAttribute('aria-expanded', allyInfoOpen ? 'true' : 'false');
-        },
-      },
-        h('span', { class: 'ally-count-label', text: t('battle.ally.title') }),
-        allyCountEl,
-      );
-      const allyRow = h('div', { class: 'ally-row' }, allyInfoBtn, ...allyBtns.map((b) => b.el));
-
       const bottom = h('div', { class: 'hud-bottom' },
         panelHost,
         scPanel,
         htPanel,
-        allyInfoPanel,
         callWaveBtn,
-        allyRow,
         h('div', { class: 'hand-row hud-item' }, handHost, refreshBtn),
       );
 
@@ -506,7 +529,7 @@ export function createBattleHud(): Screen<GameFacade> {
       handSig = '';
       allyBtns = [];
       lastAllySig = '';
-      allyInfoOpen = false;
+      lastAllyPillSig = '';
     },
 
     update(facade) {
@@ -519,6 +542,13 @@ export function createBattleHud(): Screen<GameFacade> {
       setText(goldNum, fmt(s.gold));
       setText(amberNum, fmt(s.amberEarned));
       setText(hpNum, `${s.baseHp}`);
+      // 부족 칩 — 나가 있는 인원. 상한에 닿으면 색이 바뀐다(패널 안 표시와 같은 규약)
+      const allyPillSig = `${s.allies.length}/${s.allyCap}`;
+      if (allyPillSig !== lastAllyPillSig) {
+        lastAllyPillSig = allyPillSig;
+        setText(allyPillNum, allyPillSig);
+        cls(allyPill, 'is-full', s.allies.length >= s.allyCap);
+      }
       const towerCount = s.towers.length;
       if (towerCount !== lastTowerCount) {
         setText(towerNum, `${towerCount}`);
@@ -558,18 +588,6 @@ export function createBattleHud(): Screen<GameFacade> {
         c.setDisabled(cost > s.gold);
       });
       setText(refreshLabel, s.refreshCost === 0 ? t('common.free') : fmt(s.refreshCost));
-
-      // 출동 바 — 비용은 나가 있는 인원 수에 따라 오르므로 인원이 바뀔 때만 갱신하고,
-      // 골드는 매 프레임 바뀌니 비활성 여부는 항상 다시 본다
-      const allySig = `${s.allies.length}/${s.allyCap}`;
-      if (allySig !== lastAllySig) {
-        lastAllySig = allySig;
-        setText(allyCountEl, allySig);
-        cls(allyCountEl, 'is-full', s.allies.length >= s.allyCap);
-        for (const btn of allyBtns) setText(btn.costLabel, fmt(b.sim.allyCost(btn.defId)));
-      }
-      // canTrainAlly는 상한·골드·종료 여부를 한 번에 본다 (sim이 커맨드를 거부하는 판정 그대로)
-      for (const btn of allyBtns) cls(btn.el, 'is-disabled', !b.sim.canTrainAlly(btn.defId));
 
       // 웨이브 시작 버튼 (prep 중에만)
       const prep = s.phase === 'prep';
@@ -640,20 +658,44 @@ export function createBattleHud(): Screen<GameFacade> {
         cls(scDesc, 'is-warn', short > 0 || scArmed);
       }
 
-      // 홈타운 레벨업 패널 (타워/소품 패널과 상호배타 — placement가 보장)
+      // 마을 패널: 레벨업 + 출동 (타워/소품 패널과 상호배타 — placement가 보장)
       const homeSel = over ? false : (b.selectedBase?.() ?? false);
       if (homeSel !== lastSelBase) {
         lastSelBase = homeSel;
         htPanel.style.display = homeSel ? '' : 'none';
         disarmBase(); // 패널이 닫히거나 새로 열리면 확인 무장은 무효
+        lastAllySig = ''; // 다시 열릴 때 인원/가격을 무조건 한 번 다시 쓴다
+        if (!homeSel) b.reportPanelTop?.(null); // 닫히면 판이 제자리로 돌아온다
       }
       if (homeSel) {
+        // 이 패널이 판을 어디부터 덮는지 게임 쪽에 알린다 — 카메라가 그만큼 비켜선다
+        // (types.BattleUiApi.reportPanelTop). 레벨업 미리보기 줄이 사라지는 등
+        // 내용에 따라 높이가 변하므로 열려 있는 동안 매 프레임 다시 잰다.
+        b.reportPanelTop?.(htPanel.getBoundingClientRect().top);
         setText(htLv, t('battle.lvOf', { n: s.baseLevel, m: s.baseLevelMax }));
-        // 지금 성능을 항상 보여 준다 — 레벨업이 무엇을 사는지 비교할 기준이 화면에 있어야 한다
+        // 지금 성능을 항상 보여 준다 — 레벨업이 무엇을 사는지 비교할 기준이 화면에 있어야 한다.
+        // **출격 거리도 여기 있다**: 이 값이 없으면 마을 레벨업이 아군까지 강화한다는
+        // 설계 의도(allies.ts 규칙 2)가 화면 어디에도 없다
         setText(
           htStats,
-          t('battle.home.stats', { hp: `${s.baseHp}/${s.baseHpMax}`, r: b.sim.baseRange().toFixed(1) }),
+          t('battle.home.stats', {
+            hp: `${s.baseHp}/${s.baseHpMax}`,
+            r: b.sim.baseRange().toFixed(1),
+            s: b.sim.allySortieRange().toFixed(1),
+          }),
         );
+        // 출동 버튼 — 비용은 나가 있는 인원 수에 따라 오르므로 인원이 바뀔 때만 갱신하고,
+        // 골드는 매 프레임 바뀌니 비활성 여부는 항상 다시 본다.
+        // (패널이 닫혀 있으면 이 블록에 오지 않는다 — 안 보이는 DOM을 매 프레임 만지지 않는다)
+        const allySig = `${s.allies.length}/${s.allyCap}`;
+        if (allySig !== lastAllySig) {
+          lastAllySig = allySig;
+          setText(allyCountEl, allySig);
+          cls(allyCountEl, 'is-full', s.allies.length >= s.allyCap);
+          for (const btn of allyBtns) setText(btn.costLabel, fmt(b.sim.allyCost(btn.defId)));
+        }
+        // canTrainAlly는 상한·골드·종료 여부를 한 번에 본다 (sim이 커맨드를 거부하는 판정 그대로)
+        for (const btn of allyBtns) cls(btn.el, 'is-disabled', !b.sim.canTrainAlly(btn.defId));
         const cost = b.sim.baseUpgradeCost();
         const maxed = cost === null;
         const short = maxed ? 0 : cost - s.gold;
@@ -685,6 +727,7 @@ export function createBattleHud(): Screen<GameFacade> {
                       hp: `${next.hpMax}`,
                       d: `${next.dmg}`,
                       r: next.range.toFixed(1),
+                      s: next.sortie.toFixed(1),
                     })
                   : t('battle.home.desc'),
         );

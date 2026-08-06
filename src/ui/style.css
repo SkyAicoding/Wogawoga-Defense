@@ -92,6 +92,21 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .inline-ico { width: 22px; height: 22px; display: inline-flex; vertical-align: -4px; }
 .pill--gold .pill-num { color: var(--gold); }
 .pill--amber .pill-num { color: var(--amber); }
+/*
+ * 부족 칩 — 나가 있는 인원 + 마을 패널 입구 (8단계). 아군 톤(한랭색)이라
+ * 타워 수 칩(따뜻한 색)과 한눈에 갈린다. 정원이 차면 색으로 알린다.
+ */
+/*
+ * HP 줄에 얹히므로 상단 칩들보다 한 치수 작다 — 줄 높이(하트 30px)를 넘기지 않는다.
+ * 대신 **터치 타깃은 44px를 지킨다**: 보이는 높이는 32px로 두고 ::after로 위아래 6px씩
+ * 넓혀 32+12 = 44px를 만든다 (레이아웃 높이는 그대로라 상단 HUD 예약이 안 커진다).
+ */
+.pill--ally { position: relative; padding: 2px 10px 2px 4px; min-height: 32px; gap: 4px; flex: 0 0 auto; }
+.pill--ally::after { content: ''; position: absolute; inset: -6px -4px; }
+.pill--ally .pill-ico { width: 22px; height: 22px; }
+.pill--ally .pill-num { color: #9fdcf7; font-size: 0.88rem; }
+.pill--ally.is-full .pill-num { color: #ff9d6a; }
+.pill--ally:active { transform: scale(0.94); }
 /* 서 있는 타워 수 — 줄면 붉게 한 번 튄다 (타워를 잃은 순간의 유일한 HUD 신호) */
 .pill--tower .pill-num { color: #ffe3c2; }
 .pill--tower-drop { animation: tower-drop 0.7s ease-out 1; }
@@ -314,14 +329,28 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .callwave { min-height: 58px; flex-direction: column; gap: 0; padding: 6px 26px; animation: battle-glow 1.6s ease-in-out infinite; }
 .callwave-main { font-size: 1.2rem; }
 .callwave-sub { font-size: 0.75rem; font-weight: 700; opacity: 0.8; }
-/* 출동 바 (아군 부족원) — 손패 바로 위, 1탭 출동. 터치 타깃 44px 이상 유지 */
-.ally-row { display: flex; gap: 8px; width: 100%; align-items: stretch; }
-.ally-count {
-  flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  min-width: 48px; padding: 2px 6px; border: var(--bd); border-radius: var(--r-md);
-  background: rgba(20, 14, 8, 0.78); box-shadow: var(--pop);
+/*
+ * 출동 구역 (아군 부족원) — **마을 패널 안**에 산다 (6단계: 사용자 요청으로 상시 바 제거).
+ * 손패 위 상시 바였을 때의 1탭 동선은 잃었지만, 패널이 닫히지 않으므로 연속 출동은
+ * 그대로 1탭이다. 터치 타깃 44px 이상은 어느 배치에서도 유지한다.
+ */
+/* 마을 쪽(정보 + 레벨업) — 세로에서는 위, 가로에서는 왼쪽 */
+.home-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.home-ally {
+  display: flex; flex-direction: column; gap: 5px; min-width: 0;
+  padding-top: 6px; border-top: 2px solid rgba(0, 0, 0, 0.28);
 }
-.ally-count-label { font-size: 0.62rem; font-weight: 800; color: var(--cream); opacity: 0.75; }
+/* 마을 패널은 정보가 많다 — 다른 패널(8px)보다 촘촘히 쌓아 판을 덜 가린다 */
+.tower-panel--home { gap: 6px; }
+.home-ally-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; min-width: 0; }
+/*
+ * 규칙 한 줄은 **접지 않고 제 줄을 갖는다**. 한 줄에 욱여넣었더니 390px에서
+ * "…살아 돌아오면 정…"으로 잘려 환급률과 동시 상한이 통째로 사라졌다 —
+ * 세 종에 공통으로 걸리는 규칙이라 여기서 잘리면 읽을 곳이 어디에도 없다.
+ */
+.home-ally-rules { flex: 1 1 100%; min-width: 0; font-size: 0.68rem; line-height: 1.3; }
+.ally-row { display: flex; gap: 8px; width: 100%; align-items: stretch; }
+.ally-count-label { font-size: 0.72rem; font-weight: 900; color: var(--cream); opacity: 0.8; }
 .ally-count-num { font-size: 0.9rem; font-weight: 900; color: #9fdcf7; }
 /* 상한에 닿으면 "왜 버튼이 안 눌리는가"의 답이 여기 있어야 한다 */
 .ally-count-num.is-full { color: #ff9d6a; }
@@ -339,7 +368,13 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .ally-btn-name { font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ally-btn-cost { font-size: 0.82rem; font-weight: 900; color: var(--gold); flex: 0 0 auto; }
 .ally-btn.is-disabled { filter: grayscale(0.8) brightness(0.55); }
-.screen--battle .ally-btn.is-disabled { pointer-events: none; }
+/*
+ * 비활성 출동 버튼은 **포인터를 삼킨다** (다른 비활성 버튼과 반대다).
+ * 상시 바 시절에는 통과시키는 게 맞았다 — 판 위에 영구히 떠 있으니 그 밑 셀을 살려야 했다.
+ * 지금은 마을 패널 안이라 통과시키면 탭이 캔버스에 닿아 **마을 선택이 풀리고 패널이 닫힌다**.
+ * 인원이 찼거나 골드가 모자라 눌러 본 사람이 그 벌로 패널을 잃는 것은 명백히 나쁘다.
+ */
+.screen--battle .ally-btn.is-disabled { pointer-events: auto; cursor: default; }
 /*
  * 좁은 화면(모바일 세로)에서는 이름을 접는다.
  * 390px 기준 버튼 폭이 98px라 "몽둥이꾼"이 "몽.."으로 잘렸는데, 잘린 두 글자는
@@ -350,15 +385,32 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   .ally-btn-name { display: none; }
   .ally-btn-ico { width: 24px; height: 24px; }
   .ally-btn { gap: 6px; }
+  /* 버튼에서 이름이 접히는 폭이다 — 그만큼 아래 설명 줄이 유일한 정보원이 된다 */
+  .ally-info-desc { font-size: 0.68rem; }
 }
 /*
- * 출동 안내 패널 — "출동 n/6" 칩을 눌러 여는 설명. 선택 타워/소품/홈타운 패널과
- * 같은 .tower-panel 틀을 쓰므로 자리·여백·톤이 그대로 맞는다.
- * 이름이 접히는 좁은 화면에서도 여기서는 전부 읽을 수 있어야 하므로 접지 않는다.
+ * 종별 설명 세 줄 — 5단계의 '출동 안내 패널'을 마을 패널 안으로 흡수한 것.
+ * 버튼은 좁은 화면에서 이름까지 접으므로(아래 미디어 쿼리) 설명을 읽을 자리가 여기뿐이다.
+ * 가로모드(압축 HUD)에서는 세로 예산이 없어 접고, 그때는 버튼의 title/aria-label이 남는다.
  */
-.tower-panel--ally { gap: 4px; }
-.ally-info-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.ally-info-ico { width: 22px; height: 22px; flex: 0 0 auto; }
+.ally-info-row { display: flex; align-items: center; gap: 7px; min-width: 0; line-height: 1.2; }
+/*
+ * ── 8단계: 접는 기준을 **방향이 아니라 세로 예산**으로 바꿨다 ────────────────
+ * 예전에는 가로모드(orientation: landscape + max-height 560)에서만 접었는데,
+ * 세로로도 짧은 폰(360×640 · 320×568)에서는 마을 패널이 297~321px가 되어
+ * **상단 HUD와 맞닿아 판이 한 픽셀도 안 남았다** — 마을 셀도 봉수대도 볼 수 없고,
+ * 카메라 비켜서기(camera.setLift)로도 비켜설 자리가 없다(실측 8단계 QA).
+ * 그래서 높이 700px 이하면 방향과 무관하게 종별 설명 세 줄을 접는다.
+ *
+ * **규칙 줄(.home-ally-rules)은 반대로 되살렸다.** 예전 가로 규칙은 그것까지 접어
+ * "수명 20초 · 환급 50% · 최대 6명"이 title/aria-label에만 남았는데, 그건 살지 말지를
+ * 정하는 정보이고 터치 기기에는 읽을 경로가 없다. 세 줄(약 70px)을 접어서 번 자리에
+ * 한 줄(약 30px)을 되돌린다 — 순증은 여전히 −40px다.
+ */
+@media (max-height: 700px) {
+  .ally-info-row { display: none; }
+}
+.ally-info-ico { width: 18px; height: 18px; flex: 0 0 auto; }
 .ally-info-ico svg { width: 100%; height: 100%; }
 .ally-info-name { font-size: 0.76rem; font-weight: 900; color: #9fdcf7; flex: 0 0 auto; }
 .ally-info-desc {
@@ -571,7 +623,28 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   .ally-btn { min-height: 44px; gap: 4px; }
   .ally-btn-name { display: none; }
   .ally-btn-ico { width: 22px; height: 22px; }
-  .ally-count { min-width: 42px; }
+  .home-ally { padding-top: 6px; gap: 5px; }
+  /*
+   * 마을 패널: 가로에서는 **두 칸**이다 — 왼쪽 마을(정보+레벨업), 오른쪽 출동.
+   * 전부 세로로 쌓으면 390px 높이에서 패널만 219px가 되어 손패가 화면 밖으로
+   * 밀려났고(실측), 반대로 자식 다섯을 그냥 한 줄로 눕히면 글자가 세로로 접혔다.
+   * 두 덩어리로 나누면 각 칸 안에서는 세로 쌓기가 유지돼 둘 다 피한다.
+   * (`.tower-panel { flex-direction: row }`가 이 블록 뒤에 있어 같은 특이도로는
+   *  지므로 .screen--battle 을 붙여 이긴다)
+   */
+  .screen--battle .tower-panel--home {
+    flex-direction: row; align-items: stretch; gap: 10px; padding: 6px 10px;
+  }
+  .screen--battle .tower-panel--home .home-main { flex: 1 1 56%; gap: 5px; }
+  .screen--battle .tower-panel--home .tp-ico { width: 26px; height: 26px; }
+  .screen--battle .tower-panel--home .tp-name { font-size: 0.92rem; }
+  /* 한 줄에 들어가는 길이라 접지 않는다 — 접히면 패널이 두 배로 높아진다 */
+  .screen--battle .tower-panel--home .tp-sub { font-size: 0.72rem; white-space: nowrap; }
+  .home-ally {
+    flex: 1 1 44%; justify-content: center;
+    padding-top: 0; padding-left: 10px;
+    border-top: none; border-left: 2px solid rgba(0, 0, 0, 0.28);
+  }
   .callwave { min-height: 46px; padding: 2px 20px; }
   .callwave-main { font-size: 1.05rem; }
   .tower-panel { flex-direction: row; align-items: center; gap: 10px; padding: 8px 12px; }
@@ -597,6 +670,29 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   /* 타이틀: 장식 축소 */
   .title-bone { width: min(20vw, 110px); }
   .title-fire { width: min(14vw, 84px); }
+}
+
+/*
+ * ── 8단계: 아주 낮은 화면(≤620px)에서는 마을 패널을 **두 칸**으로 눕힌다 ──────
+ * 가로모드에서 쓰던 배치를 세로에도 적용한다 — 방향이 아니라 세로 예산의 문제이기
+ * 때문이다. 320×568 실측: 세로로 쌓으면 패널이 286px(화면의 50%)가 되고 상단이
+ * y=96까지 올라와 **상단 HUD 예약(118)보다 위**에 놓인다. 그러면 카메라가 비켜설
+ * 자리 자체가 없어(battlecontroller.updatePanelLift의 상한) 마을도 봉수대도 못 본다.
+ * 두 칸이면 높이가 max(마을칸, 출동칸)이라 절반 가까이 줄어 비켜서기가 작동한다.
+ */
+@media (max-height: 620px) {
+  .screen--battle .tower-panel--home {
+    flex-direction: row; align-items: stretch; gap: 8px; padding: 6px 10px;
+  }
+  .screen--battle .tower-panel--home .home-main { flex: 1 1 56%; gap: 5px; min-width: 0; }
+  .screen--battle .tower-panel--home .tp-ico { width: 26px; height: 26px; }
+  .screen--battle .tower-panel--home .tp-name { font-size: 0.92rem; }
+  .screen--battle .tower-panel--home .tp-btn { min-width: 64px; }
+  .screen--battle .tower-panel--home .home-ally {
+    flex: 1 1 44%; justify-content: center;
+    padding-top: 0; padding-left: 8px;
+    border-top: none; border-left: 2px solid rgba(0, 0, 0, 0.28);
+  }
 }
 
 /* 저모션 선호 시 장식 애니메이션 축소 */

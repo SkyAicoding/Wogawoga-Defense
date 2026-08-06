@@ -15,7 +15,17 @@ import {
   enemyBrawlDmgFor,
 } from '@/data/balance';
 import { createBattle } from '@/sim/battle';
-import { allyDefs, enemyDefs, eventsOf, options, runTicks, stageDef, towerDefs, wave } from './fixtures';
+import {
+  allyDefs,
+  baseLevels,
+  enemyDefs,
+  eventsOf,
+  options,
+  runTicks,
+  stageDef,
+  towerDefs,
+  wave,
+} from './fixtures';
 
 /** 적을 죽이지 못하는 타워 — 관찰 대상(공성/봉쇄)만 남기려고 화력을 지운다 */
 function tinyTier(): { dmg: number; cooldownTicks: number; range: number; cost: number } {
@@ -170,6 +180,166 @@ describe('역주행과 출격 한계선 (규칙 1·2)', () => {
     for (let i = 1; i < sorted.length; i++) {
       expect(sorted[i]!.holdDist).toBeGreaterThan(sorted[i - 1]!.holdDist);
     }
+  });
+
+  /**
+   * 규칙 2) 한계선은 마을 레벨의 함수다 — 이 묶음이 **6단계에서 산 것**을 잠근다.
+   * 목 테이블의 sortie를 Lv1 6.0 / Lv2 8.0으로 두고 잰다 (실제 곡선 값과 무관하게
+   * "레벨이 올라가면 더 나간다"만 본다 — 곡선의 실제 다섯 숫자는 여기 박지 않는다).
+   *
+   * 경로를 20타일로 늘린 이유(기본 픽스처는 9타일): 규칙 2-c의 경로 길이 상한이
+   * `max(6.0, 경로×0.5)`라 9타일 경로에서는 상한이 6.0에 걸려 Lv2의 8.0이 6.0으로 깎인다.
+   * 그러면 이 묶음이 재려던 "레벨업하면 더 나간다"가 아니라 상한 규칙을 재게 된다.
+   * 20타일이면 상한이 10.0이라 6.0도 8.0도 깎이지 않는다 — 상한 자체는 아래
+   * '경로가 짧으면…' 항목에서 따로 잰다.
+   */
+  const LEVEL_PATH_LEN = 20;
+
+  function levelSim(spawnDelay = 100000): BattleSim {
+    return createBattle(
+      options({
+        deck: ['spear'],
+        stage: stageDef({
+          startGold: 100000,
+          baseHp: 9999,
+          waveCount: 3,
+          gridW: LEVEL_PATH_LEN + 1,
+          layout: Array.from({ length: 5 }, () => 'o'.repeat(LEVEL_PATH_LEN + 1)),
+          paths: [[{ x: 0, z: 2 }, { x: LEVEL_PATH_LEN, z: 2 }]],
+          baseCell: { x: LEVEL_PATH_LEN, z: 2 },
+        }),
+        enemyDefs: enemyDefs({ raptor: { hp: 1_000_000 } }),
+        towerDefs: towerDefs({ spear: { tiers: Array.from({ length: 5 }, () => tinyTier()) } }),
+        allyDefs: allyDefs(),
+        baseLevels: baseLevels([{ sortie: 6 }, { sortie: 8 }, { sortie: 8 }]),
+        // 기본은 적을 내보내지 않는다(delay가 크다) — 걷는 거리만 재는 실험이라
+        // prep이 저절로 끝나 스폰된 적이 아군을 붙잡으면 무엇을 쟀는지 알 수 없어진다
+        waves: [
+          wave([{ enemyId: 'raptor', count: 1, intervalTicks: 0, delayTicks: spawnDelay }]),
+        ],
+      }),
+    );
+  }
+
+  it('마을 레벨이 오르면 한계선이 멀어진다 (다음 출동)', () => {
+    const sim = levelSim();
+    expect(sim.allySortieRange()).toBe(6);
+    expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
+    expect(sim.allySortieRange()).toBe(8);
+    train(sim);
+    runTicks(sim, 300); // 8타일 = 240틱 (수명 600틱 안)
+    // 목 경로 길이 20 — Lv2면 dist 12 = 셀 (12,2)까지 나간다 (Lv1이면 14)
+    expect(sim.state.allies[0]!.dist).toBeCloseTo(LEVEL_PATH_LEN - 8, 5);
+    expect(sim.state.allies[0]!.x).toBeCloseTo(12, 5);
+  });
+
+  it('규칙 2-b) 이미 나가 있는 아군도 레벨업 즉시 더 나아간다', () => {
+    const sim = levelSim();
+    train(sim);
+    runTicks(sim, 200);
+    const a = sim.state.allies[0]!;
+    expect(a.dist).toBeCloseTo(LEVEL_PATH_LEN - 6, 5); // Lv1 한계선에 멈춰 있다
+    expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
+    // 레벨업 그 틱에 목표가 갱신되고(유도값), 이후 계속 걸어 나간다
+    runTicks(sim, 1);
+    expect(sim.state.allies[0]!.holdDist).toBeCloseTo(LEVEL_PATH_LEN - 8, 5);
+    runTicks(sim, 100);
+    expect(sim.state.allies[0]!.dist).toBeCloseTo(LEVEL_PATH_LEN - 8, 5);
+    expect(sim.state.allies[0]!.x).toBeCloseTo(12, 5);
+  });
+
+  it('규칙 2-b) 대기 슬롯 간격은 새 한계선을 기준으로 다시 깔린다', () => {
+    const sim = levelSim();
+    for (let i = 0; i < ALLY_MAX_ACTIVE; i++) expect(train(sim)).toBe(true);
+    runTicks(sim, 200);
+    expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
+    runTicks(sim, 100);
+    const sorted = [...sim.state.allies].sort((p, q) => p.slot - q.slot);
+    // 줄 전체가 통째로 앞으로 옮겨졌고, 줄 모양(0.5타일 간격)은 그대로다
+    expect(sorted[0]!.dist).toBeCloseTo(LEVEL_PATH_LEN - 8, 5);
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i]!.dist - (sorted[i - 1] as { dist: number }).dist).toBeCloseTo(0.5, 5);
+    }
+  });
+
+  it('교전 중인 근접 아군은 레벨업으로도 앞으로 가지 않는다 (붙잡은 적을 놓지 않는다)', () => {
+    const sim = levelSim(0);
+    sim.applyCommand({ type: 'callWave' });
+    train(sim);
+    runTicks(sim, 400); // 한계선에서 적을 붙잡고 교전 중
+    const a = sim.state.allies[0]!;
+    expect(a.targetId).toBeGreaterThanOrEqual(0);
+    const held = a.dist;
+    expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
+    runTicks(sim, 60);
+    const after = sim.state.allies[0]!;
+    expect(after.targetId).toBeGreaterThanOrEqual(0);
+    expect(after.dist).toBeCloseTo(held, 5); // 그 자리에 그대로 서 있다
+  });
+
+  it('출격 지점 조회가 경로마다 실제 정지 지점을 준다 (화면 표식의 출처)', () => {
+    const sim = levelSim();
+    const p0 = sim.allySortiePoints();
+    expect(p0).toHaveLength(1);
+    expect(p0[0]!.x).toBeCloseTo(LEVEL_PATH_LEN - 6, 5);
+    expect(p0[0]!.z).toBeCloseTo(2, 5);
+    sim.applyCommand({ type: 'upgradeBase' });
+    expect(sim.allySortiePoints()[0]!.x).toBeCloseTo(LEVEL_PATH_LEN - 8, 5);
+    // 실제로 걸어간 아군이 그 지점에 선다 — 표식과 규칙이 같은 출처를 쓴다
+    train(sim);
+    runTicks(sim, 300);
+    expect(sim.state.allies[0]!.x).toBeCloseTo(sim.allySortiePoints()[0]!.x, 5);
+  });
+
+  /**
+   * 규칙 2-c) 경로가 짧으면 표의 값을 다 쓰지 못한다 (balance.ALLY_SORTIE_PATH_LIMIT).
+   * 표의 값이 절대 타일 수라, 상한이 없으면 짧은 경로에서 만렙 아군이 스폰 앞까지 걸어가
+   * 규칙 2가 막으려던 입구 요격이 그대로 일어난다.
+   */
+  function limitSim(pathLen: number, sortie: number): BattleSim {
+    return createBattle(
+      options({
+        deck: ['spear'],
+        stage: stageDef({
+          startGold: 100000,
+          baseHp: 9999,
+          waveCount: 3,
+          gridW: pathLen + 1,
+          layout: Array.from({ length: 5 }, () => 'o'.repeat(pathLen + 1)),
+          paths: [[{ x: 0, z: 2 }, { x: pathLen, z: 2 }]],
+          baseCell: { x: pathLen, z: 2 },
+        }),
+        enemyDefs: enemyDefs({ raptor: { hp: 1_000_000 } }),
+        towerDefs: towerDefs({ spear: { tiers: Array.from({ length: 5 }, () => tinyTier()) } }),
+        allyDefs: allyDefs(),
+        baseLevels: baseLevels([{ sortie }, { sortie }, { sortie }]),
+        waves: [wave([{ enemyId: 'raptor', count: 1, intervalTicks: 0, delayTicks: 100000 }])],
+      }),
+    );
+  }
+
+  it('규칙 2-c) 경로가 짧으면 한계선이 경로 절반으로 깎인다 (입구 요격 금지)', () => {
+    // 경로 24 → 상한 12.0이라 표의 20이 12로 깎인다. 아군은 경로의 마을 쪽 절반 안에 선다
+    const sim = limitSim(24, 20);
+    expect(sim.allySortieRange()).toBeCloseTo(12, 5);
+    train(sim);
+    runTicks(sim, 500); // 12타일 = 313틱 (수명 600틱 안)
+    const a = sim.state.allies[0]!;
+    expect(a.dist).toBeCloseTo(12, 5); // 스폰까지 절반이 남는다
+    // 표식도 같은 값을 쓴다 — 화면과 규칙이 갈라질 자리가 없다
+    expect(sim.allySortiePoints()[0]!.x).toBeCloseTo(12, 5);
+  });
+
+  it('규칙 2-c) 상한은 표의 값보다 크면 아무 일도 하지 않는다', () => {
+    // 경로 40 → 상한 20.0. 표의 12는 그대로 나간다 (긴 경로 스테이지)
+    const sim = limitSim(40, 12);
+    expect(sim.allySortieRange()).toBeCloseTo(12, 5);
+  });
+
+  it('규칙 2-c) Lv1 6.0은 어떤 경로에서도 깎이지 않는다 (모든 기준선의 원점)', () => {
+    // 경로 9 → 절반은 4.5지만 하한 ALLY_SORTIE_RANGE가 6.0을 지킨다
+    const sim = limitSim(9, ALLY_SORTIE_RANGE);
+    expect(sim.allySortieRange()).toBeCloseTo(ALLY_SORTIE_RANGE, 5);
   });
 
   it('앞줄이 빠지면 다음 출동이 그 자리를 메운다 (줄에 구멍이 남지 않는다)', () => {

@@ -273,6 +273,13 @@ export interface BaseLevelDef {
   cooldownTicks: number;
   /** 사거리 (타일) — 기지 셀 중심 ↔ 적 중심 */
   range: number;
+  /**
+   * **아군 부족원 출격 한계선** (타일, 경로 호장 기준) — 기지에서 이만큼 앞까지만 나간다.
+   * 마을이 파는 네 번째 물건이다: 체력·공격력·사거리는 마을 자신을 키우지만
+   * 이 값은 **마을 밖으로 나가는 부족원**을 키운다 (src/sim/allies.ts 규칙 2).
+   * 왜 이 표에 있는지는 src/data/hometown.ts, 소비처는 src/sim/allies.ts.
+   */
+  sortie: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -884,11 +891,19 @@ export interface BattleSim {
   canUpgradeBase(): boolean;
   /** 현재 홈타운 사거리 (타일) — 선택 시 사거리 링 표시용 */
   baseRange(): number;
+  /** 현재 마을 레벨의 아군 출격 한계선 (타일) — 마을 패널 표기용 */
+  allySortieRange(): number;
   /**
-   * 다음 레벨이 주는 최대 HP/공격력/사거리 (최대 레벨이면 null).
+   * 지금 아군이 멈춰 서는 지점 (지상 경로마다 하나, 셀 연속 좌표).
+   * 한계선은 **경로 호장** 기준이라 기지 중심의 원이 아니다 — 화면 표식은 반드시
+   * sim이 실제로 쓰는 경로에서 뽑아야 그림과 규칙이 어긋나지 않는다.
+   */
+  allySortiePoints(): Vec2[];
+  /**
+   * 다음 레벨이 주는 최대 HP/공격력/사거리/출격 한계선 (최대 레벨이면 null).
    * 비가역 결제라 "무엇을 사는가"가 확인 단계 **전에** 보여야 한다.
    */
-  baseNextStats(): { hpMax: number; dmg: number; range: number } | null;
+  baseNextStats(): { hpMax: number; dmg: number; range: number; sortie: number } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -937,8 +952,26 @@ export interface BattleUiApi {
   selectedScenery(): Vec2 | null;
   /** 홈타운(기지 셀)이 선택되어 있는가 — 레벨업 패널 표시용 */
   selectedBase(): boolean;
+  /**
+   * 마을을 고른다 (= 판 위의 움막을 탭한 것과 같다). HUD의 부족 칩이 부른다 —
+   * 마을 패널이 출동의 유일한 입구인데 판 위에는 아무 표시도 없어서, 상시 HUD에
+   * "여기 있다"고 알리는 자리가 필요하다 (8단계 검증 지적). 선택 사항이다.
+   */
+  selectBase?(): void;
   /** 홈타운 레벨업 요청 (최대 레벨/골드 부족이면 무시) */
   requestUpgradeBase(): void;
+  /**
+   * **하단 패널이 판을 어디부터 덮는지** 알린다 (화면 y, 닫혔으면 null).
+   *
+   * 마을 패널은 레벨업과 출동을 한 패널에 담아 하단 HUD 예약을 넘어서므로,
+   * 그대로 두면 마을 셀과 출격 봉수대가 자기 패널 뒤로 숨는다(8단계 검증 실측:
+   * 15개 뷰포트 조합 중 마을 12개·표식 8개, 좁은 폰은 전부). 게임 쪽은 이 값을 받아
+   * 카메라를 그만큼 위로 비켜세운다(render/camera.ts setLift).
+   * UI가 스스로 카메라를 만지지 않는 이유는 "얼마나 비켜야 하는가"가 마을 셀의
+   * 투영 좌표에 달려 있어 게임 쪽만 알 수 있기 때문이다.
+   * 선택 사항이다 — 목 UI(debug/labs/uilab)처럼 판이 없는 구현은 안 넣어도 된다.
+   */
+  reportPanelTop?(screenY: number | null): void;
   /** 선택된 소품 셀 제거 요청 (골드 부족/미선택이면 무시) */
   requestClearScenery(): void;
   /**

@@ -2,7 +2,7 @@
  * E2E 스모크 — 실제 빌드에서 타이틀→로비→전투 플로우, 테스트 훅(?test=1)으로
  * 배치/웨이브 빨리감기, 콘솔 에러 0 + 드로우콜 예산(≤60) 어서션.
  */
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 declare global {
   interface Window {
@@ -25,6 +25,8 @@ declare global {
         };
         allyCost(defId: string): number;
         canTrainAlly(defId: string): boolean;
+        allySortieRange(): number;
+        allySortiePoints(): { x: number; z: number }[];
         canPlaceAt(x: number, z: number): boolean;
         hasScenery(x: number, z: number): boolean;
         towerAt(x: number, z: number): unknown | null;
@@ -62,6 +64,21 @@ declare global {
       damageBase(n: number): void;
     };
   }
+}
+
+
+/**
+ * 마을(기지 셀)을 화면에서 탭한다 — 6단계부터 출동/레벨업이 전부 이 패널 안에 있다.
+ * cellToScreen은 실제 카메라 투영을 쓰므로 "그 셀이 정말 탭할 수 있는 자리인가"까지 함께 잰다.
+ */
+async function tapBase(page: Page): Promise<{ x: number; y: number }> {
+  const p = await page.evaluate(() => {
+    const c = window.__wgd!.baseInfo().cell;
+    return window.__wgd!.cellToScreen(c.x, c.z);
+  });
+  await page.mouse.click(p.x, p.y);
+  await page.waitForTimeout(250);
+  return p;
 }
 
 test('타이틀 → 로비 → 전투 → 웨이브 진행 (콘솔 에러 0, 드로우콜 예산)', async ({ page }) => {
@@ -365,14 +382,67 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
   await page.waitForFunction(() => window.__wgd !== undefined);
   await page.waitForTimeout(900);
 
-  // --- 출동 바가 실제로 있고 터치 타깃을 지키는가 ---------------------------
+  // --- 6단계: 상시 출동 바는 없어졌고, 마을 패널 안에만 있다 ----------------
+  // 사용자 요청("마을을 선택했을때 아군을 선택하거나 마을을 업그레이드")대로
+  // 마을을 고르기 전에는 출동 버튼이 화면에 **보이지 않아야** 한다.
   const btns = page.locator('.ally-btn');
-  await expect(btns).toHaveCount(3);
+  await expect(btns).toHaveCount(3); // DOM에는 있다 (패널이 display:none일 뿐)
+  await expect(btns.first()).toBeHidden();
+
+  // 마을(기지 셀) 탭 → 한 패널에서 출동과 레벨업이 둘 다 열린다
+  const homePanel = page.locator('.tower-panel--home');
+  await tapBase(page);
+  await expect(homePanel).toBeVisible();
+  await expect(homePanel.locator('.ally-btn')).toHaveCount(3);
+  await expect(homePanel.locator('.tp-btn--up')).toBeVisible();
+  await homePanel.evaluate((el) =>
+    Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)),
+  );
   for (let i = 0; i < 3; i++) {
     const box = await btns.nth(i).boundingBox();
     expect(box, `출동 버튼 ${i} 박스`).not.toBeNull();
     expect(box!.height, `출동 버튼 ${i} 높이`).toBeGreaterThanOrEqual(44);
   }
+
+  // --- 연속 출동: 패널이 닫히지 않고 세 명을 잇달아 내보낼 수 있는가 --------
+  // 상시 바(1탭)를 잃은 대가를 여기서 갚는다 — 열어 두면 이후는 여전히 1탭이다
+  await page.evaluate(() => window.__wgd!.setGold(5000));
+  for (let i = 0; i < 3; i++) {
+    await btns.nth(i).click();
+    await page.waitForTimeout(120);
+    expect(await page.evaluate(() => window.__wgd!.selectedBase()), `${i + 1}번째 출동 뒤 마을 선택`)
+      .toBe(true);
+    await expect(homePanel).toBeVisible();
+  }
+  expect(await page.evaluate(() => window.__wgd!.allies().length), '연속 3회 출동').toBe(3);
+  // 인원 표시가 실제 인원을 따라간다
+  await expect(page.locator('.ally-count-num')).toHaveText(/^3\//);
+
+  // --- 전투 중에도 열리고 출동된다 -----------------------------------------
+  await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.callWave();
+    g.ff(30);
+  });
+  await page.waitForTimeout(200);
+  expect(await page.evaluate(() => window.__wgd!.sim.state.phase)).toBe('wave');
+  await expect(homePanel).toBeVisible();
+  const beforeWaveTrain = await page.evaluate(() => window.__wgd!.allies().length);
+  await btns.nth(0).click();
+  await page.waitForTimeout(150);
+  expect(
+    await page.evaluate(() => window.__wgd!.allies().length),
+    '웨이브 중에도 출동이 된다',
+  ).toBe(beforeWaveTrain + 1);
+
+  // 마을을 다시 탭하면 닫힌다 (선택 규칙은 그대로)
+  await tapBase(page);
+  await expect(homePanel).toBeHidden();
+  await page.evaluate(() => {
+    const g = window.__wgd!;
+    for (const a of g.sim.state.allies as unknown as { alive: boolean }[]) a.alive = false;
+    g.ff(2);
+  });
 
   // --- 골드가 실제로 빠지고, 비용이 인원수에 따라 오른다 --------------------
   const econ = await page.evaluate(() => {
@@ -557,6 +627,10 @@ test('홈타운: 기지가 쏜다 · 레벨업 2단 확인 · 골드/최대레�
   await page.mouse.click(cell.x, cell.y);
   await page.waitForTimeout(250);
   expect(await page.evaluate(() => window.__wgd!.selectedBase())).toBe(true);
+  const sortie1 = await page.evaluate(() => ({
+    now: window.__wgd!.sim.allySortieRange(),
+    pts: window.__wgd!.sim.allySortiePoints(),
+  }));
   const panel = page.locator('.tower-panel--home');
   await expect(panel).toBeVisible();
   const upBtn = panel.locator('.tp-btn--up');
@@ -592,6 +666,28 @@ test('홈타운: 기지가 쏜다 · 레벨업 2단 확인 · 골드/최대레�
   expect(goldBefore - afterSecond.gold).toBe(init.cost);
   expect(afterSecond.hpMax).toBeGreaterThan(init.hpMax);
   expect(afterSecond.range).toBeGreaterThan(init.range);
+
+  /*
+   * 6단계) 마을이 파는 네 번째 물건 — **아군 출격 한계선**.
+   * 레벨업으로 실제로 늘어야 하고, 그 사실이 패널에 숫자로 떠 있어야 한다
+   * (안 뜨면 "이 결제가 아군까지 강화한다"를 플레이어가 알 방법이 없다).
+   */
+  const reach2 = await page.evaluate(() => ({
+    now: window.__wgd!.sim.allySortieRange(),
+    pts: window.__wgd!.sim.allySortiePoints(),
+  }));
+  expect(reach2.now, `Lv2 출격 한계선 (Lv1은 ${sortie1.now})`).toBeGreaterThan(sortie1.now);
+  expect(reach2.pts.length, '경로마다 정지 지점이 하나씩').toBe(sortie1.pts.length);
+  // 정지 지점이 실제로 기지에서 멀어졌다 (표식이 규칙을 따라 움직인다)
+  const moved = reach2.pts.some(
+    (p, i) => Math.abs(p.x - sortie1.pts[i]!.x) + Math.abs(p.z - sortie1.pts[i]!.z) > 0.5,
+  );
+  expect(moved, `정지 지점 ${JSON.stringify(sortie1.pts)} → ${JSON.stringify(reach2.pts)}`).toBe(true);
+  // 현재 성능 줄과 다음 레벨 미리보기 줄 둘 다에 출격 거리가 있다.
+  // (패널 문자열은 rAF 폴링으로 갱신되므로 재시도 어서션을 쓴다 — 한 번 읽고 끝내면
+  //  결제 직후 한 프레임을 앞질러 읽어 옛 값을 보는 경합이 생긴다)
+  await expect(panel.locator('.tp-sub--stats')).toContainText(`출격거리 ${reach2.now.toFixed(1)}`);
+  await expect(panel.locator('.tp-sub').nth(1)).toContainText(/출격거리 \d/);
 
   // --- HP 정책: 누적 피해 절대량 보존 (레벨업은 회복 수단이 아니다) --------
   const hp = await page.evaluate(() => {
@@ -669,6 +765,29 @@ test('홈타운: 기지가 쏜다 · 레벨업 2단 확인 · 골드/최대레�
  * 전부 반피로 깎아 오버레이까지 켠 뒤 얼린다.
  */
 test('최악 프레임 예산 — 삼각형 150,000 / 드로우콜 상한', async ({ page }) => {
+  /*
+   * ⚠ **이 예산은 스테이지1에서만 검증된다** (8단계 검증에서 확인, 미해결).
+   * 진입 동선이 `goto → click(100,300) → 전투`라 언제나 s1이다. 같은 레시피를 다른
+   * 스테이지에 적용해 재면(1280×800 · swiftshader · 배치 가능한 칸을 전부 채운 구성):
+   *    s1 143,601 / s2 144,469 / s3 **160,212** / s4 **151,959** / s5 **154,598** / s6 **150,360**
+   * 즉 s3~s6은 이 레시피에서 삼각형 예산(150,000)을 넘는다. **아군 기능 탓이 아니다** —
+   * 아군 0명 통제에서도 s3은 152,880으로 이미 넘고, 아군 6명의 몫은 5,800~7,700으로
+   * 스테이지에 무관하다(5단계 아군 기능 자체의 값). 출격 한계선이 어디든 몫은 0이다
+   * (아군은 항상 그려진다 — render/views/enemyview.ts frustumCulled = false).
+   * 완화 요인: 이 초과는 아래 '16종 흩기'라는 **합성 최악**에서만 난다 — 자연 편성이면
+   * s3·s5도 예산 안이다. 고치려면 프레임 구성이 아니라 지오메트리(스테이지 소품/타워
+   * LOD) 쪽을 손대야 해서 이번 작업 범위 밖에 뒀다.
+   *
+   * 기본 60초로는 모자란다 — **문턱이 아니라 시간의 문제**다.
+   * 이 테스트는 표본을 3개(worst / withAlly / noAlly) 뽑고 표본 하나가 rAF 30프레임인데,
+   * 적 60마리를 얼린 상태의 swiftshader는 1~3fps라 표본 하나가 12~25초다.
+   * 실측: 이 컨테이너에서 46.0s(mobile-portrait) · 48.2s(desktop)로 **예산의 77%**를
+   * 쓰고 통과한다. 검증 환경에서는 같은 자리에서 60초를 넘겨 2/2 실패했고,
+   * --timeout=240000으로만 올리면 통과했다(58.6s · 1.1m). 즉 머신 속도에 따라
+   * 초록/빨강이 갈리는 상태였다. 예산 수치(150,000 · 90콜 · 델타 1)는 한 톨도
+   * 건드리지 않고 **시간만** 넉넉히 준다.
+   */
+  test.setTimeout(240_000);
   const errors: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
@@ -681,11 +800,15 @@ test('최악 프레임 예산 — 삼각형 150,000 / 드로우콜 상한', asyn
   await page.waitForFunction(() => window.__wgd !== undefined);
   await page.waitForTimeout(900);
 
-  /** rAF 2회 뒤부터 n프레임 관측한 최대치 (renderInfo는 매 프레임 리셋된다) */
-  const sample = (): Promise<{ calls: number; tris: number }> =>
+  /**
+   * rAF 2회 뒤부터 n프레임 관측한 최대치 (renderInfo는 매 프레임 리셋된다).
+   * 비행 중인 투사체 수도 같이 낸다 — 아래 통제 A/B가 두 표본의 조건이 같았음을
+   * 이 값으로 증명한다(그게 안 맞으면 델타 1이 아군이 아니라 화살 한 발의 몫이다).
+   */
+  const sample = (): Promise<{ calls: number; tris: number; proj: number }> =>
     page.evaluate(
       () =>
-        new Promise<{ calls: number; tris: number }>((res) => {
+        new Promise<{ calls: number; tris: number; proj: number }>((res) => {
           const g = window.__wgd!;
           let calls = 0;
           let tris = 0;
@@ -694,7 +817,7 @@ test('최악 프레임 예산 — 삼각형 150,000 / 드로우콜 상한', asyn
             const r = g.renderInfo();
             calls = Math.max(calls, r.calls);
             tris = Math.max(tris, r.triangles);
-            if (++i >= 30) res({ calls, tris });
+            if (++i >= 30) res({ calls, tris, proj: g.sim.state.projectiles.length });
             else requestAnimationFrame(step);
           };
           requestAnimationFrame(() => requestAnimationFrame(step));
@@ -803,7 +926,36 @@ test('최악 프레임 예산 — 삼각형 150,000 / 드로우콜 상한', asyn
    */
   expect(worst.calls, msg).toBeLessThanOrEqual(90);
 
-  // 아군 정원이 예산에서 차지하는 몫 — 6명을 빼도 프레임이 크게 달라지지 않아야 한다
+  /**
+   * 아군 정원이 예산에서 차지하는 몫 — 6명을 빼도 프레임이 크게 달라지지 않아야 한다.
+   *
+   * ── 여기부터는 **통제 구간**이다: 먼저 비행 중인 투사체를 비운다 ──────────
+   * 위 `worst`는 "최악 프레임"이라 투사체가 들어 있는 게 맞다(절대 예산은 그걸로 잰다).
+   * 그런데 아군 몫은 **두 표본의 차**라, 한쪽 표본에만 화살이 한 발 떠 있으면 그 1콜이
+   * 그대로 아군 탓으로 청구된다. 실측(같은 빌드 9회): 두 표본의 투사체 수가 같으면
+   * 델타는 **항상 1**이고, 한쪽만 1발 더 떠 있던 1회에서만 2가 나왔다
+   * (worst proj 1 · noAlly proj 0 → 델타 2). 즉 이 항목의 원래 flakiness는
+   * 아군이 아니라 **통제되지 않은 투사체**였다.
+   *
+   * 비우는 방법은 침묵(hexer의 저주와 같은 상태)이다 — 타워가 발사를 멈추면
+   * 이미 떠 있던 것들이 몇 틱 안에 착탄한다. 기지는 사거리(4.6) 안에 적이 없어
+   * (적을 경로 초입 dist 4에 묶어 뒀다) 애초에 쏘지 않는다.
+   * **문턱은 한 톨도 바꾸지 않았다** — 통제만 더했다.
+   */
+  const drained = await page.evaluate(() => {
+    const g = window.__wgd!;
+    const st = g.sim.state as unknown as {
+      towers: { silenceLeft: number }[];
+      projectiles: readonly unknown[];
+    };
+    for (const t of st.towers) t.silenceLeft = 100_000;
+    for (let i = 0; i < 120 && st.projectiles.length > 0; i++) g.ff(1);
+    return st.projectiles.length;
+  });
+  expect(drained, '통제 A/B 전에 투사체가 비워졌다').toBe(0);
+  await page.waitForTimeout(400);
+  const withAlly = await sample();
+
   await page.evaluate(() => {
     const g = window.__wgd!;
     for (const a of g.sim.state.allies as unknown as { alive: boolean }[]) a.alive = false;
@@ -811,13 +963,14 @@ test('최악 프레임 예산 — 삼각형 150,000 / 드로우콜 상한', asyn
   });
   await page.waitForTimeout(400);
   const noAlly = await sample();
+  const dmsg = `아군 6명의 드로우콜 몫: ${noAlly.calls} → ${withAlly.calls} (투사체 ${withAlly.proj}/${noAlly.proj})`;
+  // 통제가 실제로 유지됐는지 — 둘 다 투사체 0이어야 델타가 아군의 몫이다
+  expect(withAlly.proj, dmsg).toBe(0);
+  expect(noAlly.proj, dmsg).toBe(0);
+  expect(withAlly.calls - noAlly.calls, dmsg).toBeLessThanOrEqual(1);
   expect(
-    worst.calls - noAlly.calls,
-    `아군 6명의 드로우콜 몫: ${noAlly.calls} → ${worst.calls}`,
-  ).toBeLessThanOrEqual(1);
-  expect(
-    worst.tris - noAlly.tris,
-    `아군 6명의 삼각형 몫: ${noAlly.tris} → ${worst.tris}`,
+    withAlly.tris - noAlly.tris,
+    `아군 6명의 삼각형 몫: ${noAlly.tris} → ${withAlly.tris}`,
   ).toBeLessThanOrEqual(15_000);
 
   await page.evaluate(() => window.__wgd?.pause(false));

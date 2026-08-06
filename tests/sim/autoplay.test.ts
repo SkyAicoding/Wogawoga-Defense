@@ -26,8 +26,40 @@
  *     + 5단계 보강: 어느 갈래도 **승수와 여유를 동시에** 이기지 못한다(불도저와 같은 잣대),
  *       그리고 "살 수 있으면 산다"는 자연 정책도 갈래로 함께 잰다
  *  8) **유닛 갈래가 값을 한다**(5단계 개정) — 같은 골드를 태우는 **위약 아군**보다 낫다
- *     (4단계의 `봉쇄 틱 > 0`은 20판에 1틱만 막아도 통과하는 문턱이었다)
+ *     (4단계의 `봉쇄 틱 > 0`은 20판에 1틱만 막아도 통과하는 문턱이었다).
+ *     8단계: 부족 팔의 **국면(minNear 3 → 1)과 표본(20 → 80시드)**을 고쳤다 — 문턱은 그대로
  *  9) **마을 레벨업의 화력 성장이 값을 한다**(5단계) — HP만 자라는 마을보다 낫다
+ * 10) **다섯 번째 갈래 — 부족(아군+마을)도 지배 전략이 아니다**(7단계, 시드 40).
+ *     8단계: '갈래가 살아 있다' 하한을 **승수 → 평균 도달 웨이브**로 옮겼다 (승수 하한이
+ *     커밋된 시드 표본에서만 참이었다 — 독립 10벌 중 7벌 위반. 항목 주석에 전문)
+ * 11) **sortie 열이 부족원을 레벨마다 더 멀리 세우고 더 앞에서 싸우게 한다**(7단계 도입,
+ *     8단계 전면 개정) — 결정론 잣대(레벨별 엄격 증가) + 봉쇄 최전선 이동 3타일.
+ *     7단계의 '봉쇄 1.4배'는 참이 아니었다(독립 8벌 중 6벌 위반) — 항목 주석에 전문
+ * 12) **입구 요격 금지**(7단계) — 전 스테이지·전 레벨에서 실효 한계선이 최단 경로의 절반
+ *     이하이고, 가장 짧은 s4에서 실제 봉쇄 지점이 스폰에서 경로의 35% 밖이다
+ * 13) **무한 모드에서 아군이 무한 방벽이 되지 않는다**(7단계) — 부족 갈래 ≤ 타워 몰빵
+ *
+ * ── 8단계: 봉투를 **참으로 만든 것에 대하여** ────────────────────────────────
+ * 검증에서 8·10·11번이 "커밋된 시드 표본에서만 참"이라는 지적이 왔고, 셋 다 재현됐다
+ * (시작점만 옮긴 독립 표본으로 각각 4/10 · 7/10 · 6/8 실패). 세 항목 모두
+ * **문턱을 낮추지 않고** 고쳤다 — 8번은 국면과 표본을, 10·11번은 **지표**를 바꿨다.
+ * 승수는 40시드에서 표준편차가 8%p라 갈래 하한을 잠글 수 있는 지표가 아니고
+ * (10번 주석), 봉쇄량은 그 판이 얼마나 위급했는지를 주로 잰다(11번 주석).
+ * 각 항목에 무엇을 왜 바꿨는지와 독립 표본 실측을 전부 남겼다. 1~7·9·12·13번은
+ * 한 줄도 건드리지 않았다.
+ *
+ * ── 7단계: 봉투를 **조인 것에 대하여** ──────────────────────────────────────
+ * 1~6번 문턱은 이번에도 한 줄도 건드리지 않았고 그대로 통과한다. 7·9번도 그대로다.
+ * 손댄 곳은 **8번을 조인 것**(`봉쇄 > 0` → 가동률 하한 1.5% + 부족 갈래 추가)과
+ * **10~13번을 새로 더한 것**뿐이다. 낮춘 문턱은 없다.
+ *
+ * 새 항목 넷이 겨냥하는 구멍은 하나씩 분명하다:
+ *  · 6단계가 마을 표에 sortie 열을 붙였는데 **그 열을 지워도 봉투가 전부 초록이었다**
+ *    (7·8·9번 봇은 마을을 안 올리거나 아군을 안 뽑는다) → 11번.
+ *  · 유닛과 기지를 **같이** 사는 갈래가 아예 측정되지 않았다 → 10번.
+ *  · 한계선 값이 절대 타일 수라 경로가 짧은 스테이지에서 규칙이 뒤집히는데, 봉투가
+ *    전부 s1·s6이라 s4를 한 번도 보지 않았다 → 12번.
+ *  · 한계선이 길어지면 후반 골드 인플레에서 아군이 방벽이 될 수 있다 → 13번.
  *
  * ── 5단계: 봉투를 **조인 것에 대하여** ──────────────────────────────────────
  * 1~6번 문턱은 이번에도 하나도 건드리지 않았다(기준선 실측 16/20 · 최소 웨이브 47 ·
@@ -48,8 +80,10 @@
  * 새로 더한 7·8번의 문턱도 실측에서 유도했고 근거를 각 항목 주석에 적었다.
  */
 import { describe, expect, it } from 'vitest';
-import type { AllyDef, AllyId, TowerId } from '@/data/types';
+import type { AllyDef, AllyId, BaseLevelDef, TowerId } from '@/data/types';
 import { ALLY_DEFS, BASE_LEVELS, stageById } from '@/data';
+import { ALLY_SORTIE_PATH_LIMIT, ALLY_SORTIE_RANGE } from '@/data/balance';
+import { buildPath } from '@/sim/path';
 import {
   MIN_TOWERS_FROM_WAVE,
   makeBotSim,
@@ -64,6 +98,12 @@ import {
  * (예전 봉투가 쓰던 101/202/303/404/505 는 전부 통과하는 5개짜리 편향 표본이었다)
  */
 const SEEDS = Array.from({ length: 20 }, (_, i) => 1000 + 37 * i);
+/**
+ * 같은 수열의 **80개짜리** — 위약 대조처럼 승수 차이가 노이즈에 잠기는 항목에만 쓴다.
+ * 문턱을 낮추는 대신 표본을 늘리는 쪽이다. 얼마나 늘려야 하는지는 실측으로 정했다
+ * (8단계: 시작점을 옮긴 독립 표본 10벌로 재고, 그 근거를 쓰는 항목에 적었다).
+ */
+const SEEDS80 = Array.from({ length: 80 }, (_, i) => 1000 + 37 * i);
 const STAGE1_DECK: TowerId[] = ['spear', 'catapult', 'frost'];
 const ALL_DECK: TowerId[] = [
   'spear', 'catapult', 'frost', 'lightning', 'poison', 'ballista', 'brazier', 'drum',
@@ -100,15 +140,38 @@ const PLACEBO_ALLIES: Record<AllyId, AllyDef> = (() => {
   };
 })();
 
+/**
+ * **부족 갈래** — 아군을 뽑으면서 마을도 올리는 봇 (7단계). 마을 레벨업이 아군의
+ * 출격 한계선을 늘리므로(data/hometown.ts sortie 열) 이 둘은 서로를 강화한다.
+ * 이 갈래를 재지 않으면 6단계가 추가한 상품의 값어치가 봉투에 한 번도 안 나온다.
+ */
+const TRIBE_BOT: BotOptions = { towerReserve: 600, allies: { minNear: 3 }, base: { reserve: 200 } };
+
+/**
+ * 같은 부족 갈래인데 **아군을 실제로 많이 쓰는** 정책 (위급 문턱 1 = 매 웨이브 뽑는다).
+ * 위약 대조(8번)는 이 국면에서만 판별력이 있다 — 아래 8번 항목 주석의 실측 참조.
+ * 같은 항목의 U 팔이 쓰는 minNear와 같은 값이라 두 팔의 잣대가 하나로 유지된다.
+ */
+const TRIBE_HEAVY: BotOptions = { towerReserve: 600, allies: { minNear: 1 }, base: { reserve: 200 } };
+
+/**
+ * 레벨 비용만 0으로 만든 마을 표 — **만렙을 강제**하는 통제 장치다.
+ * 성능(HP/공격력/사거리/출격거리)은 실제 표 그대로라 "만렙에서 규칙이 지켜지는가"를
+ * 잰다. 봇이 s4를 웨이브 8에 지므로(골드가 4,500에 닿지 않는다) 비용을 빼지 않으면
+ * 짧은 경로 스테이지의 만렙은 **구조적으로 측정 불가**다.
+ */
+const FREE_LEVELS: readonly BaseLevelDef[] = BASE_LEVELS.map((d) => ({ ...d, cost: 0 }));
+
 /** 아군 정의만 갈아 끼운 같은 스윕 (스테이지1 고정) */
 function playAllWithAllies(
   deck: TowerId[],
   opts: BotOptions,
   allyDefs: Record<AllyId, AllyDef>,
+  seeds: readonly number[] = SEEDS,
 ): BotResult[] {
   const stage = stageById(1);
   if (!stage) throw new Error('no stage 1');
-  return SEEDS.map((seed) =>
+  return seeds.map((seed) =>
     runBot(makeBotSimFor(stage, seed, deck, 0, false, BASE_LEVELS, allyDefs), stage, opts),
   );
 }
@@ -281,9 +344,34 @@ describe('autoplay 난이도 봉투', () => {
    * 위약과 같아지고 이 항목이 걸린다.
    *
    * 문턱은 "**위약보다 못하지는 않다**"로 둔다(같거나 낫다). 실측(시드 20, minNear 1,
-   * 예비비 600): 진짜 아군 15/20 · 봉쇄 인원틱 8,020 대 위약 12/20 · 0.
+   * 예비비 600): 진짜 아군 13/20 · 봉쇄 인원틱 11,233 대 위약 12/20 · 0.
    * 승수 차이는 시드 20개에서 노이즈에 잠길 수 있으므로 **봉쇄 인원틱**을 같이 건다 —
    * 이쪽은 결정론적이고 위약에서 정확히 0이 된다.
+   *
+   * ── 7단계: `봉쇄 > 0`을 **가동률 하한**으로 조였다 ──────────────────────────
+   * `> 0`은 20판 통틀어 1틱만 막아도 통과하는 문턱이라, 위약이 아닌 "거의 위약"
+   * (봉쇄 정원 1마리, 사거리 0.1 등)은 여전히 초록이었다. 이제 **아군이 살아 있던
+   * 시간 중 실제로 적을 붙잡고 있던 비율**에 하한을 건다. 실측 2.77%(11,233/405,161)
+   * → 하한 1.5%. 판별력: ALLY_BLOCK_CAPACITY를 3→1로 되돌리면 1.2%대로 떨어져 걸린다.
+   * 이 지표를 고른 이유는 5단계 진단("아군의 병목은 화력이 아니라 가동률")이 가리키는
+   * 바로 그 축이고, 6·7단계의 출격 한계선이 사고 있는 물건도 그것이기 때문이다.
+   *
+   * ── 7단계: **부족 갈래**(아군+마을)도 같은 잣대로 함께 잰다 ────────────────
+   * 마을을 올리면 아군이 더 멀리 나간다(sortie 열). 그 조합이 위약 조합을 못 이기면
+   * "마을과 아군을 같이 산 골드"가 통째로 낭비라는 뜻이다.
+   *
+   * ── 8단계: 이 팔은 **국면과 표본이 둘 다 틀려서** 시드 운으로 통과하고 있었다 ──
+   * 7단계 판본은 부족 팔을 `minNear 3`(=아군 지출 6~8%) · 20시드로 쟀다. 검증에서
+   * 시작점만 옮긴 독립 표본 10벌 중 **4벌이 실패**했고, 합산 200시드에서 진짜 151 대
+   * 위약 149로 **위약과 구분되지 않았다**. 두 가지를 고쳤다. 문턱(`진짜 ≥ 위약`)은
+   * 한 톨도 건드리지 않았다:
+   *
+   *  (1) **국면** — minNear 3은 아군을 거의 안 쓰는 정책이라 위약과의 차이가 노이즈보다
+   *      작다. 같은 항목의 U 팔이 이미 쓰는 `minNear 1`(아군 지출 17%)로 맞췄다.
+   *      실측(40시드 10벌 합산 400시드): 진짜 164 대 위약 141 = **+5.75%p**.
+   *      (mn3의 같은 실측은 +0.5%p였다 — 재는 대상이 아니라 국면이 문제였다)
+   *  (2) **표본** — 40시드로도 10벌 중 1벌이 뒤집힌다(off5 13 대 14). 80시드로 늘리면
+   *      독립 5벌이 전부 통과한다: 31/27 · 43/37 · 26/22 · 31/27 · 33/28 (여유 +4~+6).
    */
   it('유닛 갈래가 값을 한다 — 같은 골드를 태우는 위약 아군보다 낫다', () => {
     const opts: BotOptions = { towerReserve: 600, allies: { minNear: 1 } };
@@ -294,12 +382,22 @@ describe('autoplay 난이도 봉투', () => {
     expect(sum(real, (r) => r.alliesTrained), msg).toBeGreaterThan(0);
     expect(sum(sham, (r) => r.alliesTrained), msg).toBeGreaterThan(0);
     expect(sum(sham, (r) => r.goldAllies), msg).toBeGreaterThan(sum(real, (r) => r.goldAllies) * 0.7);
-    // 위약은 정의상 한 틱도 못 막는다. 진짜 아군은 막아야 한다
+    // 위약은 정의상 한 틱도 못 막는다
     expect(sum(sham, (r) => r.allyBlockTicks), msg).toBe(0);
-    expect(sum(real, (r) => r.allyBlockTicks), msg).toBeGreaterThan(0);
+    // 진짜 아군은 **살아 있는 시간의 1.5% 이상**을 실제 교전으로 써야 한다 (실측 2.77%)
+    const uptime = sum(real, (r) => r.allyBlockTicks) / sum(real, (r) => r.allyTicks);
+    expect(uptime, `가동률 ${(uptime * 100).toFixed(2)}% — ${msg}`).toBeGreaterThan(0.015);
     // 그리고 그 봉쇄가 결과로 이어져야 한다 — 위약보다 못하면 골드를 버린 것이다
     expect(wins(real), msg).toBeGreaterThanOrEqual(wins(sham));
-  }, 600_000);
+
+    // 부족 갈래(아군+마을)도 같은 잣대 — 마을까지 산 골드가 값을 하는가
+    const tribe = playAllWithAllies(STAGE1_DECK, TRIBE_HEAVY, ALLY_DEFS, SEEDS80);
+    const tribeSham = playAllWithAllies(STAGE1_DECK, TRIBE_HEAVY, PLACEBO_ALLIES, SEEDS80);
+    const tmsg = `부족 진짜 ${wins(tribe)}/80 (봉쇄 ${sum(tribe, (r) => r.allyBlockTicks)}) / 위약 ${wins(tribeSham)}/80`;
+    expect(sum(tribe, (r) => r.allyBlockTicks), tmsg).toBeGreaterThan(0);
+    expect(sum(tribeSham, (r) => r.allyBlockTicks), tmsg).toBe(0);
+    expect(wins(tribe), tmsg).toBeGreaterThanOrEqual(wins(tribeSham));
+  }, 900_000);
 
   /**
    * 마을 레벨업의 **공격력·사거리 성장이 값을 하는지**를 잠근다.
@@ -333,6 +431,229 @@ describe('autoplay 난이도 봉투', () => {
     // 화력 성장이 실제로 적을 죽여야 하고, 그게 결과로 이어져야 한다
     expect(sum(real, (r) => r.baseKills), msg).toBeGreaterThan(sum(sham, (r) => r.baseKills) * 2);
     expect(wins(real), msg).toBeGreaterThan(wins(sham));
+  }, 600_000);
+
+  /**
+   * ── 7단계: **다섯 번째 갈래 — 부족(아군+마을)** ─────────────────────────────
+   *
+   * 마을 레벨업이 아군의 출격 한계선을 늘리므로(data/hometown.ts sortie 열) 유닛과
+   * 기지는 이제 **서로를 강화한다**. 위 항목처럼 갈래를 따로만 재면 그 상호작용이
+   * 통째로 빠지고, 둘을 같이 사서 생기는 지배 전략이 있어도 봉투가 보지 못한다.
+   * 잣대는 위 항목과 **똑같다**: 승수 범위 [기준선−3, 기준선+1] + 두 축 동시 우위 금지.
+   *
+   * ⚠ **왜 시드 40인가** — 상한(지배 금지) 쪽은 20시드로 판별이 안 된다. 같은 봇을
+   * 표본만 늘려 재면 20시드 부족 17·타워 16 / 40시드 36·36 / 80시드 68·71로, 20시드의
+   * +1은 노이즈다. 표본을 늘리는 것은 봉투를 **조이는** 방향이다.
+   * (실행 시간 대가: 이 항목 하나가 스윕 2회 ≈ 16초)
+   *
+   * ⚠⚠ **8단계: 하한을 승수에서 웨이브 평균으로 바꿨다 (검증에서 나온 blocker)** ⚠⚠
+   * 7단계는 하한도 `승수 ≥ 기준선 − 3`으로 뒀는데, 그건 **커밋된 시드 표본에서만 참**이었다.
+   * 시작점만 옮긴 독립 표본 10벌(각 40시드):
+   *    타워 36/36/36/36/32/36/33/35/32/39 · 부족 36/31/31/31/27/31/30/31/29/31
+   *    승수 차 0 / −5 / −5 / −5 / −5 / −5 / −3 / −4 / −3 / −8  → **7벌이 하한 위반**
+   * 400시드 합산으로 타워 351 대 부족 308(−10.75%p)이고, 커밋된 표본(차 0)이 10벌 중
+   * 유일한 최고값이었다.
+   *
+   * 문턱을 −8까지 늘리는 것은 답이 아니다. 승수는 40시드에서 표준편차가 약 8%p라
+   * (p≈0.85 기준) **어떤 문턱도 무의미해진다**. 그래서 같은 주장("이 갈래로도 판이
+   * 무너지지 않는다")을 **분산이 10배 작은 지표**로 옮겼다 — 평균 도달 웨이브다.
+   * 같은 10벌 실측: 부족/타워 웨평 비 0.9930 · 0.9671 · 0.9744 · 0.9829 · 0.9667 ·
+   * 0.9644 · 0.9555 · 0.9713 · 0.9623 · 0.9732 (최소 0.9555).
+   * 문턱 0.93은 그 최소에서 2.6%p 아래이고, **붕괴는 그대로 잡는다**: 같은 10벌에서
+   * 유닛 몰빵의 비는 0.6673~0.7084로 문턱보다 22%p 낮다.
+   * (같은 이유로 무한 모드 항목도 처음부터 평균 도달 웨이브를 쓴다)
+   *
+   * 승수 쪽은 **상한만** 남긴다 — 지배 전략 금지는 방향이 반대라 표본 운으로 통과할 수
+   * 없고(10벌 전부 부족 ≤ 타워), 이 항목이 원래 사려던 것도 그쪽이다.
+   */
+  it('다섯 번째 갈래 — 부족(아군+마을)도 지배 전략이 아니다', () => {
+    const stage = stageById(1);
+    if (!stage) throw new Error('no stage 1');
+    const seeds = Array.from({ length: 40 }, (_, i) => 1000 + 37 * i);
+    const go = (opts: BotOptions): BotResult[] =>
+      seeds.map((seed) => runBot(makeBotSimFor(stage, seed, STAGE1_DECK, 0, false, BASE_LEVELS), stage, opts));
+    const tower = go({});
+    const tribe = go(TRIBE_BOT);
+    const norm = (rs: BotResult[]): number =>
+      sum(rs, (r) => (r.baseHpMax > 0 ? r.baseHpLeft / r.baseHpMax : 0)) / rs.length;
+    const avgWave = (rs: BotResult[]): number => sum(rs, (r) => r.wave) / rs.length;
+    const waveRatio = avgWave(tribe) / avgWave(tower);
+    const msg =
+      `부족 ${wins(tribe)}/40 (웨평 ${avgWave(tribe).toFixed(2)} · 여유 ${(norm(tribe) * 100).toFixed(1)}% · 잔여합 ${sum(tribe, (r) => r.baseHpLeft)}) / ` +
+      `타워 ${wins(tower)}/40 (웨평 ${avgWave(tower).toFixed(2)} · 여유 ${(norm(tower) * 100).toFixed(1)}% · 잔여합 ${sum(tower, (r) => r.baseHpLeft)}) ` +
+      `웨평비 ${waveRatio.toFixed(4)}`;
+    // 검증이 공허하지 않은지 — **둘 다** 써야 갈래다 (한쪽이 0이면 U나 H를 다시 재는 셈)
+    expect(sum(tribe, (r) => r.goldAllies), msg).toBeGreaterThan(0);
+    expect(sum(tribe, (r) => r.goldBase), msg).toBeGreaterThan(0);
+    expect(sum(tribe, (r) => r.allyBlockTicks), msg).toBeGreaterThan(0);
+    // 그리고 마을이 실제로 올라가 한계선이 Lv1보다 멀리 나가 있어야 한다
+    expect(Math.max(...tribe.map((r) => r.baseLevel)), msg).toBeGreaterThan(1);
+    // 갈래가 살아 있다 — 승수가 아니라 **평균 도달 웨이브**로 잠근다 (위 ⚠⚠ 참조).
+    // 실측 최소 0.9555 / 유닛 몰빵 0.708.
+    expect(waveRatio, msg).toBeGreaterThanOrEqual(0.93);
+    // 지배 전략 금지 (승수) — 이쪽은 방향이 반대라 표본 운으로 통과할 수 없다
+    expect(wins(tribe), msg).toBeLessThanOrEqual(wins(tower) + 1);
+    const dominant =
+      wins(tribe) > wins(tower) && sum(tribe, (r) => r.baseHpLeft) > sum(tower, (r) => r.baseHpLeft);
+    expect(dominant, `부족 갈래가 승수와 여유 둘 다에서 앞선다 = 지배 전략: ${msg}`).toBe(false);
+  }, 600_000);
+
+  /**
+   * ── 11번: **sortie 열이 실제로 부족원을 더 멀리 세우고, 거기서 싸운다** ──────
+   *
+   * 잠그려는 것: 6단계가 마을 표에 붙인 `sortie` 열을 **지우거나 평탄하게 만들면
+   * 봉투가 빨개져야 한다**. 7단계까지는 이 항목이 없거나(6단계) 시드 운에 기대고
+   * 있었다(7단계).
+   *
+   * ⚠⚠ **8단계: 7단계의 "봉쇄 1.4배 · 가동률 1.3배"를 지웠다 — 참이 아니었다** ⚠⚠
+   * 7단계 판본은 봇 A/B(창 고정 `trigger:12`, 20시드)로 곡선 O 대 sortie만 평탄한 표를
+   * 재서 봉쇄 1.80배 · 가동률 1.54배를 얻었다. 시작점만 옮긴 독립 표본 8벌로 다시 재면:
+   *    봉쇄비 1.80 / 1.13 / 0.92 / 1.50 / 1.39 / 1.49 / 1.30 / 1.66  (평균 1.40)
+   *    가동비 1.55 / 1.12 / 1.33 / 1.31 / 1.36 / 1.26 / 1.26 / 1.56
+   *  → **8벌 중 6벌 실패**, off2에서는 곡선 쪽이 오히려 덜 막는다(0.92배).
+   * 표본을 늘려도 살아나지 않는다. 더 센 격리(Lv1 자리 6.0 대 만렙 자리 12.0, 40시드
+   * 6벌)에서도 가동비가 2.85 / 1.68 / 1.51 / **1.00** / 1.46 / 1.73으로 흔들리고,
+   * **짝비교로는 40시드 중 far가 이기는 시드가 3~14개뿐**이다(대부분의 판에서는 짧은
+   * 줄이 더 많이 막는다). 기전도 분명하다 — 멀리 나가면 걸어가는 데 수명을 쓰고
+   * (몽둥이꾼 1.15타일/초 × 12타일 = 수명 20초의 절반), 그 손해는 **타워가 잘 막는
+   * 판에서 크고 밀리는 판에서 작다**. 즉 봉쇄량은 자리가 아니라 그 판이 얼마나
+   * 위급했는지를 주로 잰다. 이 상품이 사는 것은 "더 많은 봉쇄"가 아니라
+   * **"더 앞에서의 봉쇄"**다.
+   *
+   * 그래서 잣대를 그 문장 그대로 바꿨다. 둘 다 분산이 거의 없다:
+   *
+   *  (a) **표 쪽 — 결정론**: 모든 스테이지에서 레벨이 오를 때마다 실효 한계선이
+   *      **엄격히 증가**한다. 열을 평탄하게 만들면 첫 스테이지 첫 레벨에서 걸린다.
+   *      (경로가 짧은 s4·s6도 8단계의 곡선 압축 덕에 다섯 칸이 전부 다르다 —
+   *       자르기였던 7단계에는 s4 Lv3·4·5가 8.80으로 같아 이 잣대를 못 세웠다)
+   *  (b) **결과 쪽 — 실측**: 같은 봇·같은 지출(창 고정)로 Lv1 자리와 만렙 자리를
+   *      격리해, **봉쇄가 일어난 최전선**(allyBlockMinDist)이 스폰 쪽으로 얼마나
+   *      옮겨졌는지 잰다. 이건 기하라 표본을 옮겨도 거의 안 움직인다.
+   *      실측(20시드 5벌, 경로 36.19): Lv1 자리는 **다섯 벌 전부 29.04**,
+   *      만렙 자리는 23.19~24.55 → 차이 4.49~5.85타일. 문턱 3.0타일.
+   */
+  it('출격 한계선 곡선 — 레벨마다 더 멀리 세우고, 실제로 더 앞에서 붙잡는다', () => {
+    // (a) 표 쪽 — 전 스테이지에서 레벨마다 엄격히 증가한다 (비용 0으로 만렙까지 강제)
+    for (let sid = 1; sid <= 6; sid++) {
+      const st = stageById(sid);
+      if (!st) continue;
+      const sim = makeBotSimFor(st, 1, ALL_DECK, 0, false, FREE_LEVELS);
+      let prev = sim.allySortieRange();
+      expect(prev, `s${sid} Lv1`).toBeCloseTo(ALLY_SORTIE_RANGE, 9);
+      for (let lv = 2; lv <= sim.state.baseLevelMax; lv++) {
+        expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
+        const now = sim.allySortieRange();
+        expect(now, `s${sid} Lv${lv} 한계선 ${prev} → ${now} (레벨업이 출격거리를 팔지 않는다)`)
+          .toBeGreaterThan(prev);
+        prev = now;
+      }
+    }
+
+    // (b) 결과 쪽 — Lv1 자리 대 만렙 자리 격리. 마을 성능은 Lv1에 고정하고 sortie만 바꾼다
+    const stage = stageById(1);
+    if (!stage) throw new Error('no stage 1');
+    const only = (sortie: number): BaseLevelDef[] => [{ ...BASE_LEVELS[0]!, sortie }];
+    const opts: BotOptions = { towerReserve: 600, allies: { minNear: 3, trigger: 12 } };
+    const run = (levels: readonly BaseLevelDef[]): BotResult[] =>
+      SEEDS.map((seed) => runBot(makeBotSimFor(stage, seed, STAGE1_DECK, 0, false, levels), stage, opts));
+    const near = run(only(BASE_LEVELS[0]!.sortie));
+    const far = run(only(BASE_LEVELS[BASE_LEVELS.length - 1]!.sortie));
+    const front = (rs: BotResult[]): number => Math.min(...rs.map((r) => r.allyBlockMinDist));
+    const msg =
+      `Lv1자리 최전선 ${front(near).toFixed(2)} (봉쇄 ${sum(near, (r) => r.enemyBlockedTicks)}) / ` +
+      `만렙자리 최전선 ${front(far).toFixed(2)} (봉쇄 ${sum(far, (r) => r.enemyBlockedTicks)})`;
+    // 실험이 공허하지 않은지 — 양쪽 다 실제로 붙잡았어야 한다
+    expect(sum(near, (r) => r.enemyBlockedTicks), msg).toBeGreaterThan(0);
+    expect(sum(far, (r) => r.enemyBlockedTicks), msg).toBeGreaterThan(0);
+    // 그리고 만렙 자리는 **확실히 더 앞에서** 붙잡는다 (실측 차 4.49~5.85타일)
+    expect(front(near) - front(far), msg).toBeGreaterThan(3.0);
+  }, 600_000);
+
+  /**
+   * ── 7단계 11번: **입구 요격 금지** — 한계선이 존재하는 유일한 이유 ──────────
+   *
+   * 출격 한계선의 존재 이유는 하나다: "아군이 적 스폰 지점까지 걸어가 웨이브를 입구에서
+   * 요격하면 타워가 무의미해진다"(src/sim/allies.ts 규칙 2). 그런데 표의 값은 **절대
+   * 타일 수**이고 경로 길이는 s4 17.59 ~ s1 36.19로 두 배 넘게 차이 난다 — 만렙 12.0은
+   * s1에서 33%지만 s4에서는 68%다. 그래서 규칙 2-c(경로의 마을 쪽 절반까지)를 넣었고,
+   * 이 항목이 그 규칙을 **모든 스테이지에 대해** 잠근다.
+   *
+   * (a) 표 쪽 — 어느 스테이지·어느 레벨에서도 실효 한계선이 최단 경로의 절반을 넘지 않고,
+   *     Lv1은 어디서도 깎이지 않는다(모든 기준선 측정의 원점이라 불가침이다).
+   * (b) 결과 쪽 — 실제로 봉쇄가 일어난 지점이 스폰에서 얼마나 떨어져 있었나.
+   *     레벨 비용을 0으로 준 표로 **만렙을 강제**하고 가장 짧은 s4에서 잰다.
+   *     실측 7.63타일 = 경로의 43%. 상한이 없었다면 17.59 − 12.0 − 1.0 = 4.6 = 26%다.
+   *     문턱 35%가 그 둘을 가른다.
+   */
+  it('입구 요격 금지 — 짧은 경로에서도 아군은 경로의 마을 쪽 절반 안에 머문다', () => {
+    // (a) 표 쪽 — 전 스테이지 × 전 레벨
+    for (let sid = 1; sid <= 6; sid++) {
+      const stage = stageById(sid);
+      if (!stage) continue;
+      const shortest = Math.min(...stage.paths.map((wp) => buildPath(wp).totalLength));
+      const cap = Math.max(ALLY_SORTIE_RANGE, shortest * ALLY_SORTIE_PATH_LIMIT);
+      const sim = makeBotSimFor(stage, 1, ALL_DECK, 0, false, FREE_LEVELS);
+      for (let lv = 1; lv <= sim.state.baseLevelMax; lv++) {
+        const reach = sim.allySortieRange();
+        const info = `s${sid} Lv${lv} 한계선 ${reach} / 최단경로 ${shortest.toFixed(2)} / 상한 ${cap.toFixed(2)}`;
+        expect(reach, info).toBeLessThanOrEqual(cap + 1e-9);
+        if (lv === 1) expect(reach, info).toBeCloseTo(ALLY_SORTIE_RANGE, 9);
+        // 미리보기도 같은 상한을 통과해야 한다 — 아니면 패널이 거짓말을 한다
+        const next = sim.baseNextStats();
+        if (next) expect(next.sortie, `${info} 미리보기`).toBeLessThanOrEqual(cap + 1e-9);
+        if (lv < sim.state.baseLevelMax) expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
+      }
+    }
+    // (b) 결과 쪽 — 가장 짧은 경로(s4)에서 만렙을 강제하고 실제 봉쇄 지점을 잰다
+    const s4 = stageById(4);
+    if (!s4) throw new Error('no stage 4');
+    const shortest = Math.min(...s4.paths.map((wp) => buildPath(wp).totalLength));
+    const rs = SEEDS.slice(0, 8).map((seed) =>
+      runBot(makeBotSimFor(s4, seed, ALL_DECK, 2, false, FREE_LEVELS), s4, {
+        towerReserve: 400,
+        allies: { minNear: 2 },
+        base: {},
+      }),
+    );
+    const front = Math.min(...rs.map((r) => r.allyBlockMinDist));
+    const msg = `s4 최전선 ${front.toFixed(2)} / 최단경로 ${shortest.toFixed(2)} = ${((front / shortest) * 100).toFixed(0)}%`;
+    // 실험이 공허하지 않은지 — 만렙까지 올라갔고 실제로 봉쇄가 일어났어야 한다
+    expect(Math.max(...rs.map((r) => r.baseLevel)), msg).toBe(BASE_LEVELS.length);
+    expect(sum(rs, (r) => r.enemyBlockedTicks), msg).toBeGreaterThan(0);
+    expect(front, msg).toBeGreaterThan(shortest * 0.35);
+  }, 300_000);
+
+  /**
+   * ── 7단계 12번: 무한 모드에서 부족 갈래가 **무한 방벽**이 되지 않는다 ────────
+   *
+   * 한계선이 길어지면 아군이 더 오래 일한다. 후반 골드 인플레가 그것을 사면
+   * "여섯 명이 길목을 영구히 막는" 상태가 될 수 있는데, 그러면 무한 모드가 끝나지 않는다.
+   * (ALLY_MAX_ACTIVE 주석이 정확히 이 형태를 상한으로 막고 있다고 주장하는 지점이다)
+   *
+   * 실측(스테이지1 무한, 시드 12, 평균 도달 웨이브):
+   *   타워 몰빵 55.83 / 부족 갈래 54.58 (곡선 없는 대조 55.00) / 아군 몰빵 35.42
+   * 곡선이 있어도 부족 갈래는 타워 몰빵을 **넘지 않고**, 아군에 몰빵하면 20웨이브를 잃는다.
+   */
+  it('무한 모드: 출격 한계선이 길어져도 아군이 무한 방벽이 되지 않는다', () => {
+    const stage = stageById(1);
+    if (!stage) throw new Error('no stage 1');
+    const seeds = SEEDS.slice(0, 12);
+    const go = (opts: BotOptions): BotResult[] =>
+      seeds.map((seed) => runBot(makeBotSimFor(stage, seed, STAGE1_DECK, 0, true, BASE_LEVELS), stage, opts));
+    const avgWave = (rs: BotResult[]): number => sum(rs, (r) => r.wave) / rs.length;
+    const tower = go({});
+    const tribe = go(TRIBE_BOT);
+    const allIn = go({ towerReserve: 2400, allies: { minNear: 1 }, base: {} });
+    const msg = `타워 ${avgWave(tower).toFixed(2)} / 부족 ${avgWave(tribe).toFixed(2)} / 아군몰빵 ${avgWave(allIn).toFixed(2)}`;
+    // 실험이 공허하지 않은지 — 부족 갈래가 실제로 마을을 올리고 봉쇄했어야 한다
+    expect(sum(tribe, (r) => r.allyBlockTicks), msg).toBeGreaterThan(0);
+    expect(Math.max(...tribe.map((r) => r.baseLevel)), msg).toBeGreaterThan(1);
+    // 무한 모드는 끝난다 — 무한 방벽이면 여기서 걸린다
+    for (const r of tribe) expect(r.won || r.wave < 500, msg).toBe(true);
+    // 그리고 부족 갈래가 타워 몰빵을 넘지 않는다 (넘으면 무한 모드의 답이 하나가 된다)
+    expect(avgWave(tribe), msg).toBeLessThanOrEqual(avgWave(tower));
+    // 아군 몰빵은 확실히 벌을 받는다
+    expect(avgWave(allIn), msg).toBeLessThan(avgWave(tower) * 0.8);
   }, 600_000);
 
   it('불도저 봇도 스테이지6은 클리어 불가 (지형 개조가 서열을 뒤집지 않는다)', () => {

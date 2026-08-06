@@ -142,7 +142,10 @@ export function run(): void {
     baseUpgradeCost: () => 220,
     canUpgradeBase: () => st.gold >= 220,
     baseRange: () => 2,
-    baseNextStats: () => ({ hpMax: 140, dmg: 13, range: 2.25 }),
+    allySortieRange: () => 6,
+    // 목: 경로가 없으므로 표식 지점도 없다 — 랩은 패널 레이아웃만 본다
+    allySortiePoints: () => [],
+    baseNextStats: () => ({ hpMax: 140, dmg: 13, range: 2.25, sortie: 7.5 }),
   };
 
   let selectedCard: number | null = null;

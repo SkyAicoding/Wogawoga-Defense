@@ -33,6 +33,11 @@ const PITCH_MAX = 65 * DEG;
 const ORBIT_SMOOTH = 18;
 /** 목표와 이만큼 가까우면 스냅하고 보간 종료 (약 0.01°) */
 const ORBIT_EPS = 0.0002;
+/**
+ * 하단 패널 비켜서기 감쇠 계수(1/s). 궤도(18)보다 살짝 느리게 둔다 —
+ * 판이 통째로 움직이는 연출이라 너무 빠르면 "튄다"로 읽힌다 (0.2초쯤에 도착).
+ */
+const LIFT_SMOOTH = 16;
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -87,6 +92,26 @@ export class DioramaCamera {
   private lastCanvasW = 1;
   private lastCanvasH = 1;
   private hasFit = false;
+
+  /**
+   * **하단 패널 비켜서기** — 판 전체를 화면 위쪽으로 이 픽셀만큼 밀어 올린다 (8단계).
+   *
+   * 왜 필요한가: 하단 HUD 예약(HUD_BOTTOM_*)은 상시 요소 기준인데, 마을 패널은
+   * 레벨업과 출동을 한 패널에 담아 그 예약을 훌쩍 넘는다. 실측(개정 전) — 마을 셀과
+   * 출격 봉수대가 15개 조합 중 각각 12개·8개에서 자기 패널 뒤로 숨었다. 360×640·
+   * 320×568에서는 **전부** 숨었다. "마을을 올리면 부족이 더 멀리 나간다"를 보여주려고
+   * 만든 표식이 그것이 뜨는 유일한 상태에서 안 보이면 없는 기능이다.
+   *
+   * 왜 줌아웃(fit 영역 축소)이 아니라 **평행 이동**인가: 좁은 화면에서 패널 높이만큼
+   * fit 창을 줄이면 남는 세로가 60px 남짓이라 판이 손톱만 해진다. 이동은 배율을
+   * 유지한 채 관심 지점(마을·봉수대는 경로의 끝, 즉 판의 아래쪽)만 끌어올리고,
+   * 대신 스폰 쪽 위 끄트머리가 화면 밖으로 나간다 — 패널이 열려 있는 동안만이다.
+   *
+   * 구현은 fit의 setViewOffset 창을 그만큼 위로 옮기는 것뿐이라 줌/팬/각도와 독립이고
+   * (레이캐스트도 같은 카메라를 쓰므로 탭 좌표가 자동으로 따라온다) 상태는 이 하나다.
+   */
+  private lift = 0;
+  private liftGoal = 0;
 
   static readonly ZOOM_MIN = 1;
   /**
@@ -181,8 +206,16 @@ export class DioramaCamera {
     this.camera.position.copy(this.basePos);
     this.camera.lookAt(this.target);
     this.camera.aspect = aspect;
-    // 풀 이미지(vw×vh) 안에 fit → 캔버스는 (-vx,-vy)에서 시작하는 창
-    this.camera.setViewOffset(vw, vh, -viewport.x, -viewport.y, this.lastCanvasW, this.lastCanvasH);
+    // 풀 이미지(vw×vh) 안에 fit → 캔버스는 (-vx,-vy)에서 시작하는 창.
+    // lift는 그 창을 위로 옮긴다 = 판이 위로 올라간다 (아래 패널을 비켜선다)
+    this.camera.setViewOffset(
+      vw,
+      vh,
+      -viewport.x,
+      -(viewport.y - this.lift),
+      this.lastCanvasW,
+      this.lastCanvasH,
+    );
     this.camera.far = dist + 80;
     this.camera.updateProjectionMatrix();
   }
@@ -268,6 +301,21 @@ export class DioramaCamera {
     this.settleOrbit();
   }
 
+  /**
+   * 하단 패널 비켜서기 목표 (픽셀, 0이면 원위치). update(dt)에서 지수 감쇠로 수렴한다 —
+   * 패널이 열리는 순간 판이 순간이동하면 어디를 보고 있었는지 잃는다.
+   */
+  setLift(px: number): void {
+    const v = Math.max(0, px);
+    if (Math.abs(v - this.liftGoal) < 0.5) return;
+    this.liftGoal = v;
+  }
+
+  /** 지금 실제로 적용된 이동량 — 화면 좌표에서 원래 위치를 되돌릴 때 쓴다 */
+  get liftPx(): number {
+    return this.lift;
+  }
+
   /** 피격/보스 등장 등 화면 흔들림 (strength ≈ 0.1~0.6) */
   shake(strength: number): void {
     this.shakeAmp = Math.min(1, this.shakeAmp + strength);
@@ -288,6 +336,12 @@ export class DioramaCamera {
         this.pitch = this.pitchGoal;
         this.orbiting = false;
       }
+      if (this.hasFit) this.applyView();
+    }
+    if (this.lift !== this.liftGoal) {
+      const k = 1 - Math.exp(-LIFT_SMOOTH * Math.max(0, dt));
+      this.lift += (this.liftGoal - this.lift) * k;
+      if (Math.abs(this.liftGoal - this.lift) < 0.5) this.lift = this.liftGoal;
       if (this.hasFit) this.applyView();
     }
     if (this.shakeAmp > 0.002) {

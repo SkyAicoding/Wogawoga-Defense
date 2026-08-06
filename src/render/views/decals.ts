@@ -32,9 +32,21 @@ export class Decals {
   private chevrons: THREE.Mesh | null = null;
   private chevronMat: THREE.MeshBasicMaterial;
   private chevronPulse = 0;
-  /** 탭한 소품 셀 표시 링 (메시 1개 = 드로우콜 1, 평소엔 숨김) */
+  /**
+   * 표식 봉수대 (메시 1개 = 드로우콜 1, 평소엔 숨김).
+   * **두 가지 표시가 이 메시 하나를 돌려 쓴다** — 탭한 소품 셀, 그리고 아군 출격 한계선.
+   * 둘은 placement에서 상호배타라(소품 선택과 마을 선택은 서로를 해제한다) 한 프레임에
+   * 같이 보일 일이 없다. 새 메시를 만들면 그만큼 드로우콜이 늘어나므로 돌려 쓴다.
+   */
   private marker: THREE.Mesh;
   private markerMat: THREE.MeshBasicMaterial;
+  /** 소품용 봉수대 지오메트리 (원점 기준 1개) */
+  private cellMarkerGeo: THREE.BufferGeometry;
+  /** 출격선용 지오메트리 (월드 좌표에 경로 수만큼 박아 병합) — 지점이 바뀔 때만 다시 만든다 */
+  private sortieGeo: THREE.BufferGeometry | null = null;
+  private sortieSig = '';
+  /** 지금 마커가 무엇을 가리키는가 — 호흡 애니메이션 규칙이 갈린다 */
+  private markerMode: 'cell' | 'sortie' = 'cell';
   private time = 0;
   private disposables: (THREE.BufferGeometry | THREE.Material)[] = [];
 
@@ -68,7 +80,8 @@ export class Decals {
     // 링(지면) + 수직 기둥 + 정수리 다이아몬드를 **하나로 병합**해 드로우콜 1을 지킨다.
     // 하단 HUD 패널이 그 셀을 덮어도 기둥/다이아가 패널 위로 솟아 "여기다"가 보인다.
     const markerGeo = buildMarkerGeo();
-    this.markerMat = groundMat(0xffa63c, 0.9);
+    this.cellMarkerGeo = markerGeo;
+    this.markerMat = groundMat(MARKER_COLOR_CELL, 0.9);
     // 소품·지형에 가려지면 선택 표시로서 쓸모가 없다 — 항상 위에 그린다
     this.markerMat.depthTest = false;
     this.marker = new THREE.Mesh(markerGeo, this.markerMat);
@@ -158,7 +171,49 @@ export class Decals {
    */
   showCellMarker(cellX: number, cellZ: number, offsetX = 0, offsetZ = 0): void {
     const v = this.cellToWorld(cellX, cellZ);
+    this.marker.geometry = this.cellMarkerGeo;
+    this.markerMat.color.setHex(MARKER_COLOR_CELL);
+    this.markerMode = 'cell';
     this.marker.position.set(v.x + offsetX, DECAL_Y + 0.04, v.z + offsetZ);
+    this.marker.visible = true;
+  }
+
+  /**
+   * 아군 출격 한계선 표식 — "부족원은 여기까지 나간다"를 경로 위에 세운다.
+   * points는 sim이 실제로 쓰는 정지 지점(경로마다 하나, 셀 연속 좌표)이다.
+   *
+   * 왜 기지 중심의 원이 아니라 봉수대인가: 한계선은 **경로 호장** 기준이라 굽은 경로에서
+   * 원과 실제 정지 지점이 어긋나고, 경로가 둘인 스테이지(4·6)는 갈래마다 지점이 다르다.
+   * 봉수대는 정확히 그 점에 서고, 하단 HUD 패널이 그 자리를 덮어도 기둥이 패널 위로 솟는다.
+   *
+   * **드로우콜 증가 0** — 소품 선택 마커와 같은 메시를 쓰고(둘은 상호배타), 경로가 여럿이면
+   * 봉수대를 **하나로 병합**해 여전히 메시 한 개다. 색만 아군 톤(한랭색)으로 바꿔
+   * "이건 선택 표시가 아니라 우리 편 이야기"임을 구분한다.
+   */
+  showSortieMarker(points: readonly { x: number; z: number }[]): void {
+    if (points.length === 0) {
+      this.hideCellMarker();
+      return;
+    }
+    // 지점이 그대로면 지오메트리를 다시 만들지 않는다 (레벨업/선택 때만 바뀐다)
+    const sig = points.map((p) => `${p.x.toFixed(3)},${p.z.toFixed(3)}`).join(';');
+    if (sig !== this.sortieSig || !this.sortieGeo) {
+      this.sortieSig = sig;
+      this.sortieGeo?.dispose();
+      const v = new THREE.Vector3();
+      const geos: THREE.BufferGeometry[] = [];
+      for (const p of points) {
+        this.cellToWorld(p.x, p.z, v);
+        geos.push(buildMarkerGeo(v));
+      }
+      this.sortieGeo = mergeGeos(geos);
+    }
+    this.marker.geometry = this.sortieGeo;
+    this.markerMat.color.setHex(MARKER_COLOR_SORTIE);
+    this.markerMode = 'sortie';
+    // 좌표는 지오메트리에 구워 넣었다 — 메시는 원점에 둔다(호흡 스케일도 쓰지 않는다)
+    this.marker.position.set(0, 0, 0);
+    this.marker.scale.set(1, 1, 1);
     this.marker.visible = true;
   }
 
@@ -214,9 +269,13 @@ export class Decals {
     }
     // 선택 마커 — 살짝 커졌다 작아지며 "여기다" 하고 알린다.
     // 기둥까지 같이 늘리면 다이아가 출렁이므로 수평만 호흡시킨다.
+    // 출격선 모드는 좌표가 지오메트리에 구워져 있어 스케일이 곧 원점 기준 확대다
+    // (봉수대가 판 위를 미끄러진다) — 그래서 밝기만 호흡시킨다.
     if (this.marker.visible) {
-      const s = 1 + Math.sin(this.time * 6) * 0.09;
-      this.marker.scale.set(s, 1, s);
+      if (this.markerMode === 'cell') {
+        const s = 1 + Math.sin(this.time * 6) * 0.09;
+        this.marker.scale.set(s, 1, s);
+      }
       this.markerMat.opacity = 0.72 + Math.sin(this.time * 6) * 0.22;
     }
   }
@@ -225,6 +284,8 @@ export class Decals {
     this.group.parent?.remove(this.group);
     this.slots?.geometry.dispose();
     this.chevrons?.geometry.dispose();
+    this.sortieGeo?.dispose();
+    this.sortieGeo = null;
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
   }
@@ -234,17 +295,26 @@ export class Decals {
  * 선택 마커 지오메트리 — 지면 링 + 수직 기둥 + 정수리 다이아를 하나로 병합.
  * 기둥 높이 2.2 월드는 하단 HUD 패널이 그 셀을 덮었을 때 패널 위로 솟아나오는 최소치다
  * (기본 줌 세로/가로 실측 기준). 총 92 삼각형 / 드로우콜 1.
+ *
+ * at을 받는 이유는 출격선 표식 때문이다 — 경로가 여럿이면 봉수대도 여럿인데, 메시를
+ * 늘리면 드로우콜이 늘어난다. 그래서 월드 좌표를 지오메트리에 구워 하나로 병합한다.
+ * 생략하면 원점 기준이고, 그때 위치는 mesh.position이 옮긴다(소품 마커가 이 경로다).
  */
 const MARKER_BEACON_H = 2.2;
+/** 소품 선택 = 주황(사거리 링과 구분) / 출격 한계선 = 한랭색(아군 톤과 같은 축) */
+const MARKER_COLOR_CELL = 0xffa63c;
+const MARKER_COLOR_SORTIE = 0x9fdcf7;
 
-function buildMarkerGeo(): THREE.BufferGeometry {
+function buildMarkerGeo(at?: THREE.Vector3): THREE.BufferGeometry {
   const ring = new THREE.RingGeometry(0.3, 0.46, 24);
   ring.rotateX(-Math.PI / 2);
   const shaft = new THREE.CylinderGeometry(0.028, 0.05, MARKER_BEACON_H, 4, 1, true);
   shaft.translate(0, MARKER_BEACON_H / 2, 0);
   const tip = new THREE.OctahedronGeometry(0.13);
   tip.translate(0, MARKER_BEACON_H + 0.12, 0);
-  return mergeGeos([ring, shaft, tip]);
+  const merged = mergeGeos([ring, shaft, tip]);
+  if (at) merged.translate(at.x, DECAL_Y + 0.04, at.z);
+  return merged;
 }
 
 /** 소규모 병합 헬퍼 (BufferGeometryUtils 의존 없이 non-indexed 위치만) */

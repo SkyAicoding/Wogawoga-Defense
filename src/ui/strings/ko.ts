@@ -107,13 +107,16 @@ export const ko: Record<string, string> = {
   'battle.close': '닫기',
   'battle.lvOf': 'Lv.{n}/{m}',
   'battle.home.title': '홈타운',
-  'battle.home.stats': '체력 {hp} · 사거리 {r}',
-  'battle.home.desc': '올리면 체력·공격력·사거리가 함께 커져요',
-  'battle.home.next': '올리면 → 체력 {hp} · 공격 {d} · 사거리 {r}',
+  // 출격거리 = 부족원이 마을에서 몇 타일 앞까지 나가는가 (sim/allies.ts 규칙 2).
+  // 이 줄에 없으면 "마을을 키우면 부족원이 더 멀리 나간다"는 설계가 화면 어디에도 없다
+  'battle.home.stats': '체력 {hp} · 사거리 {r} · 출격거리 {s}',
+  'battle.home.desc': '올리면 체력·공격력·사거리와 부족원 출격거리가 함께 커져요',
+  'battle.home.next': '올리면 → 체력 {hp} · 공격 {d} · 사거리 {r} · 출격거리 {s}',
   'battle.home.confirmDesc': '한 번 더 누르면 {n} 골드가 빠져요 (되돌릴 수 없음)',
   'battle.home.maxed': '더 키울 수 없어요 (최대 단계)',
-  'battle.ally.title': '출동',
-  'battle.ally.infoTitle': '출동 안내',
+  'battle.ally.title': '부족 출동',
+  // 상단 부족 칩 — 인원 표시이자 마을 패널로 가는 입구다 (출동 버튼은 패널 안에만 있다)
+  'battle.ally.pillHint': '나가 있는 부족원 — 눌러서 마을 열기 (출동·강화)',
   // 세 종이 공유하는 규칙 — 버튼마다 세 번 적지 않고 여기 한 줄로 모은다
   'battle.ally.rules': '{s}초 뒤 마을로 돌아가요 · 살아 돌아오면 정가의 {p}% 환급 · 동시 {m}명까지',
   'ally.clubber.name': '몽둥이꾼',

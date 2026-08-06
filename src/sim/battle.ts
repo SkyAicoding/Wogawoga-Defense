@@ -30,12 +30,14 @@ import type {
   CardState,
   SimEvent,
   TowerState,
+  Vec2,
   WaveDef,
 } from '@/data/types';
 import { Rng } from '@/core/rng';
 import { ALLY_MAX_ACTIVE } from '@/data/balance';
 import { isBuildableCell, rasterizePathCells, sceneryCells } from '@/data/grid';
 import {
+  allySortiePoints,
   allyTrainCost,
   canTrainAlly,
   moveAllies,
@@ -49,6 +51,7 @@ import { Economy, sceneryClearCostFor, sellRefundFor } from './economy';
 import { pathFor, World, type EnemySim, type SimCtx } from './entities';
 import {
   baseNextStats,
+  baseSortieRange,
   baseUpgradeCost,
   canUpgradeBase,
   createHometown,
@@ -521,7 +524,15 @@ class Battle implements BattleSim {
     return currentLevelDef(this.ctx).range;
   }
 
-  baseNextStats(): { hpMax: number; dmg: number; range: number } | null {
+  allySortieRange(): number {
+    return baseSortieRange(this.ctx);
+  }
+
+  allySortiePoints(): Vec2[] {
+    return allySortiePoints(this.ctx);
+  }
+
+  baseNextStats(): { hpMax: number; dmg: number; range: number; sortie: number } | null {
     return baseNextStats(this.ctx);
   }
 

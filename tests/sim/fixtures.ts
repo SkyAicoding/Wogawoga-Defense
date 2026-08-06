@@ -15,6 +15,7 @@ import type {
   TowerTier,
   WaveDef,
 } from '@/data/types';
+import { ALLY_SORTIE_RANGE } from '@/data/balance';
 
 export const ALL_TOWER_IDS: TowerId[] = [
   'spear',
@@ -154,10 +155,12 @@ export function allyDefs(
  * hpMul은 1/2/3이라 레벨업의 HP 정책을 눈으로 검산할 수 있다.
  */
 export function baseLevels(overrides?: Partial<BaseLevelDef>[]): BaseLevelDef[] {
+  // sortie는 balance 기본값 그대로다 — 목 표에서 한계선을 흔들면 아군 테스트가
+  // "무엇을 재는지" 알 수 없게 된다. 레벨별 한계선은 그것을 재는 테스트가 overrides로 켠다
   const base: BaseLevelDef[] = [
-    { cost: 0, hpMul: 1, dmg: 0, cooldownTicks: 30, range: 0 },
-    { cost: 100, hpMul: 2, dmg: 0, cooldownTicks: 30, range: 0 },
-    { cost: 200, hpMul: 3, dmg: 0, cooldownTicks: 30, range: 0 },
+    { cost: 0, hpMul: 1, dmg: 0, cooldownTicks: 30, range: 0, sortie: ALLY_SORTIE_RANGE },
+    { cost: 100, hpMul: 2, dmg: 0, cooldownTicks: 30, range: 0, sortie: ALLY_SORTIE_RANGE },
+    { cost: 200, hpMul: 3, dmg: 0, cooldownTicks: 30, range: 0, sortie: ALLY_SORTIE_RANGE },
   ];
   if (!overrides) return base;
   return base.map((lv, i) => ({ ...lv, ...overrides[i] }));

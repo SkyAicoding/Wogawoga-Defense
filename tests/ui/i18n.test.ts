@@ -55,7 +55,9 @@ describe('i18n 문자열', () => {
         expect(en[k], `en.${k}`).toBeTruthy();
       }
     }
-    for (const k of ['battle.ally.title', 'battle.ally.infoTitle', 'battle.ally.rules']) {
+    // (6단계에서 '출동 안내 패널'이 마을 패널에 흡수돼 battle.ally.infoTitle은 사라졌다 —
+    //  같은 정보는 마을 패널의 ally-info-row 세 줄이 그대로 띄운다)
+    for (const k of ['battle.ally.title', 'battle.ally.rules']) {
       expect(ko[k], `ko.${k}`).toBeTruthy();
       expect(en[k], `en.${k}`).toBeTruthy();
     }

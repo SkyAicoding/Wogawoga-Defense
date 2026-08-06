@@ -1,7 +1,8 @@
 /**
  * 배치/선택 입력 — 탭·호버를 셀 좌표로 변환해 시뮬레이션 커맨드로.
  * 카드 선택 → 슬롯 발광 + 고스트 프리뷰 → 탭 배치.
- * 타워 탭 → 선택 + 사거리 링. 홈타운(기지 셀) 탭 → 선택 + 사거리 링(레벨업 패널).
+ * 타워 탭 → 선택 + 사거리 링.
+ * 홈타운(기지 셀) 탭 → 선택 + 사거리 링 + 아군 출격 한계선 봉수대 (마을 패널: 레벨업 + 출동).
  * 소품(나무·바위) 탭 → 선택 + 링(제거 패널).
  * 빈 곳 탭 / 같은 대상 재탭 → 해제. 카드 선택 중에는 배치 흐름이 우선이다.
  *
@@ -134,11 +135,7 @@ export class PlacementController {
         this.clearBaseSelection();
         return;
       }
-      this.clearTowerSelection();
-      this.clearScenerySelection();
-      this.baseSelected = true;
-      this.showBaseRange();
-      audio.play('uiTap');
+      this.selectBase();
       return;
     }
     // 소품(나무·바위) 선택/해제 — 같은 셀을 다시 탭하면 닫힌다
@@ -163,10 +160,16 @@ export class PlacementController {
     if (this.baseSelected) this.clearBaseSelection();
   }
 
-  /** 홈타운 사거리 링 — 레벨업으로 사거리가 늘면 그 자리에서 넓어지는 게 보인다 */
+  /**
+   * 홈타운 표시 — 사거리 링 + **아군 출격 한계선 봉수대**.
+   * 레벨업으로 둘 다 늘면 그 자리에서 넓어지고 멀어지는 게 보인다: 마을 패널의
+   * "사거리 N · 출격 N"이 판 위에서 무엇을 뜻하는지 숫자 없이 읽히는 유일한 경로다.
+   * 봉수대는 소품 선택 마커와 같은 메시라 드로우콜이 늘지 않는다 (decals.ts).
+   */
   private showBaseRange(): void {
     const bc = this.stage.baseCell;
     this.stage3d.decals.showRange(bc.x, bc.z, this.sim.baseRange());
+    this.stage3d.decals.showSortieMarker(this.sim.allySortiePoints());
   }
 
   private showRangeFor(towerId: number): void {
@@ -209,10 +212,26 @@ export class PlacementController {
     return this.baseSelected;
   }
 
+  /**
+   * 마을을 고른다 — 판 위의 움막 탭과 **완전히 같은 경로**(HUD의 부족 칩도 이걸 부른다).
+   * 8단계에서 공개한 이유: 마을 패널이 아군 기능의 유일한 입구인데, 판 위의 움막
+   * 한 칸에는 배지도 글로우도 없어 "여기를 눌러라"가 화면 어디에도 없었다.
+   */
+  selectBase(): void {
+    if (this.baseSelected) return;
+    this.clearTowerSelection();
+    this.clearScenerySelection();
+    this.baseSelected = true;
+    this.showBaseRange();
+    audio.play('uiTap');
+  }
+
   clearBaseSelection(): void {
     if (!this.baseSelected) return;
     this.baseSelected = false;
     this.stage3d.decals.hideRange();
+    // 출격선 봉수대는 소품 마커와 같은 메시를 쓴다 — 마을 선택이 풀리면 같이 내린다
+    this.stage3d.decals.hideCellMarker();
   }
 
   /** 레벨업 후 사거리 링 갱신 — 선택 중이 아니면 아무 일도 하지 않는다 */

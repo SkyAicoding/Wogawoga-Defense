@@ -7,6 +7,7 @@ import type { BaseLevelDef, BattleSim, SimEvent, TowerTier } from '@/data/types'
 import { TICK_RATE } from '@/data/types';
 import { createBattle } from '@/sim/battle';
 import { BASE_LEVELS } from '@/data/hometown';
+import { ALLY_SORTIE_RANGE } from '@/data/balance';
 import { ALLY_DEFS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
 import { baseLevels, enemyDefs, eventsOf, options, runTicks, stageDef, wave } from './fixtures';
 
@@ -312,13 +313,23 @@ describe('실제 밸런스 데이터', () => {
 });
 
 describe('다음 레벨 미리보기 (비가역 결제 전 정보)', () => {
-  it('다음 레벨의 최대HP·공격력·사거리를 sim이 확정한 값으로 준다', () => {
+  it('다음 레벨의 최대HP·공격력·사거리·출격 한계선을 sim이 확정한 값으로 준다', () => {
     const sim = armedSim({ gold: 1000, baseHp: 10 });
-    // 목 테이블: Lv2 = hpMul 2 · dmg 20 · range 3
-    expect(sim.baseNextStats()).toEqual({ hpMax: 20, dmg: 20, range: 3 });
+    // 목 테이블: Lv2 = hpMul 2 · dmg 20 · range 3 · sortie는 목 기본값(6.0)
+    expect(sim.baseNextStats()).toEqual({
+      hpMax: 20,
+      dmg: 20,
+      range: 3,
+      sortie: ALLY_SORTIE_RANGE,
+    });
     expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
     // Lv3 = hpMul 3 · dmg 40 · range 4
-    expect(sim.baseNextStats()).toEqual({ hpMax: 30, dmg: 40, range: 4 });
+    expect(sim.baseNextStats()).toEqual({
+      hpMax: 30,
+      dmg: 40,
+      range: 4,
+      sortie: ALLY_SORTIE_RANGE,
+    });
   });
 
   it('미리보기 최대HP가 실제 레벨업 결과와 정확히 일치한다 (반올림이 갈리지 않는다)', () => {

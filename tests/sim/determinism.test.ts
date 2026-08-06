@@ -219,6 +219,88 @@ function runAllies(seed: number): {
   return { hashes, trained, died, retired };
 }
 
+/**
+ * 6단계) 아군 출동 + 마을 레벨업을 **섞은** 시나리오.
+ * 출격 한계선이 마을 레벨에서 유도되므로, 레벨업 순간 이미 나가 있던 아군이
+ * 앞으로 더 걸어 나간다 — 즉 레벨업이 아군의 위치·교전 시점을 통째로 바꾼다.
+ * 그 발산이 hash()에 잡히는지, 그리고 **새 상태 없이** 재현되는지를 잠근다.
+ */
+/** 목 스테이지 경로 길이 (x 0→9 직선) — 한계선은 경로 끝에서 재므로 필요하다 */
+const PATH_TOTAL = 9;
+
+const MIXED_SCRIPT: [number, BattleCommand][] = [
+  [2, { type: 'placeTower', handIndex: 0, cellX: 4, cellZ: 1 }],
+  [3, { type: 'trainAlly', defId: 'clubber' }],
+  [5, { type: 'trainAlly', defId: 'guardian' }],
+  [6, { type: 'callWave' }],
+  [200, { type: 'upgradeBase' }], // 아군이 Lv1 한계선에 서 있는 동안 마을을 키운다
+  [260, { type: 'trainAlly', defId: 'clubber' }],
+  [520, { type: 'upgradeBase' }],
+  [700, { type: 'trainAlly', defId: 'slinger' }],
+  [900, { type: 'upgradeBase' }], // 3레벨 테이블이라 거부된다
+];
+
+function runMixed(seed: number): {
+  hashes: number[];
+  upgrades: number;
+  trained: number;
+  /** 관측: 아군이 Lv1 한계선(총 길이 − 6.0)보다 앞으로 나간 적이 있는가 */
+  wentBeyondLv1: boolean;
+} {
+  const sim = createBattle(
+    options({
+      seed,
+      endless: true,
+      deck: ['spear'],
+      stage: stageDef({ waveCount: 3, baseHp: 9999, startGold: 100000 }),
+      baseLevels: baseLevels([
+        { dmg: 6, cooldownTicks: 24, range: 2, sortie: 4 },
+        { cost: 100, dmg: 14, cooldownTicks: 20, range: 3, sortie: 6.5 },
+        { cost: 200, dmg: 30, cooldownTicks: 16, range: 4, sortie: 8.5 },
+      ]),
+      enemyDefs: enemyDefs({
+        warrior: {
+          hp: 900,
+          speed: 0.5,
+          cost: 40,
+          towerAttack: { dmg: 30, range: 1.6, cooldownTicks: 20, stopToAttack: true, ranged: false },
+        },
+        raptor: { hp: 300, speed: 0.9, cost: 25 },
+      }),
+      allyDefs: allyDefs({
+        clubber: { hp: 90, dmg: 12, cooldownTicks: 22, lifeTicks: 420 },
+        guardian: { hp: 260, dmg: 7, cooldownTicks: 30, armor: 2, speed: 0.8, lifeTicks: 500 },
+        slinger: { hp: 60, dmg: 9, range: 2.6, blocks: false, canTargetAir: true, lifeTicks: 400 },
+      }),
+      waves: [
+        wave([
+          { enemyId: 'warrior', count: 5, intervalTicks: 25 },
+          { enemyId: 'raptor', count: 6, intervalTicks: 18, delayTicks: 60 },
+        ]),
+        wave([{ enemyId: 'warrior', count: 6, intervalTicks: 20 }]),
+        wave([{ enemyId: 'raptor', count: 8, intervalTicks: 15, hpMul: 1.5 }]),
+      ],
+    }),
+  );
+  const hashes: number[] = [];
+  let upgrades = 0;
+  let trained = 0;
+  let wentBeyondLv1 = false;
+  for (let t = 0; t < 1200; t++) {
+    for (const [at, cmd] of MIXED_SCRIPT) if (at === t) sim.applyCommand(cmd);
+    sim.tick();
+    for (const ev of sim.drainEvents()) {
+      if (ev.type === 'baseUpgraded') upgrades++;
+      else if (ev.type === 'allyTrained') trained++;
+    }
+    // Lv1 한계선은 경로 끝에서 4.0 — 목표 지점이 그보다 앞으로 옮겨진 아군이 있었는가
+    const lv1Hold = sim.state.allies.length > 0 ? PATH_TOTAL - 4.0 : Infinity;
+    for (const a of sim.state.allies) if (a.holdDist < lv1Hold - 0.001) wentBeyondLv1 = true;
+    if (t % 40 === 39) hashes.push(sim.hash());
+  }
+  return { hashes, upgrades, trained, wentBeyondLv1 };
+}
+
 // ---------------------------------------------------------------------------
 // 홈타운 시나리오 — 기지가 실제로 쏘고 도중에 레벨업까지 하는 구간.
 // 레벨(공격력·사거리·최대HP)·발사 쿨다운·고정 타깃이 hash()에 들어가 있는지를 잠근다.
@@ -329,6 +411,17 @@ describe('결정론', () => {
     expect(a.hashes).toEqual(b.hashes);
     expect(a.hashes.length).toBe(30);
     expect(b.shots).toBe(a.shots);
+  });
+
+  it('아군 출동과 마을 레벨업을 섞어도 해시 전 구간 일치 (한계선이 유도값이라 새 상태가 없다)', () => {
+    const a = runMixed(4242);
+    const b = runMixed(4242);
+    // 시나리오가 실제로 레벨업·출동을 포함하고, 아군이 Lv1 한계선을 넘어갔는지 확인
+    expect(a.upgrades).toBe(2); // 3레벨 테이블이라 세 번째 호출은 거부된다
+    expect(a.trained).toBeGreaterThan(2);
+    expect(a.wentBeyondLv1, '레벨업이 실제로 아군을 더 내보냈어야 한다').toBe(true);
+    expect(a.hashes).toEqual(b.hashes);
+    expect(a.hashes.length).toBe(30);
   });
 
   it('홈타운 레벨이 해시에 반영된다 (레벨업만 달라도 갈라진다)', () => {

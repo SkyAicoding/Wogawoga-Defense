@@ -80,7 +80,7 @@
  * three/DOM 임포트 금지.
  */
 import type { BaseLevelDef, TowerId } from '@/data/types';
-import { baseMaxHpFor } from '@/data/balance';
+import { ALLY_SORTIE_PATH_LIMIT, ALLY_SORTIE_RANGE, baseMaxHpFor } from '@/data/balance';
 import { dist2 } from '@/core/mathx';
 import { addGold } from './combat';
 import type { EnemySim, SimCtx } from './entities';
@@ -98,8 +98,17 @@ const ARROW_Y = 0.6;
 /**
  * 레벨 테이블이 비었을 때의 폴백 — 피해 0이면 규칙 1이 통째로 꺼진다.
  * 통제 실험(tests/sim/arena.ts)이 기지 화력을 끄고 타워만 격리해 재는 경로이기도 하다.
+ * sortie만은 0이 아니라 기본값을 준다 — 여기서 0으로 떨어지면 "기지 화력만 끈" 실험이
+ * 조용히 "아군이 기지에서 한 발짝도 못 나가는" 실험으로 바뀐다 (balance.ALLY_SORTIE_RANGE).
  */
-const NO_DEFENSE: BaseLevelDef = { cost: 0, hpMul: 1, dmg: 0, cooldownTicks: 30, range: 0 };
+const NO_DEFENSE: BaseLevelDef = {
+  cost: 0,
+  hpMul: 1,
+  dmg: 0,
+  cooldownTicks: 30,
+  range: 0,
+  sortie: ALLY_SORTIE_RANGE,
+};
 
 /** 홈타운의 시뮬레이션 전용 상태 (레벨은 공개 상태 view.baseLevel이 갖는다) */
 export interface HometownSim {
@@ -121,6 +130,61 @@ export function levelDefAt(ctx: SimCtx, level: number): BaseLevelDef {
 /** 지금 레벨의 정의 */
 export function currentLevelDef(ctx: SimCtx): BaseLevelDef {
   return levelDefAt(ctx, ctx.view.baseLevel);
+}
+
+/**
+ * 규칙 8) **경로 길이 상한** — 표의 값을 이 스테이지에서 실제로 쓸 수 있는 값으로 깎는다.
+ * 상한 cap = max(ALLY_SORTIE_RANGE, 최단 지상경로 × ALLY_SORTIE_PATH_LIMIT).
+ * 근거 전문은 balance.ALLY_SORTIE_PATH_LIMIT.
+ *
+ * **최단** 경로를 쓰는 이유: 갈래가 둘인 스테이지(4·6)에서 경로마다 다른 값을 주면
+ * 같은 마을이 왼쪽 부족원과 오른쪽 부족원을 다르게 대우하게 되고, 패널에 적을 숫자도
+ * 하나로 정해지지 않는다. 짧은 쪽에 맞추면 규칙이 하나이고 그림도 좌우 대칭이다.
+ *
+ * ── 8단계: 잘라내기(min)가 아니라 **곡선 압축**이다 ────────────────────────
+ * 7단계는 `min(표의 값, cap)`이었다. 그러면 짧은 스테이지에서 곡선의 뒤쪽이 통째로
+ * 평평해진다 — 실측(s4, cap 8.80): Lv2 8.50 → **Lv3·Lv4·Lv5가 전부 8.80**이라
+ * 누적 3,600골드(Lv3→5)를 내고 출격거리가 **0.00타일** 늘었다. 패널은 정직하게 같은
+ * 숫자를 보여 주지만, 그건 "마을이 파는 네 번째 물건"이 그 스테이지에서는 가장 비싼
+ * 세 칸에서 죽어 있다는 뜻이다. s6도 Lv4→Lv5가 11.00 → 11.16(2,400골드에 +0.16)이었다.
+ *
+ * 그래서 자르지 않고 **곡선 전체를 cap에 맞춰 압축**한다. Lv1(=ALLY_SORTIE_RANGE)이
+ * 고정점이고 만렙이 정확히 cap에 닿는다:
+ *     reach(lv) = 6.0 + (표의 값 − 6.0) × (cap − 6.0) / (만렙 표값 − 6.0)
+ * s4(cap 8.80, k=0.466): 6.00 / 7.16 / 7.86 / 8.33 / 8.80 — **모든 칸이 값을 판다**.
+ * s6(cap 11.16, k=0.860): 6.00 / 8.15 / 9.44 / 10.30 / 11.16.
+ * s1·s2·s3·s5는 cap ≥ 12.0이라 표가 그대로 나간다(k=1, 한 톨도 안 바뀐다).
+ *
+ * 세 성질이 그대로 유지된다: (a) Lv1은 어느 스테이지에서도 6.0 — 모든 기준선 측정의
+ * 원점이라 불가침이다. (b) 어떤 레벨도 cap을 넘지 않는다(봉투 12번의 (a) 잣대).
+ * (c) 중간 레벨은 잘라내기보다 **더 짧다**(s4 Lv3 8.80 → 7.86) — 입구 요격 쪽으로
+ * 느슨해지는 방향이 아니라 조여지는 방향이다.
+ */
+function pathLimited(ctx: SimCtx, sortie: number): number {
+  let shortest = Infinity;
+  for (const p of ctx.groundPaths) if (p.totalLength < shortest) shortest = p.totalLength;
+  if (!isFinite(shortest)) return sortie; // 지상 경로가 없는 스테이지 — 깎을 근거가 없다
+  const cap = Math.max(ALLY_SORTIE_RANGE, shortest * ALLY_SORTIE_PATH_LIMIT);
+  // Lv1(원점) 이하는 어떤 스테이지에서도 건드리지 않는다. cap ≥ 6.0이라 상한에도 안 걸린다
+  if (sortie <= ALLY_SORTIE_RANGE) return sortie;
+  const levels = ctx.opts.baseLevels;
+  const top = levels[levels.length - 1]?.sortie ?? sortie;
+  // 만렙이 이미 상한 안이면 압축할 것이 없다 (경로가 긴 스테이지 = 대부분)
+  if (top <= cap) return Math.min(sortie, cap);
+  return Math.min(cap, ALLY_SORTIE_RANGE + ((sortie - ALLY_SORTIE_RANGE) * (cap - ALLY_SORTIE_RANGE)) / (top - ALLY_SORTIE_RANGE));
+}
+
+/**
+ * 지금 레벨의 **아군 출격 한계선** (타일) — src/sim/allies.ts 규칙 2가 소비한다.
+ *
+ * 마을이 파는 물건인데 소비처가 마을 밖(allies.ts)이라 접근자를 여기 둔다:
+ * 아군 쪽이 BASE_LEVELS 인덱싱과 폴백 규칙을 다시 구현하면 표가 하나 더 생기는 셈이고,
+ * 그러면 패널에 뜬 숫자와 실제로 멈추는 자리가 갈라질 수 있다 (baseMaxHpFor와 같은 이유).
+ * 경로 길이 상한(규칙 8)도 **여기 한 곳에서만** 걸린다 — 화면·표식·실제 정지 지점이
+ * 전부 이 함수를 거치므로 셋이 갈라질 자리가 없다.
+ */
+export function baseSortieRange(ctx: SimCtx): number {
+  return pathLimited(ctx, currentLevelDef(ctx).sortie);
 }
 
 /** 전투 시작 시 Lv1 기준 최대 HP 확정 (hpMul이 1이 아닌 테이블도 지원) */
@@ -150,13 +214,19 @@ export function canUpgradeBase(ctx: SimCtx): boolean {
  */
 export function baseNextStats(
   ctx: SimCtx,
-): { hpMax: number; dmg: number; range: number } | null {
+): { hpMax: number; dmg: number; range: number; sortie: number } | null {
   const next = ctx.opts.baseLevels[ctx.view.baseLevel];
   if (!next) return null;
   return {
     hpMax: baseMaxHpFor(ctx.opts.stage.baseHp, next.hpMul),
     dmg: next.dmg,
     range: next.range,
+    // 출격 한계선도 미리보기에 넣는다 — 이 결제가 **아군까지** 강화한다는 것을
+    // 사기 전에 알 방법이 그것뿐이다 (넣지 않으면 설계 의도가 화면에 없다).
+    // 경로 길이 상한(규칙 8)을 여기서도 통과시킨다 — 짧은 경로에서 실제로는 안 늘어나는데
+    // 미리보기만 늘어나면 **화면이 거짓말을 한다**. 그 스테이지에서는 같은 값이 뜨고,
+    // 플레이어는 "이 축은 여기서 더 안 늘어난다"를 사기 전에 본다.
+    sortie: pathLimited(ctx, next.sortie),
   };
 }
 

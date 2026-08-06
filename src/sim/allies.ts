@@ -20,17 +20,56 @@
  *    "제일 급한 쪽으로 달려간다"는 기대와도 맞는다. 공중 경로로는 나가지 않는다 —
  *    아군은 걷는다.
  *
- * 2) **출격 한계선 — 마을 앞까지만 나간다.**
- *    holdDist = max(0, totalLength - ALLY_SORTIE_RANGE). 여기 닿으면 멈춰 선다.
+ * 2) **출격 한계선 — 마을 앞까지만 나간다. 얼마나 앞까지인지는 마을이 정한다.**
+ *    holdDist = max(0, totalLength - reach) + slot × ALLY_HOLD_SPACING. 여기 닿으면 멈춰 선다.
  *    없으면 아군이 적 스폰 지점까지 걸어가 입구에서 웨이브를 요격해 버려 타워가
  *    무의미해진다. 한계선이 있으면 아군은 "마지막 방어선"이고 타워는 여전히 "길목"이다.
- *    (2단계 홈타운 레벨업이 이 값을 늘릴 수 있게 balance 상수로 분리해 뒀다)
+ *
+ *    reach는 **마을 레벨의 함수**다: BASE_LEVELS[baseLevel-1].sortie
+ *    (Lv1 6.0 → Lv5 12.0, hometown.baseSortieRange). 즉 마을 레벨업은 체력·화력·사거리에
+ *    더해 **"우리 부족이 더 멀리 나간다"**를 판다. 이걸 마을에 묶은 이유는 셋이다:
+ *     · 아군의 병목은 화력이 아니라 **가동률**이다(살아 있는 시간의 1.1%만 교전 — 5단계
+ *       실측, balance.ALLY_RETIRE_REFUND 주석). 한계선을 늘리는 것은 화력을 더 주는 게
+ *       아니라 **일할 자리를 주는 것**이라 이 병목에 직접 닿는다.
+ *     · 지금까지 아군과 마을은 같은 골드를 두고 경쟁만 했다. 이제 서로를 강화한다.
+ *     · Lv1은 6.0 그대로라 **초반 입구 요격 붕괴는 막힌 채로 남는다** — 억제가 필요한
+ *       것은 초반이고, 마을에 값을 치른 만큼만 풀린다.
+ *
+ *    2-c) **경로가 짧으면 표의 값을 다 쓰지 못한다** (7단계, balance.ALLY_SORTIE_PATH_LIMIT).
+ *    상한 cap = max(6.0, 최단 지상경로 × 0.5) — **경로의 마을 쪽 절반까지가 부족의 몫**이고
+ *    스폰 쪽 절반은 언제나 타워의 몫으로 남는다. 표의 값이 절대 타일 수인데 경로 길이가
+ *    s4 17.59 ~ s1 36.19로 두 배 넘게 차이 나서, 상한이 없으면 만렙 12.0이 s4에서 경로의
+ *    68%가 되어 규칙 2가 막으려던 입구 요격이 그대로 일어난다.
+ *    **8단계: 자르지 않고 곡선을 cap에 맞춰 압축한다** — 잘라내면 s4의 Lv3·4·5가 전부
+ *    8.80으로 같아져 가장 비싼 세 칸이 아무것도 팔지 않았다(누적 3,600골드에 +0.00타일).
+ *    실효값 s4 6.00/7.17/7.86/8.33/8.80 · s6 6.00/8.15/9.44/10.30/11.16이고 나머지 넷은
+ *    표 그대로다. Lv1 6.0은 어디서도 깎이지 않는다.
+ *    상한은 hometown.baseSortieRange **한 곳**에서만 걸리므로 화면 표식(allySortiePoints)·
+ *    패널 숫자·실제 정지 지점이 자동으로 같은 값을 쓴다.
+ *
+ *    2-b) **레벨업은 이미 나가 있는 아군에게도 즉시 적용된다.**
+ *    holdDist는 출동 때 박아 두는 값이 아니라 **매 틱 마을 레벨에서 다시 유도**한다
+ *    (moveAllies). 그래서 마을을 키우는 순간 길목에 서 있던 부족원들이 그 자리에서
+ *    앞으로 걸어 나간다. 다음 출동부터 적용하는 안을 버린 이유:
+ *     · 아군 수명은 20초뿐이다. "다음 출동부터"면 되돌릴 수 없는 큰 결제를 하고도
+ *       화면에서 20초 동안 아무 일도 일어나지 않아, **이 업그레이드가 아군을 강화한다는
+ *       사실 자체가 보이지 않는다**. 설계 의도가 전달되지 않으면 없는 기능과 같다.
+ *     · 이 게임의 업그레이드는 전부 즉시 반영이다 — 마을 레벨업의 HP/공격력/사거리도
+ *       (hometown.ts 규칙 4), 타워 업그레이드도 그 자리에서 바뀐다. 아군만 예약 배송이면
+ *       규칙이 하나 더 생긴다.
+ *     · 상태가 줄어든다. 유도값이면 저장할 것이 없고, baseLevel은 이미 hash()에 있어
+ *       결정론에 새로 낼 비용이 0이다.
+ *    **교전 중인 아군은 그 자리에 남는다** — 붙잡고 있는 적을 놓고 앞으로 가지 않는다
+ *    (규칙 5의 "근접형은 교전 중이면 선다"가 한계선 판정보다 먼저다). 즉 레벨업은
+ *    "지금 싸우는 사람"이 아니라 "서서 기다리는 사람"만 앞으로 보낸다.
  *
  *    **대가는 명시적으로 받아들인다**: 경로 초입에 지은 타워가 습격대에게 두들겨 맞으면
  *    아군은 그걸 구하러 갈 수 없다. 실측으로 잠가 뒀다(tests/sim/allies.test.ts
  *    "출격 한계선 밖(경로 초입)의 타워는 아군이 구하지 못한다" — 아군 유무로 타워 피해가
  *    1의 자리까지 동일). 이건 버그가 아니라 규칙 2가 사려는 것의 뒷면이다:
  *    아군이 맵 전체의 소방수가 되면 "타워를 어디에 짓는가"가 의미를 잃는다.
+ *    만렙 12.0도 스테이지1 경로 36.19타일의 33%라 **이 대가는 만렙에서도 남는다**.
+ *    (경로가 짧은 스테이지4에서는 이 비율이 68%까지 올라간다 — hometown.ts의 경고 참조)
  *
  * 3) **수명이 있다 — 영구 유닛은 없다.**
  *    lifeTicks(20초)가 다하면 마을로 돌아간다(allyRetired). 영구로 두면 골드가 쌓일수록
@@ -116,13 +155,12 @@
  * three/DOM 임포트 금지.
  */
 import { TICK_DT } from '@/data/types';
-import type { AllyDef, AllyId } from '@/data/types';
+import type { AllyDef, AllyId, Vec2 } from '@/data/types';
 import {
   ALLY_BLOCK_CAPACITY,
   ALLY_HOLD_SPACING,
   ALLY_MAX_ACTIVE,
   ALLY_RETIRE_REFUND,
-  ALLY_SORTIE_RANGE,
   BRAWL_COOLDOWN_TICKS,
   allyCostFor,
   enemyBrawlDmgFor,
@@ -130,6 +168,7 @@ import {
 import { dist2 } from '@/core/mathx';
 import { addGold, damageAlly, damageEnemy } from './combat';
 import type { AllySim, EnemySim, SimCtx } from './entities';
+import { baseSortieRange } from './hometown';
 import { isStunned } from './status';
 
 /** 지금 이 종을 한 명 더 내보내는 실비용 (나가 있는 인원 수에 따라 오른다) */
@@ -141,6 +180,53 @@ export function allyTrainCost(ctx: SimCtx, def: AllyDef): number {
 export function canTrainAlly(ctx: SimCtx, def: AllyDef): boolean {
   if (ctx.world.allies.length >= ALLY_MAX_ACTIVE) return false;
   return ctx.view.gold >= allyTrainCost(ctx, def);
+}
+
+/**
+ * 규칙 2) 이 슬롯이 서야 할 대기 지점 (경로 호장).
+ *
+ * **저장하지 않고 매 틱 다시 부르는 함수**다 (규칙 2-b): 한계선이 마을 레벨에서 나오므로
+ * 레벨업이 이미 나가 있는 아군에게도 그 틱에 바로 반영된다. 대기 슬롯 간격
+ * (ALLY_HOLD_SPACING)도 당연히 **새** 한계선을 기준으로 다시 깔린다 — 줄만 앞으로
+ * 통째로 옮겨지고 줄 모양(0.5타일 간격)은 그대로다.
+ */
+function holdDistFor(ctx: SimCtx, totalLength: number, slot: number): number {
+  const reach = baseSortieRange(ctx);
+  return Math.min(totalLength, Math.max(0, totalLength - reach) + slot * ALLY_HOLD_SPACING);
+}
+
+/**
+ * 규칙 2) **지금 아군이 멈춰 서는 지점** — 지상 경로마다 하나 (셀 연속 좌표).
+ * 줄 맨 앞(slot 0) 기준이다. UI가 마을 패널에서 한계선을 화면에 그릴 때 쓴다.
+ *
+ * 왜 UI가 직접 계산하지 않는가: 한계선은 **경로 호장** 기준이라 기지 중심의 원이 아니다.
+ * 굽은 경로에서는 원과 실제 정지 지점이 눈에 띄게 어긋나고, 경로가 둘인 스테이지
+ * (4·6)에서는 갈래마다 지점이 다르다. 표식이 규칙과 어긋나면 없느니만 못하다.
+ *
+ * **경로 수와 표식 수는 1:1이 아니다** (8단계). 갈래가 마을 쪽에서 합류하는 스테이지에서
+ * 한계선이 합류 지점보다 안쪽이면 두 경로가 **같은 좌표**를 낸다 — 실측 s4 Lv1에서
+ * 두 원소가 (5, 8)로 완전히 일치했다. 그대로 두면 표식이 같은 자리에 두 벌 구워져
+ * (a) 삼각형 64개가 낭비되고 (b) 반투명 머티리얼이 두 번 블렌딩되어(depthTest 없음)
+ * 그 스테이지의 봉수대만 유독 진해진다. 그림이 규칙("정지 지점의 집합")과 어긋난다.
+ */
+/** 같은 정지 지점으로 볼 좌표 차 (셀 단위). 부동소수 오차만 접고 실제 갈래는 남긴다 */
+const SORTIE_POINT_EPS = 1e-3;
+
+export function allySortiePoints(ctx: SimCtx): Vec2[] {
+  const out: Vec2[] = [];
+  const p = { x: 0, z: 0, heading: 0 };
+  for (const path of ctx.groundPaths) {
+    path.sample(holdDistFor(ctx, path.totalLength, 0), p);
+    let dup = false;
+    for (const q of out) {
+      if (Math.abs(q.x - p.x) < SORTIE_POINT_EPS && Math.abs(q.z - p.z) < SORTIE_POINT_EPS) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup) out.push({ x: p.x, z: p.z });
+  }
+  return out;
 }
 
 /**
@@ -208,10 +294,7 @@ export function trainAlly(ctx: SimCtx, defId: AllyId, pathIndex?: number): boole
   a.pathIndex = idx;
   a.dist = path.totalLength; // 기지에서 출발
   a.slot = slot;
-  a.holdDist = Math.min(
-    path.totalLength,
-    Math.max(0, path.totalLength - ALLY_SORTIE_RANGE) + slot * ALLY_HOLD_SPACING,
-  );
+  a.holdDist = holdDistFor(ctx, path.totalLength, slot);
   a.lifeLeft = Math.max(1, Math.round(def.lifeTicks));
   path.sample(a.dist, a);
   a.heading += Math.PI; // 역주행 — 진행 방향의 반대를 본다
@@ -411,11 +494,15 @@ export function moveAllies(ctx: SimCtx): void {
       ctx.events.push({ type: 'allyRetired', allyId: a.id, defId: a.defId, x: a.x, z: a.z, refund });
       continue;
     }
+    const path = ctx.groundPaths[a.pathIndex] ?? ctx.groundPaths[0];
+    if (!path) continue;
+    // 규칙 2-b) 한계선은 저장값이 아니라 **매 틱 마을 레벨에서 유도**한다.
+    // 교전 중인 아군에게도 갱신해 둔다 — 저장된 값이 지금 규칙과 어긋난 채 남으면
+    // 화면 표식(마을 패널의 출격선)과 실제가 갈라진다
+    a.holdDist = holdDistFor(ctx, path.totalLength, a.slot);
     // 규칙 5) 근접형은 교전 중이면 그 자리에 선다. 원거리는 걸으며 쏜다
     if (a.def.blocks && a.targetId >= 0) continue;
     if (a.dist <= a.holdDist) continue; // 규칙 2) 출격 한계선
-    const path = ctx.groundPaths[a.pathIndex] ?? ctx.groundPaths[0];
-    if (!path) continue;
     a.dist = Math.max(a.holdDist, a.dist - a.def.speed * TICK_DT);
     path.sample(a.dist, a);
     a.heading += Math.PI; // 역주행
