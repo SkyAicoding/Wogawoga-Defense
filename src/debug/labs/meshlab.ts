@@ -12,7 +12,16 @@ import * as THREE from 'three';
 import type { AllyId, EnemyId, TowerId } from '@/data/types';
 import { ALL_ALLY_IDS } from '@/data/allies';
 import { flatMat, glowMat } from '@/render/palette';
-import { ALL_ENEMY_IDS, buildAllySolo, buildEnemySolo } from '@/render/meshlib/enemies';
+import {
+  ALL_ENEMY_IDS,
+  buildAllySolo,
+  buildEnemy,
+  buildEnemySolo,
+  enemyAttackLean,
+  enemyRig,
+  enemyVariant,
+} from '@/render/meshlib/enemies';
+import { attackLean, makeGaitMaterials } from '@/render/meshlib/gait';
 import { assembleTower, buildTower, towerTierScale } from '@/render/meshlib/towers';
 import { PROJECTILE_TOWERS, buildProjectile } from '@/render/meshlib/projectiles';
 import { BASECAMP_LAYER_COUNT, createBasecamp } from '@/render/meshlib/basecamp';
@@ -59,6 +68,38 @@ function allyItem(id: AllyId): Item {
   });
 }
 
+/**
+ * 공격 동작 갤러리 (?model=attack) — 타워를 때리는 5종 × 한 주기 8프레임.
+ *
+ * 전투를 열지 않고도 **동작이 완결되는지**를 한 장으로 본다. 전투 캡처는 유닛이
+ * 작고(20~40px) 무리가 겹쳐 한 종의 한 주기를 골라내기 어렵다 — 여기서 포즈를 잡고
+ * 실전투에서는 "기본 줌에서 읽히는가"만 확인하는 분업이다.
+ *
+ * 전투와 **완전히 같은 경로**를 태운다: 같은 지오메트리(공유본) + 같은 gait 머티리얼 +
+ * 같은 공격 유니폼 + 같은 몸통 기울임. 다른 것은 인스턴스가 아니라 개별 Mesh 라
+ * 진행도가 어트리뷰트 대신 유니폼으로 들어간다는 점뿐이다(setAttack 폴백).
+ * castShadow 를 켜 두므로 **그림자에도 동작이 실리는지** 이 갤러리에서 바로 보인다.
+ */
+const ATTACK_STEPS = 8;
+const ATTACK_SPECIES: readonly EnemyId[] = ['blade', 'lancer', 'archer', 'hexer', 'warrior'];
+
+function attackItem(id: EnemyId, step: number): Item {
+  const p = step / (ATTACK_STEPS - 1);
+  return makeItem(`${id} ${p.toFixed(2)}`, (g) => {
+    const variant = enemyVariant(id);
+    const gm = makeGaitMaterials(enemyRig(id), variant > 0);
+    const mesh = new THREE.Mesh(buildEnemy(id), gm.color);
+    mesh.customDepthMaterial = gm.depth;
+    mesh.castShadow = true;
+    if (variant > 0) gm.setVariant(variant);
+    gm.setGait(0);
+    gm.setAttack(p, 1); // 조준 1 = 멈춰 서서 쏘는 상태
+    // 몸통 기울임은 전투에서 인스턴스 행렬이 준다 — 갤러리에서도 같은 식으로 얹는다
+    mesh.rotation.z = attackLean(p, 1, enemyAttackLean(id));
+    g.add(mesh);
+  });
+}
+
 /** 마을 레벨 1~5를 한 줄로 — 구조물이 쌓이는지 나란히 비교한다 */
 function hometownItem(level: number): Item {
   return makeItem(`마을 Lv${level}`, (g) => {
@@ -96,6 +137,23 @@ const GROUPS: Record<string, { cols: number; build: () => Item[] }> = {
     ],
   },
   allies: { cols: 3, build: () => ALL_ALLY_IDS.map(allyItem) },
+  // 한 행 = 한 종, 왼→오 = 공격 진행도 0 → 1. ?model=attack:blade 로 한 종만 크게 본다
+  attack: {
+    cols: ATTACK_STEPS,
+    build: () =>
+      ATTACK_SPECIES.flatMap((id) =>
+        Array.from({ length: ATTACK_STEPS }, (_, s) => attackItem(id, s)),
+      ),
+  },
+  ...Object.fromEntries(
+    ATTACK_SPECIES.map((id) => [
+      `attack:${id}`,
+      {
+        cols: ATTACK_STEPS,
+        build: () => Array.from({ length: ATTACK_STEPS }, (_, s) => attackItem(id, s)),
+      },
+    ]),
+  ),
   hometown: { cols: 5, build: () => [1, 2, 3, 4, 5].map(hometownItem) },
   hometownDamage: {
     cols: 3,
@@ -224,7 +282,14 @@ export function run(): void {
   }
   fitBox.expandByScalar(isSingle ? 0.3 : 0.8);
   const center = fitBox.getCenter(new THREE.Vector3());
-  const elev = isSingle ? 0.35 : 0.62; // 라디안
+  // ?elev=0.25 로 카메라 고도 고정 — 던지는 팔의 호는 옆에서 봐야 궤적이 읽힌다
+  const elevParam = Number(params.get('elev'));
+  const elev =
+    params.get('elev') !== null && Number.isFinite(elevParam)
+      ? elevParam
+      : isSingle
+        ? 0.35
+        : 0.62; // 라디안
   let dist = 10;
 
   /** 투영 반복으로 AABB가 화면 90% 안에 들어오는 거리 탐색 */

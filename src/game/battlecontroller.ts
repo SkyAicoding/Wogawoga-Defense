@@ -481,6 +481,9 @@ export class BattleController {
       },
       stepFx: (sec: number): void => {
         this.stage3d.update(sec);
+        // 투척물(습격대가 던진 것)은 stage3d.update 가 아니라 프레임 루프가 굴린다 —
+        // 멈춘 채 한 틱씩 걸어가며 "정말 날아가서 맞는가"를 보려면 여기서도 밀어 줘야 한다
+        this.stage3d.projectiles.update(this.sim.state.projectiles, 1, sec);
         this.camera.update(sec);
       },
       // 카메라 궤도 검증용

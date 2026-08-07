@@ -16,6 +16,72 @@ const BEAM_POOL = 8;
 /** 번개 구간당 분할 수 — 가늘어진 만큼 꺾임을 늘려야 번개로 읽힌다 */
 const BOLT_SEGS = 9;
 
+/**
+ * 동시에 살아 있는 **습격대 투척물** 상한.
+ * 타워 투사체와 인스턴스 칸(64)을 나눠 쓰므로, 무리가 한꺼번에 던져도
+ * 플레이어의 타워 투사체가 밀려 사라지지 않게 뒤쪽 24칸으로 예산을 묶는다.
+ */
+const RAID_SHOT_MAX = 24;
+/** 손을 떠나는 높이 → 타워에 꽂히는 높이 (월드 단위) */
+const RAID_Y0 = 0.52;
+const RAID_Y1 = 0.62;
+/** 비행 포물선 최고점 — 직선으로 날면 지면 데칼처럼 보인다 */
+const RAID_ARC = 0.13;
+const RAID_DUR_MIN = 0.1;
+const RAID_DUR_MAX = 0.5;
+
+/**
+ * instanceColor 를 켜 둘 투사체 메시.
+ * 주술 저주는 마젠타여야 하는데(hexer 의 염료·침묵 룬과 같은 계열) 빌려 쓰는
+ * brazier 불덩이는 주황이다. 색조를 인스턴스별로 주는 수단이 instanceColor 뿐이라
+ * **이 메시만** 켠다 — 켜는 순간 그 메시는 항상 instanceColor 프로그램을 쓰므로
+ * 프로그램 수는 그대로 1개다(도중에 켜지지 않아 링크 스톨도 없다).
+ */
+const RAID_TINTED: ReadonlySet<TowerId> = new Set<TowerId>(['brazier']);
+
+/**
+ * 습격대 투척물 — **드로우콜 증가 0** 으로 무언가가 날아가게 하는 방법.
+ *
+ * 전용 InstancedMesh 를 만들면 무조건 +1콜이다. 대신 이미 만들어 둔 타워 투사체
+ * 메시의 **뒷자리 인스턴스**를 빌린다. 성립하는 이유:
+ *  · 이 뷰는 플레이어가 그 타워를 갖고 있든 없든 6종 메시를 전부 만들어 둔다.
+ *    count = 0 이면 three 가 즉시 반환하므로(primcount 0) 그 메시는 0콜이다.
+ *  · 그 타워를 쓰는 플레이어에게는 이미 그려지고 있는 메시라 **+0콜**이고,
+ *    안 쓰는 플레이어에게만 그 메시가 켜진다 — 즉 전용 메시(+1콜)보다
+ *    **어떤 경우에도 나쁘지 않다**.
+ * 물건도 맞아떨어진다: 투창=spear / 큰창=spear 를 크고 느리게 / 화살=ballista 볼트를
+ * 작게 / 저주=brazier 구체를 마젠타로 / 전사의 돌=catapult 바위를 작게.
+ *
+ * 이 투척물은 **sim 에 없다**. 피해는 raidAttack 과 같은 틱에 이미 확정됐고(siege.ts)
+ * 여기서 나는 것은 순수 연출이라 명중 판정도, 결정론도 건드리지 않는다.
+ */
+interface RaidShot {
+  borrow: TowerId;
+  fx: number;
+  fz: number;
+  tx: number;
+  tz: number;
+  /** 손을 떠날 때까지 남은 지연 (초). 그 전에는 그리지 않는다 */
+  delay: number;
+  /** 비행 진행 0..1 */
+  t: number;
+  dur: number;
+  scale: number;
+  tint: number;
+}
+
+export interface RaidShotOpts {
+  /** 빌려 쓸 타워 투사체 메시 */
+  borrow: TowerId;
+  scale?: number;
+  /** 비행 속도 (타일/초) */
+  speed?: number;
+  /** instanceColor 색조 (RAID_TINTED 에 든 메시에만 유효) */
+  tint?: number;
+  /** 무기가 손을 떠날 때까지의 지연 (초) */
+  delay?: number;
+}
+
 interface Beam {
   mesh: THREE.Mesh;
   mat: THREE.MeshBasicMaterial;
@@ -27,12 +93,19 @@ const _prev = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const _quat = new THREE.Quaternion();
 const _scl = new THREE.Vector3(1, 1, 1);
+/** 투척물 전용 스케일 — 공용 _scl 을 건드리면 타워 투사체까지 같이 커진다 */
+const _sclRaid = new THREE.Vector3(1, 1, 1);
+const _from = new THREE.Vector3();
+const _to = new THREE.Vector3();
 const _mat4 = new THREE.Matrix4();
+const _tint = new THREE.Color();
+const WHITE = new THREE.Color(1, 1, 1);
 const FWD = new THREE.Vector3(1, 0, 0);
 
 export class ProjectileView {
   private meshes = new Map<TowerId, THREE.InstancedMesh>();
   private beams: Beam[] = [];
+  private raidShots: RaidShot[] = [];
   private group = new THREE.Group();
 
   constructor(
@@ -46,6 +119,11 @@ export class ProjectileView {
       const mat = GLOW_PROJECTILES.has(id) ? glowMat() : flatMat();
       const mesh = new THREE.InstancedMesh(geo, mat, CAPACITY);
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      // 색조가 필요한 메시만 instanceColor 를 켠다 — 켜 두면 three 가 배열을 0(검정)으로
+      // 잡으므로 전 칸을 흰색으로 초기화해야 타워 투사체가 까맣게 나오지 않는다
+      if (RAID_TINTED.has(id)) {
+        for (let i = 0; i < CAPACITY; i++) mesh.setColorAt(i, WHITE);
+      }
       mesh.count = 0;
       mesh.frustumCulled = false;
       this.meshes.set(id, mesh);
@@ -104,11 +182,17 @@ export class ProjectileView {
       _quat.setFromUnitVectors(FWD, _dir);
       _mat4.compose(_pos, _quat, _scl);
       mesh.setMatrixAt(idx, _mat4);
+      // 색조를 켠 메시(brazier)는 투척물이 지나간 칸이 물들어 있을 수 있다 — 되돌린다
+      if (mesh.instanceColor) mesh.setColorAt(idx, WHITE);
     }
+
+    // 습격대 투척물은 **타워 투사체 뒤에** 붙는다 — 칸이 모자라면 밀리는 쪽이 연출이다
+    this.updateRaidShots(counts, dt);
 
     for (const [id, mesh] of this.meshes) {
       mesh.count = counts.get(id) ?? 0;
       mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
 
     // 빔 수명 감쇠
@@ -118,6 +202,79 @@ export class ProjectileView {
       const k = clamp01(beam.life / BEAM_LIFE);
       beam.mat.opacity = k;
       beam.mesh.visible = beam.life > 0;
+    }
+  }
+
+  /**
+   * 습격대가 던진 것 하나 — 순수 연출 (피해는 이미 확정됐다).
+   * 예산이 찼으면 false 를 돌려준다: 호출부는 그때 파티클 궤적으로 대신한다.
+   */
+  addRaidShot(
+    fromX: number,
+    fromZ: number,
+    toX: number,
+    toZ: number,
+    o: RaidShotOpts,
+  ): boolean {
+    if (this.raidShots.length >= RAID_SHOT_MAX) return false;
+    if (!this.meshes.has(o.borrow)) return false;
+    const d = Math.hypot(toX - fromX, toZ - fromZ);
+    const speed = o.speed ?? 7;
+    this.raidShots.push({
+      borrow: o.borrow,
+      fx: fromX,
+      fz: fromZ,
+      tx: toX,
+      tz: toZ,
+      delay: o.delay ?? 0,
+      t: 0,
+      dur: Math.min(RAID_DUR_MAX, Math.max(RAID_DUR_MIN, d / speed)),
+      scale: o.scale ?? 1,
+      tint: o.tint ?? 0xffffff,
+    });
+    return true;
+  }
+
+  /**
+   * 투척물 비행 — 타워 투사체가 채우고 남은 칸에 이어 그린다.
+   * 진행률로 위치를 재계산하고(틱이 없는 연출이라 보간할 prev 가 없다) 진행 방향
+   * 접선으로 자세를 잡는다 — 창이 옆으로 날면 그 순간 나무 막대로 보인다.
+   */
+  private updateRaidShots(counts: Map<TowerId, number>, dt: number): void {
+    for (let i = this.raidShots.length - 1; i >= 0; i--) {
+      const s = this.raidShots[i] as RaidShot;
+      if (s.delay > 0) {
+        s.delay -= dt;
+        continue; // 아직 손에 있다 — 던지는 동작이 끝나야 나간다
+      }
+      s.t += dt / s.dur;
+      if (s.t >= 1) {
+        this.raidShots.splice(i, 1);
+        continue;
+      }
+      const mesh = this.meshes.get(s.borrow);
+      if (!mesh) {
+        this.raidShots.splice(i, 1);
+        continue;
+      }
+      const idx = counts.get(s.borrow) ?? 0;
+      if (idx >= CAPACITY) continue; // 타워 투사체가 칸을 다 썼다 — 이번 프레임은 건너뛴다
+      counts.set(s.borrow, idx + 1);
+
+      const t = s.t;
+      this.cellToWorld(s.fx, s.fz, _from);
+      this.cellToWorld(s.tx, s.tz, _to);
+      _pos.lerpVectors(_from, _to, t);
+      _pos.y = lerp(RAID_Y0, RAID_Y1, t) + parabola(t, RAID_ARC);
+      // 접선 = 수평 변위 + 높이 미분 (포물선이라 해석적으로 낸다)
+      _dir.subVectors(_to, _from);
+      _dir.y = RAID_Y1 - RAID_Y0 + RAID_ARC * 4 * (1 - 2 * t);
+      if (_dir.lengthSq() < 1e-8) _dir.set(1, 0, 0);
+      _dir.normalize();
+      _quat.setFromUnitVectors(FWD, _dir);
+      _mat4.compose(_pos, _quat, _sclRaid.setScalar(s.scale));
+      mesh.setMatrixAt(idx, _mat4);
+      if (mesh.instanceColor) mesh.setColorAt(idx, _tint.setHex(s.tint));
     }
   }
 
@@ -306,5 +463,6 @@ export class ProjectileView {
     }
     this.meshes.clear();
     this.beams.length = 0;
+    this.raidShots.length = 0;
   }
 }

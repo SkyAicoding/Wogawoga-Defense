@@ -41,7 +41,7 @@
  */
 import * as THREE from 'three';
 import type { AllyState, EnemyId, EnemyState } from '@/data/types';
-import { easeOutBack, lerp } from '@/core/mathx';
+import { clamp01, easeOutBack, lerp } from '@/core/mathx';
 import { flatMat } from '../palette';
 import {
   ALL_ENEMY_IDS,
@@ -52,13 +52,16 @@ import {
   allyVariant,
   buildAlly,
   buildEnemy,
+  enemyAttackLean,
   enemyGeoKey,
   enemyRig,
   enemyVariant,
 } from '../meshlib/enemies';
 import {
+  ATTACK_ATTR,
   GAIT_ATTR,
   VARIANT_SEL_ATTR,
+  attackLean,
   cachedGaitMaterials,
   groundLiftAt,
   wrapGait,
@@ -82,6 +85,12 @@ const ATTACK_LEAN = 0.22;
 /** "멈춰 있다"로 보는 한 틱 이동거리 상한 (타일) */
 const STOPPED_EPS = 1e-4;
 /**
+ * 조준 자세로 들고 나는 속도 (1/s). 서는 순간 팔이 딱 하고 튀면 정지가 사고처럼 보인다 —
+ * 0.15초쯤 들어 올리게 두면 "멈춰 서서 겨눈다"는 한 동작이 된다.
+ * 다시 걸을 때도 같은 속도로 풀려 보행 스윙으로 되돌아간다.
+ */
+const AIM_RATE = 7;
+/**
  * 보스 머티리얼 예열 프레임 수.
  * three 는 머티리얼을 **처음 그릴 때** GL 프로그램을 링크한다. 보스는 비인스턴스 변종이라
  * 인스턴스용과 프로그램을 공유하지 못해, 그냥 두면 하필 보스 등장 프레임에 링크 스톨이 걸린다.
@@ -99,6 +108,8 @@ const BOSS_WARM_SLOTS = 2;
 interface Anim {
   age: number;
   flash: number;
+  /** 조준 자세 블렌드 0..1 — siegeHoldLeft 를 따라 완만히 오르내린다 */
+  aim: number;
 }
 
 /**
@@ -128,13 +139,28 @@ const AXIS_X = new THREE.Vector3(1, 0, 0);
  * 인스턴스 어트리뷰트를 지오메트리에 붙이고 돌려준다 (이미 있으면 재사용).
  * 지오메트리는 캐시 공유물이라 전투 재진입 때 같은 GPU 버퍼를 다시 쓴다.
  */
-function instAttr(geo: THREE.BufferGeometry, name: string): THREE.InstancedBufferAttribute {
+function instAttr(
+  geo: THREE.BufferGeometry,
+  name: string,
+  itemSize = 1,
+): THREE.InstancedBufferAttribute {
   const found = geo.getAttribute(name) as THREE.InstancedBufferAttribute | undefined;
   if (found) return found;
-  const attr = new THREE.InstancedBufferAttribute(new Float32Array(CAPACITY), 1);
+  const attr = new THREE.InstancedBufferAttribute(new Float32Array(CAPACITY * itemSize), itemSize);
   attr.setUsage(THREE.DynamicDrawUsage);
   geo.setAttribute(name, attr);
   return attr;
+}
+
+/**
+ * 공격 동작 진행도 0..1 — 틱 카운터(attackAnimLeft)를 렌더 alpha 로 이어 붙인다.
+ * 그냥 틱 값만 쓰면 12틱(0.4초) 동작이 60fps 화면에서 **12칸짜리 계단**으로 끊긴다.
+ * 동작이 없으면 0을 준다: 셰이더의 두 포락선은 p=0 과 p=1 에서 같은 값(0)이라
+ * 끝난 동작을 0으로 되돌려도 자세가 튀지 않는다.
+ */
+function attackProgress(left: number, ticks: number, alpha: number): number {
+  if (left <= 0 || ticks <= 0) return 0;
+  return clamp01(1 - (left - alpha) / ticks);
 }
 
 /** 인스턴스 어트리뷰트를 앞에서 count 개 요소만 업로드하도록 예약 */
@@ -148,6 +174,8 @@ export class EnemyView {
   /** 키 = 지오메트리 키(enemyGeoKey) — 부족 습격대 4종은 한 메시를 공유한다 */
   private meshes = new Map<string, THREE.InstancedMesh>();
   private gaitAttrs = new Map<string, THREE.InstancedBufferAttribute>();
+  /** 공격 채널 (vec2: 진행도, 조준) — 보행과 별개의 두 번째 채널 */
+  private atkAttrs = new Map<string, THREE.InstancedBufferAttribute>();
   private varAttrs = new Map<string, THREE.InstancedBufferAttribute>();
   private bossPool = new Map<EnemyId, THREE.Mesh[]>();
   private bossGait = new Map<THREE.Mesh, GaitMaterials>();
@@ -184,6 +212,7 @@ export class EnemyView {
         // 참조하는 건 적 전용 머티리얼뿐이라(meshlab은 개별 Mesh + flatMat) 무해하다.
         // 전투를 다시 열어도 같은 버퍼를 재사용해 GPU 버퍼가 쌓이지 않게 한다.
         this.gaitAttrs.set(key, instAttr(geo, GAIT_ATTR));
+        this.atkAttrs.set(key, instAttr(geo, ATTACK_ATTR, 2));
         // 변형 선택(어느 장비를 보여줄 것인가) — 공유 지오메트리에만 필요하다
         if (shared) this.varAttrs.set(key, instAttr(geo, VARIANT_SEL_ATTR));
         const gm = cachedGaitMaterials(key, rig, shared);
@@ -225,6 +254,7 @@ export class EnemyView {
     const geo = buildAlly();
     const rig = allyRig();
     this.gaitAttrs.set(key, instAttr(geo, GAIT_ATTR));
+    this.atkAttrs.set(key, instAttr(geo, ATTACK_ATTR, 2));
     this.varAttrs.set(key, instAttr(geo, VARIANT_SEL_ATTR));
     const gm = cachedGaitMaterials(key, rig, true);
     const mesh = new THREE.InstancedMesh(geo, gm.color, CAPACITY);
@@ -261,7 +291,7 @@ export class EnemyView {
       seen.add(e.id);
       let anim = this.anims.get(e.id);
       if (!anim) {
-        anim = { age: 0, flash: 0 };
+        anim = { age: 0, flash: 0, aim: 0 };
         this.anims.set(e.id, anim);
       }
       // 일시정지 프레임은 dt 로 0 대신 0.0001 이 들어온다(battlecontroller).
@@ -269,6 +299,9 @@ export class EnemyView {
       if (dt > 1e-3) {
         anim.age += dt;
         anim.flash = Math.max(0, anim.flash - dt * 5);
+        // 조준 자세는 정지 상태(siegeHoldLeft)를 따라 완만히 들고 난다
+        const want = e.siegeHoldLeft > 0 ? 1 : 0;
+        anim.aim += (want - anim.aim) * Math.min(1, dt * AIM_RATE);
       }
 
       // 보간 위치 (셀 연속 좌표 → 월드)
@@ -285,8 +318,16 @@ export class EnemyView {
       const travel = e.dist - step * (1 - alpha);
       // 개체마다 위상을 어긋내 무리가 한 몸처럼 걷지 않게 한다
       const off = phaseOffset01(e.id) * TAU;
-      // 멈춰 서서 타워를 때리는 중 — 이때만 위상을 시간으로 굴려 팔이 움직이게 한다
-      const swinging = e.towerTargetId >= 0 && step < STOPPED_EPS;
+      /**
+       * 공격 채널 — 이 종에 공격 포즈가 있으면(lean ≠ 0) 팔·머리를 그쪽이 가져간다.
+       * 포즈가 없는 공룡·짐승은 예전처럼 "멈춘 채 위상을 시간으로 굴리는" 폴백을 쓴다.
+       * 두 길을 섞으면 던지는 팔이 제자리걸음까지 겹쳐 박자가 두 개가 된다.
+       */
+      const lean = enemyAttackLean(e.defId);
+      const atkP = lean > 0 ? attackProgress(e.attackAnimLeft, e.attackAnimTicks, alpha) : 0;
+      const aim = lean > 0 ? anim.aim : 0;
+      // 멈춰 서서 타워를 때리는 중 — 공격 포즈가 없는 종만 위상을 시간으로 굴린다
+      const swinging = lean === 0 && e.towerTargetId >= 0 && step < STOPPED_EPS;
       const swing = swinging ? this.time * ATTACK_SWING_RATE : 0;
       const gait = rigged
         ? wrapGait(travel * rig.gaitPerDist + off + swing)
@@ -320,6 +361,8 @@ export class EnemyView {
       // 내려치는 반주기(sin>0)에만 앞으로 기운다 — 되돌아올 땐 자세를 세운다.
       // pitch(+z축 회전)는 +x(정면)를 위로 드는 방향이라 앞으로 숙이려면 음수다.
       if (swinging) pitch -= Math.max(0, Math.sin(gait)) * ATTACK_LEAN;
+      // 온몸으로 던진다 — 젖힐 때 뒤로, 놓을 때 앞으로. 셰이더와 **같은 포락선**을 쓴다.
+      pitch += attackLean(atkP, aim, lean);
 
       _quat.setFromAxisAngle(AXIS_Y, -e.heading);
       _quat2.setFromAxisAngle(AXIS_Z, pitch);
@@ -330,7 +373,7 @@ export class EnemyView {
       }
 
       if (boss) {
-        this.updateBoss(e, bossUsed, scale, anim, gait);
+        this.updateBoss(e, bossUsed, scale, anim, gait, atkP, aim);
         continue;
       }
 
@@ -343,6 +386,7 @@ export class EnemyView {
       _mat.compose(_pos, _quat, _scl.setScalar(scale));
       mesh.setMatrixAt(idx, _mat);
       this.gaitAttrs.get(key)?.setX(idx, gait);
+      this.atkAttrs.get(key)?.setXY(idx, atkP, aim);
       // 공유 지오메트리(부족 습격대): 이 인스턴스가 어떤 장비를 보일지 고른다
       this.varAttrs.get(key)?.setX(idx, enemyVariant(e.defId));
       // 플래시: 값을 크게 줘 톤매핑 후 흰색 포화
@@ -365,6 +409,8 @@ export class EnemyView {
       if (mesh.instanceColor) uploadRange(mesh.instanceColor, n * 3);
       const gait = this.gaitAttrs.get(key);
       if (gait) uploadRange(gait, n);
+      const atk = this.atkAttrs.get(key);
+      if (atk) uploadRange(atk, n * 2);
       const vsel = this.varAttrs.get(key);
       if (vsel) uploadRange(vsel, n);
     }
@@ -409,7 +455,7 @@ export class EnemyView {
       seen.add(a.id);
       let anim = this.anims.get(a.id);
       if (!anim) {
-        anim = { age: 0, flash: 0 };
+        anim = { age: 0, flash: 0, aim: 0 };
         this.anims.set(a.id, anim);
       }
       if (dt > 1e-3) {
@@ -441,6 +487,9 @@ export class EnemyView {
       _mat.compose(_pos, _quat, _scl.setScalar(pop));
       mesh.setMatrixAt(idx, _mat);
       this.gaitAttrs.get(key)?.setX(idx, gait);
+      // 아군은 아직 공격 포즈 표가 비어 있다(ALLY_KITS 미등록) — 채널을 0으로 눌러
+      // 앞 프레임의 값이 남아 돌지 않게 한다. 지금 동작은 위의 swing 폴백이 그대로 낸다.
+      this.atkAttrs.get(key)?.setXY(idx, 0, 0);
       this.varAttrs.get(key)?.setX(idx, allyVariant(a.defId));
       // 아군은 한랭 색조로 물들여 적과 즉시 갈린다. 피격 플래시는 그 위에 더한다
       const f = anim.flash * anim.flash * 7;
@@ -477,6 +526,8 @@ export class EnemyView {
     scale: number,
     anim: Anim,
     gait: number,
+    atkP: number,
+    aim: number,
   ): void {
     const pool = this.bossPool.get(e.defId);
     if (!pool) return;
@@ -488,7 +539,9 @@ export class EnemyView {
     mesh.quaternion.copy(_quat);
     mesh.scale.setScalar(scale);
     // 개별 Mesh 는 인스턴스 어트리뷰트가 없으므로 유니폼으로 위상을 넣는다
-    this.bossGait.get(mesh)?.setGait(gait);
+    const gm = this.bossGait.get(mesh);
+    gm?.setGait(gait);
+    gm?.setAttack(atkP, aim);
     const mat = mesh.material as THREE.MeshLambertMaterial;
     mat.emissive.setScalar(anim.flash * 0.9);
   }
@@ -505,6 +558,7 @@ export class EnemyView {
     }
     this.meshes.clear();
     this.gaitAttrs.clear();
+    this.atkAttrs.clear();
     this.varAttrs.clear();
     this.bossGait.clear();
     this.bossPool.clear();

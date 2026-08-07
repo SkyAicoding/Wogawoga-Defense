@@ -10,6 +10,7 @@
  */
 import * as THREE from 'three';
 import type { AllyId, HometownSourceId, SimEvent, StatusKind, TowerId } from '@/data/types';
+import { TICK_DT } from '@/data/types';
 import { ENEMY_DEFS } from '@/data';
 import { clamp } from '@/core/mathx';
 import { vibrate } from '@/core/device';
@@ -17,6 +18,8 @@ import { audio } from '@/audio';
 import type { SfxName } from '@/audio';
 import type { Stage3D } from '@/render/stage3d';
 import { towerTierScale } from '@/render/meshlib/towers';
+import { ATK_LAUNCH } from '@/render/meshlib/gait';
+import type { RaidShotOpts } from '@/render/views/projectileview';
 import type { DioramaCamera } from '@/render/camera';
 import { showBossBanner, showWaveBanner } from '@/ui/screens/battlehud';
 import { spawnDamageNumber } from '@/ui/widgets/damagenumbers';
@@ -78,19 +81,57 @@ interface RaidHitStyle {
   chips: number;
   /** 날아오는 궤적을 그릴 것인가 (원거리 전용) */
   trail: boolean;
+  /**
+   * 실제로 날아가는 물건. **타워 투사체 메시의 뒷자리를 빌린다** —
+   * 전용 메시를 만들면 무조건 드로우콜 +1 인데, 이미 만들어 둔 메시는 그 타워를
+   * 쓰는 플레이어에겐 +0 이고 안 쓰는 플레이어에게만 켜지므로 어떤 경우에도
+   * 나쁘지 않다 (근거 전문은 render/views/projectileview.ts RaidShot 주석).
+   * 없으면 파티클 궤적만 남는다.
+   */
+  shot?: RaidShotOpts;
 }
 const RAID_HIT_DEFAULT: RaidHitStyle = { sfx: 'enemyHit', chip: 0xc8b189, chips: 1, trail: false };
 const RAID_HIT: Partial<Record<string, RaidHitStyle>> = {
   // 짧은 창 연투 — 가볍고 빠르다
-  blade: { sfx: 'spearThrow', chip: 0xd9c8a0, chips: 1, trail: true },
-  // 장창 투척 — 한 방이 무거워 파편이 크게 튄다
-  lancer: { sfx: 'boulderImpact', chip: 0xc8b189, chips: 1.5, trail: true },
-  // 부족 전사도 이제 던진다 — 습격대보다 가벼운 한 방
-  warrior: { sfx: 'spearThrow', chip: 0xc8b189, chips: 0.9, trail: true },
-  // 화살 — 궤적 + 뼈색 파편
-  archer: { sfx: 'spearThrow', chip: 0xece0c4, chips: 0.8, trail: true },
-  // 저주 — 마젠타. 피해 자체는 작아 파편도 적다
-  hexer: { sfx: 'poisonSpit', chip: 0xd94ad0, chips: 0.6, trail: true },
+  blade: {
+    sfx: 'spearThrow',
+    chip: 0xd9c8a0,
+    chips: 1,
+    trail: true,
+    shot: { borrow: 'spear', scale: 0.8, speed: 9 },
+  },
+  // 장창 투척 — 한 방이 무거워 파편이 크게 튄다. 같은 창을 크고 느리게 던진다
+  lancer: {
+    sfx: 'boulderImpact',
+    chip: 0xc8b189,
+    chips: 1.5,
+    trail: true,
+    shot: { borrow: 'spear', scale: 1.2, speed: 6 },
+  },
+  // 부족 전사 — 곤봉의 큰 호 끝에서 **돌덩이**가 나간다 (사거리 2.2라 곤봉은 닿지 않는다)
+  warrior: {
+    sfx: 'spearThrow',
+    chip: 0xc8b189,
+    chips: 0.9,
+    trail: true,
+    shot: { borrow: 'catapult', scale: 0.6, speed: 6.5 },
+  },
+  // 화살 — 발리스타 볼트를 작게. 가장 빠르고 가늘다
+  archer: {
+    sfx: 'spearThrow',
+    chip: 0xece0c4,
+    chips: 0.8,
+    trail: true,
+    shot: { borrow: 'ballista', scale: 0.55, speed: 12 },
+  },
+  // 저주 — 화로 구체를 마젠타로 물들인다. hexer 염료·침묵 룬과 같은 계열
+  hexer: {
+    sfx: 'poisonSpit',
+    chip: 0xd94ad0,
+    chips: 0.6,
+    trail: true,
+    shot: { borrow: 'brazier', scale: 0.8, speed: 5.5, tint: 0xd94ad0 },
+  },
 };
 
 const FIRE_SFX: Record<TowerId, SfxName> = {
@@ -508,7 +549,21 @@ export class FxRouter {
           const st = RAID_HIT[ev.attackerDefId] ?? RAID_HIT_DEFAULT;
           if (st.trail && ev.ranged && this.raidShots < RAID_SHOT_FX_MAX) {
             this.raidShots++;
-            this.raidShot(ev.x, ev.z, ev.cellX, ev.cellZ, st.chip);
+            /**
+             * 무기가 **손을 떠나는 순간**에 맞춰 늦춘다. raidAttack 은 던지기가
+             * 시작되는 틱에 나가므로(피해는 이미 확정) 그대로 쏘면 젖히는 팔에서
+             * 물건이 먼저 튀어나간다 — 애써 만든 동작이 거짓말이 된다.
+             * ATK_LAUNCH 는 셰이더가 쓰는 릴리스 지점과 **같은 상수**다.
+             */
+            const delay = ev.animTicks * ATK_LAUNCH * TICK_DT;
+            const flew =
+              st.shot !== undefined &&
+              s3.projectiles.addRaidShot(ev.x, ev.z, ev.cellX, ev.cellZ, {
+                ...st.shot,
+                delay,
+              });
+            // 던질 물건이 없거나 예산이 찼을 때만 파티클 궤적으로 대신한다
+            if (!flew) this.raidShot(ev.x, ev.z, ev.cellX, ev.cellZ, st.chip);
           }
           break;
         }

@@ -26,13 +26,115 @@ export type V3 = [number, number, number];
 /**
  * 셰이더 uniform 배열 크기 = 종당 사지 그룹 상한.
  * 이 값 × 3 vec4 가 모든 적 머티리얼에 상수로 올라가고(안 쓰는 칸도 매 프레임 업로드된다)
- * 버텍스 유니폼 슬롯도 그만큼 먹으므로, 실사용 최댓값(현재 boar/mammoth 7)에
+ * 버텍스 유니폼 슬롯도 그만큼 먹으므로, 실사용 최댓값(현재 boar/mammoth/부족 습격대 7)에
  * 여유 1칸만 둔다. 넘기면 build() 에서 즉시 throw 하므로 조용히 깨지지 않는다.
+ * (습격대는 다리 2 + 팔 2 + 머리 1 + **던져 나가는 물건 2** 로 7이다 — 아래 ATTACK_ATTR 참조)
  */
 export const MAX_LIMBS = 8;
 
 /** 인스턴스별 보행 위상 어트리뷰트 이름 */
 export const GAIT_ATTR = 'aGait';
+
+/**
+ * 인스턴스별 **공격 채널** 어트리뷰트 (vec2).
+ *   x = 공격 동작 진행도 0..1 (sim 의 attackAnimLeft/attackAnimTicks 에서 유도)
+ *   y = 조준 유지 0..1 (멈춰 서서 겨누고 있는 정도)
+ *
+ * 보행(aGait)과 **별개의 두 번째 채널**이다. 다리는 aGait 가, 팔·머리는 이 채널이
+ * 지배하도록 사지마다 인계 비율(take)을 두고 섞는다 — 그래서 "걸으며 던지기"도
+ * "서서 쏘기"도 같은 리그로 나온다. 멈추면 이동거리가 안 늘어 보행 위상이 저절로
+ * 얼어붙으므로(위 접지 주석 참조) 다리는 아무것도 안 해도 정지 자세가 된다.
+ */
+export const ATTACK_ATTR = 'aAtk';
+
+/**
+ * 공격 포즈에서 사지 그룹이 맡는 배역. 0 = 참여하지 않음(다리 등).
+ * 역할로 한 겹 추상화하는 이유는 **여러 종이 한 지오메트리를 공유**하기 때문이다 —
+ * 부족 습격대 4종은 팔 정점이 완전히 같아서(raiderBody) 정점 태그로는 갈 수 없고,
+ * 인스턴스별 변형 번호(aVarSel) × 역할로 포즈를 골라야 종마다 다른 동작이 나온다.
+ */
+export const ATK_ROLE_MAIN = 1; // 무기를 놓는 팔
+export const ATK_ROLE_OFF = 2; // 반대쪽 팔 (활을 든 팔 / 방패 팔)
+export const ATK_ROLE_HEAD = 3; // 머리·상체
+const ATK_ROLES = 3;
+/**
+ * 공격 포즈 테이블의 변형 슬롯 수. 0 = 변형이 없는 종(warrior 등), 1.. = 변형 번호.
+ * 습격대 4 + 여유 1. 테이블 크기는 ATK_VARIANTS × ATK_ROLES vec4 = 15 vec4로,
+ * 기존 사지 테이블(24 vec4) 위에 얹는 추가 업로드는 프레임당 메시 하나에 240바이트다.
+ */
+const ATK_VARIANTS = 5;
+const ATK_SLOTS = ATK_VARIANTS * ATK_ROLES;
+
+/**
+ * 동작 진행도 구간 — 젖히기가 끝나는 지점 / 무기를 놓는 지점.
+ * 놓는 구간(0.38~0.56)이 짧아야 "휙" 하고 던진 것으로 읽힌다. 12틱(0.4초) 동작에서
+ * 젖히기 0.15초 · 놓기 0.07초 · 복귀 0.18초다.
+ */
+export const ATK_WINDUP = 0.38;
+export const ATK_RELEASE = 0.56;
+/**
+ * 무기가 손을 떠나는 순간 — 투척물 발사를 이만큼 늦춰야 손에서 나가는 것으로 보인다.
+ * 아래 THROW_GONE 구간의 한가운데다: 손의 창이 접혀 사라지는 그 프레임에
+ * 날아가는 창이 나타나야 **같은 물건이 이어진 것**으로 읽힌다.
+ */
+export const ATK_LAUNCH = 0.435;
+
+/**
+ * **던져서 손을 떠나는 물건**이 사라졌다 돌아오는 구간.
+ *
+ * 왜 필요한가: 이 리그의 팔은 어깨 한 축으로만 도는 강체다. 손목이 없으므로 창을
+ * 4.25rad 휘두르면 창도 같이 4.25rad 돌아 **한 바퀴 뒤집힌다** — 젖힌 자세에서는
+ * 멋지게 겨누다가 던지는 순간 창끝이 뒤를 향한다. 실측 캡처에서 바로 이게 나왔다.
+ * 해결은 손목을 만드는 게 아니라 **던진 것은 손에 없어야 한다**는 당연한 사실이다:
+ * 놓기 시작하는 순간(0.40~0.47) 그 파트만 피벗으로 접어 축퇴시키고, 복귀 구간(0.85~0.97)에
+ * 되돌린다 — 등에 멘 다발에서 하나 더 뽑아 드는 것으로 읽힌다.
+ * 시점을 **휘두름 초입**으로 잡은 것도 실측 결과다: 창이 뒤집히기 시작하는 지점이 바로
+ * 거기이고, 같은 프레임에 투척물이 나타나(ATK_LAUNCH) 움직임이 끊기지 않는다.
+ * 접기는 정점을 한 점으로 모으는 것이라 래스터라이즈 비용이 0이고(변형 마스킹과 같은
+ * 수법) 컬러·그림자 두 패스에 똑같이 적용된다.
+ */
+const THROW_GONE0 = 0.4;
+const THROW_GONE1 = 0.47;
+const THROW_BACK0 = 0.85;
+const THROW_BACK1 = 0.97;
+
+function smoothstep(e0: number, e1: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * 셰이더와 **같은 식**의 두 포락선.
+ *  wb = 젖히기(윈드업) 가중치 — 0 → 1 → 0
+ *  fw = 놓기(릴리스) 가중치  — 0 → 1 → 0, wb 가 꺼진 뒤에 켜진다
+ * 둘의 합은 동작 전체 포락선이라 몸통 기울임(인스턴스 행렬)에도 그대로 쓴다.
+ * CPU 쪽(enemyview 의 몸통 기울임 / fx 의 발사 지연)이 셰이더와 어긋나면
+ * 팔은 던지는데 몸은 딴 박자로 움직인다 — 그래서 식을 한 군데에 둔다.
+ */
+export function attackEnvelope(p: number): { wb: number; fw: number } {
+  const up = smoothstep(0, ATK_WINDUP, p);
+  const sw = smoothstep(ATK_WINDUP, ATK_RELEASE, p);
+  const dn = 1 - smoothstep(ATK_RELEASE, 1, p);
+  return { wb: up * (1 - sw) * dn, fw: sw * dn };
+}
+
+/** 놓는 순간 몸이 앞으로 숙이는 각 (rad) */
+const LEAN_FWD = 0.3;
+/** 젖히는 동안 몸이 뒤로 젖혀지는 각 (rad) */
+const LEAN_BACK = 0.16;
+
+/**
+ * 공격 한 주기 동안의 **몸통 기울임** (rad, 양수 = 뒤로 젖힘).
+ * 사지는 셰이더가 돌리지만 몸통 전체는 인스턴스 행렬 몫이라 CPU 에서 낸다 —
+ * 위 포락선을 그대로 쓰므로 팔과 몸이 같은 박자로 움직인다. 조준 유지 중에는
+ * 젖힌 자세를 붙들고 있어야 하므로 셰이더의 back 식(max)과도 같은 모양이다.
+ * scale 은 종별 배율(enemyAttackLean) — 0이면 몸통은 고정이다.
+ */
+export function attackLean(p: number, aim: number, scale: number): number {
+  if (scale <= 0) return 0;
+  const { wb, fw } = attackEnvelope(p);
+  return (Math.max(wb, aim * (1 - fw)) * LEAN_BACK - fw * LEAN_FWD) * scale;
+}
 
 /** 버텍스별 사지 그룹 태그 어트리뷰트 이름 (factory.ts 가 굽는다) */
 export const LIMB_ATTR = 'aLimb';
@@ -63,6 +165,23 @@ export interface LimbSpec {
   lift: number;
   /** 지면에 닿는 그룹(다리) — 접지 보정 테이블 계산에 쓰인다 */
   ground: boolean;
+  /** 공격 채널에서의 배역 (ATK_ROLE_*). 0 = 참여하지 않음 */
+  role: number;
+  /** 던져서 손을 떠나는 물건 — 놓는 순간 접혀 사라졌다 복귀 구간에 돌아온다 */
+  throwAway: boolean;
+}
+
+/** 한 역할이 공격 한 주기 동안 잡는 자세 (각도는 그 사지의 gait 축 기준 rad) */
+export interface AttackPose {
+  role: number;
+  /** 젖히는(윈드업) 각. **조준 유지 자세이기도 하다** — 서서 겨눌 때 이 각으로 굳는다 */
+  back: number;
+  /** 무기를 놓는 순간의 각 */
+  fwd: number;
+  /** 이 그룹에서 공격 채널이 보행을 덮는 비율 0..1 (기본 1 = 완전 인계) */
+  take?: number;
+  /** 놓는 순간의 y 들어올림 (모델 단위) */
+  lift?: number;
 }
 
 /** 접지 보정 테이블 해상도 (|θ|/legAmp = 0..1) */
@@ -77,6 +196,11 @@ export interface EnemyRig {
    * 어떤 발도 지면을 뚫지 않는지가 나온다. 길이 0이면 보정 없음(비행/무각).
    */
   groundLift: Float32Array;
+  /**
+   * 공격 포즈 테이블 (변형 × 역할 → back, fwd, take, lift).
+   * 셰이더 uniform 으로 그대로 올라간다. 비어 있으면 공격 채널이 아무 일도 하지 않는다.
+   */
+  attack: Float32Array;
 }
 
 export interface LimbOpts {
@@ -84,9 +208,18 @@ export interface LimbOpts {
   amp?: number;
   amp2?: number;
   lift?: number;
+  /** 공격 채널 배역 (ATK_ROLE_*) */
+  role?: number;
+  /** 던져서 손을 떠나는 물건인가 (팔과 같은 피벗·위상으로 등록한 별도 그룹에 준다) */
+  throwAway?: boolean;
 }
 
-const EMPTY_RIG: EnemyRig = { limbs: [], gaitPerDist: 0, groundLift: new Float32Array(0) };
+const EMPTY_RIG: EnemyRig = {
+  limbs: [],
+  gaitPerDist: 0,
+  groundLift: new Float32Array(0),
+  attack: new Float32Array(0),
+};
 
 /**
  * 종별 사지 테이블 조립기. 적 모델 빌더가 파트를 만들면서 같이 채운다.
@@ -95,6 +228,8 @@ const EMPTY_RIG: EnemyRig = { limbs: [], gaitPerDist: 0, groundLift: new Float32
 export class RigBuilder {
   private readonly limbs: LimbSpec[] = [];
   private cycle = 0;
+  private readonly atk = new Float32Array(ATK_SLOTS * 4);
+  private hasAtk = false;
 
   /** 사지 그룹 1개 등록 → 1-base id (0은 "고정" 예약값) */
   add(pivot: V3, axis: V3, o: LimbOpts = {}, ground = false): number {
@@ -110,8 +245,38 @@ export class RigBuilder {
       amp2: o.amp2 ?? 0,
       lift: o.lift ?? 0,
       ground,
+      role: o.role ?? 0,
+      throwAway: o.throwAway ?? false,
     });
     return this.limbs.length;
+  }
+
+  /** 이미 등록한 그룹에 공격 배역을 매긴다 (pair() 처럼 좌우가 다른 배역일 때) */
+  setRole(id: number, role: number): void {
+    const s = this.limbs[id - 1];
+    if (!s) throw new Error(`사지 그룹 ${id} 이 없다`);
+    s.role = role;
+  }
+
+  /**
+   * 이 종(또는 변형)의 공격 포즈를 역할별로 등록한다.
+   * variant 0 = 변형이 없는 종의 자리. 1.. = 공유 지오메트리 안의 변형 번호.
+   * 등록하지 않은 (변형, 역할)은 전부 0이라 공격 채널이 보행을 건드리지 않는다 —
+   * 그래서 아직 동작이 없는 종·아군은 지금까지와 완전히 같이 움직인다.
+   */
+  attack(variant: number, poses: readonly AttackPose[]): void {
+    if (variant < 0 || variant >= ATK_VARIANTS) {
+      throw new Error(`공격 포즈 변형 슬롯 ${variant} 이 상한 ${ATK_VARIANTS} 를 벗어났다`);
+    }
+    for (const p of poses) {
+      if (p.role < 1 || p.role > ATK_ROLES) throw new Error(`알 수 없는 공격 배역 ${p.role}`);
+      const o = (variant * ATK_ROLES + p.role - 1) * 4;
+      this.atk[o] = p.back;
+      this.atk[o + 1] = p.fwd;
+      this.atk[o + 2] = p.take ?? 1;
+      this.atk[o + 3] = p.lift ?? 0;
+    }
+    this.hasAtk = true;
   }
 
   /**
@@ -159,6 +324,7 @@ export class RigBuilder {
       limbs: this.limbs,
       gaitPerDist: (Math.PI * 2) / cycle,
       groundLift: new Float32Array(0),
+      attack: this.hasAtk ? this.atk : new Float32Array(0),
     };
   }
 }
@@ -287,13 +453,16 @@ export function groundLiftAt(rig: EnemyRig, t: number): number {
  * three 는 onBeforeCompile 로 바뀐 소스를 프로그램 캐시 키에 넣지 않기 때문에
  * 같은 파라미터의 다른 Lambert 머티리얼과 프로그램을 공유해버린다.
  */
-const CACHE_KEY_COLOR = 'wgd-gait-color-1';
-const CACHE_KEY_DEPTH = 'wgd-gait-depth-1';
+const CACHE_KEY_COLOR = 'wgd-gait-color-2';
+const CACHE_KEY_DEPTH = 'wgd-gait-depth-2';
 
 /**
  * 변형 마스킹 코드는 **소스가 다르므로 캐시 키도 달라야 한다**.
  * (three 는 onBeforeCompile 로 바뀐 소스를 프로그램 캐시 키에 넣지 않는다 —
  *  같은 키를 주면 마스킹 없는 프로그램을 그대로 재사용해 무기가 전부 겹쳐 보인다)
+ *
+ * 이 블록은 **PARS 보다 먼저** 들어가야 한다 — 공격 채널이 wgdVarSel 로 포즈를 고르므로
+ * 선언이 앞서야 하고, 셋업 호출도 wgdVariantSetup() → wgdSetup() 순서다.
  */
 const VARIANT_PARS = /* glsl */ `
 attribute float ${VARIANT_ATTR};
@@ -302,27 +471,36 @@ attribute float ${VARIANT_SEL_ATTR};
 #else
 uniform float uVarSel;
 #endif
+float wgdVarSel;
 float wgdHidden;
 void wgdVariantSetup() {
 #ifdef USE_INSTANCING
-  float sel = ${VARIANT_SEL_ATTR};
+  wgdVarSel = ${VARIANT_SEL_ATTR};
 #else
-  float sel = uVarSel;
+  wgdVarSel = uVarSel;
 #endif
   // 태그 0 = 공통 파트라 항상 보인다. 그 외에는 선택된 변형만 남긴다.
-  wgdHidden = (${VARIANT_ATTR} > 0.5 && abs(${VARIANT_ATTR} - sel) > 0.5) ? 1.0 : 0.0;
+  wgdHidden = (${VARIANT_ATTR} > 0.5 && abs(${VARIANT_ATTR} - wgdVarSel) > 0.5) ? 1.0 : 0.0;
 }
+`;
+
+/** 변형이 없는 종은 공격 포즈 테이블의 0번 슬롯을 쓴다 */
+const NO_VARIANT_PARS = /* glsl */ `
+float wgdVarSel = 0.0;
 `;
 
 const PARS = /* glsl */ `
 uniform vec4 uLimbA[${MAX_LIMBS}]; // pivot.xyz, phase
 uniform vec4 uLimbB[${MAX_LIMBS}]; // axis.xyz, amp
-uniform vec4 uLimbC[${MAX_LIMBS}]; // lift, amp2, -, -
+uniform vec4 uLimbC[${MAX_LIMBS}]; // lift, amp2, role, -
+uniform vec4 uAtk[${ATK_SLOTS}];   // (변형×역할) back, fwd, take, lift
 attribute float ${LIMB_ATTR};
 #ifdef USE_INSTANCING
 attribute float ${GAIT_ATTR};
+attribute vec2 ${ATTACK_ATTR};
 #else
 uniform float uGait;
+uniform vec2 uAtkState;
 #endif
 vec3 wgdPivot;
 vec3 wgdAxis;
@@ -330,6 +508,7 @@ float wgdCos;
 float wgdSin;
 float wgdLift;
 float wgdOn;
+float wgdGone; // 던져서 손을 떠난 정도 0..1 (1 = 접혀 사라짐)
 vec3 wgdSpin(vec3 v) {
   return v * wgdCos + cross(wgdAxis, v) * wgdSin + wgdAxis * (dot(wgdAxis, v) * (1.0 - wgdCos));
 }
@@ -343,20 +522,49 @@ void wgdSetup() {
   vec4 c = uLimbC[li];
 #ifdef USE_INSTANCING
   float ph = ${GAIT_ATTR} + a.w;
+  vec2 atk = ${ATTACK_ATTR};
 #else
   float ph = uGait + a.w;
+  vec2 atk = uAtkState;
 #endif
   float ang = b.w * sin(ph) + c.y * sin(2.0 * ph);
+  float lift = c.x * max(0.0, cos(ph));
+  wgdGone = 0.0;
+  // --- 공격 채널: 배역이 있는 그룹만 보행을 인계받는다 -----------------------
+  int role = int(c.z + 0.5);
+  if (role > 0) {
+    float p = atk.x;
+    float aim = atk.y;
+    // 젖히기(wb) → 놓기(fw) 두 포락선. 합(wb+fw)이 동작 전체 포락선이다.
+    float sw = smoothstep(${ATK_WINDUP.toFixed(3)}, ${ATK_RELEASE.toFixed(3)}, p);
+    float dn = 1.0 - smoothstep(${ATK_RELEASE.toFixed(3)}, 1.0, p);
+    float wb = smoothstep(0.0, ${ATK_WINDUP.toFixed(3)}, p) * (1.0 - sw) * dn;
+    float fw = sw * dn;
+    int ai = int(wgdVarSel + 0.5) * ${ATK_ROLES} + role - 1;
+    vec4 t = uAtk[min(ai, ${ATK_SLOTS - 1})];
+    // 조준(aim)은 젖힌 자세를 그대로 붙들고 있는 것이다 — 놓는 순간에만 놓아 준다.
+    float back = max(wb, aim * (1.0 - fw));
+    float take = t.z * max(aim, wb + fw);
+    ang = mix(ang, t.x * back + t.y * fw, take);
+    lift = mix(lift, t.w * fw, take);
+    // 던진 물건은 놓는 순간 접혀 사라졌다 복귀 구간에 돌아온다 (강체 팔의 무기 뒤집힘 회피)
+    wgdGone =
+      c.w *
+      smoothstep(${THROW_GONE0.toFixed(3)}, ${THROW_GONE1.toFixed(3)}, p) *
+      (1.0 - smoothstep(${THROW_BACK0.toFixed(3)}, ${THROW_BACK1.toFixed(3)}, p));
+  }
   wgdPivot = a.xyz;
   wgdAxis = b.xyz;
   wgdCos = cos(ang);
   wgdSin = sin(ang);
-  wgdLift = c.x * max(0.0, cos(ph));
+  wgdLift = lift;
   wgdOn = 1.0;
 }
 vec3 wgdPos(vec3 p) {
   if (wgdOn < 0.5) return p;
-  return wgdPivot + wgdSpin(p - wgdPivot) + vec3(0.0, wgdLift, 0.0);
+  vec3 v = wgdPivot + wgdSpin(p - wgdPivot) + vec3(0.0, wgdLift, 0.0);
+  // 접기는 회전 **뒤에** — 한 점으로 모으면 삼각형 면적이 0이라 그려지지 않는다
+  return mix(v, wgdPivot, wgdGone);
 }
 vec3 wgdNormal(vec3 n) {
   if (wgdOn < 0.5) return n;
@@ -383,8 +591,8 @@ function inject(
   withNormal: boolean,
   variants: boolean,
 ): void {
-  const pars = variants ? `${PARS}\n${VARIANT_PARS}` : PARS;
-  const setup = variants ? 'wgdSetup();\n\twgdVariantSetup();' : 'wgdSetup();';
+  const pars = `${variants ? VARIANT_PARS : NO_VARIANT_PARS}\n${PARS}`;
+  const setup = variants ? 'wgdVariantSetup();\n\twgdSetup();' : 'wgdSetup();';
   // 접기는 사지 회전 **뒤에** 해야 한다 — 먼저 접으면 피벗 회전이 원점을 다시 밀어낸다
   const pos = variants
     ? 'transformed = mix(wgdPos(transformed), vec3(0.0), wgdHidden);'
@@ -412,6 +620,8 @@ export interface GaitMaterials {
   depth: THREE.MeshDepthMaterial;
   /** 보스(개별 Mesh) 폴백: 인스턴스 어트리뷰트가 없어 위상을 유니폼으로 넣는다 */
   setGait(g: number): void;
+  /** 보스 폴백: 공격 채널(진행도, 조준)도 같은 이유로 유니폼이다 */
+  setAttack(progress: number, aim: number): void;
   /** 변형 마스킹 머티리얼의 비인스턴스 폴백 (개별 Mesh 로 한 변형만 그릴 때) */
   setVariant(v: number): void;
   dispose(): void;
@@ -430,15 +640,22 @@ export function makeGaitMaterials(rig: EnemyRig, variants = false): GaitMaterial
     const s = rig.limbs[i]!;
     a.set([s.pivot[0], s.pivot[1], s.pivot[2], s.phase], i * 4);
     b.set([s.axis[0], s.axis[1], s.axis[2], s.amp], i * 4);
-    c.set([s.lift, s.amp2, 0, 0], i * 4);
+    // role/throwAway 는 uLimbC 의 빈 칸에 얹는다 — 배열을 하나 더 늘리지 않으려고
+    c.set([s.lift, s.amp2, s.role, s.throwAway ? 1 : 0], i * 4);
   }
+  // 포즈가 없는 종도 배열은 있어야 한다 (uniform 미설정 = 쓰레기 값)
+  const atk =
+    rig.attack.length === ATK_SLOTS * 4 ? rig.attack : new Float32Array(ATK_SLOTS * 4);
   const gait: THREE.IUniform<number> = { value: 0 };
   const varSel: THREE.IUniform<number> = { value: 1 };
+  const atkState: THREE.IUniform<THREE.Vector2> = { value: new THREE.Vector2(0, 0) };
   const uniforms: Record<string, THREE.IUniform> = {
     uLimbA: { value: a },
     uLimbB: { value: b },
     uLimbC: { value: c },
+    uAtk: { value: atk },
     uGait: gait,
+    uAtkState: atkState,
     uVarSel: varSel,
   };
 
@@ -453,6 +670,9 @@ export function makeGaitMaterials(rig: EnemyRig, variants = false): GaitMaterial
     depth,
     setGait: (g) => {
       gait.value = g;
+    },
+    setAttack: (progress, aim) => {
+      atkState.value.set(progress, aim);
     },
     setVariant: (v) => {
       varSel.value = v;

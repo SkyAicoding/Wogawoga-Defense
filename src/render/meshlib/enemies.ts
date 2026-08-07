@@ -20,7 +20,15 @@ import type { AllyId, EnemyId } from '@/data/types';
 import { clamp } from '@/core/mathx';
 import { C } from '../palette';
 import { buildParts, cachedGeo, type PartSpec } from './factory';
-import { RigBuilder, computeGroundLift, type EnemyRig } from './gait';
+import {
+  ATK_ROLE_HEAD,
+  ATK_ROLE_MAIN,
+  ATK_ROLE_OFF,
+  RigBuilder,
+  computeGroundLift,
+  type AttackPose,
+  type EnemyRig,
+} from './gait';
 
 type V3 = [number, number, number];
 
@@ -709,9 +717,29 @@ function warrior(rig: RigBuilder): PartSpec[] {
   // 사람 걸음: 다리 교차 + **반대쪽 팔**. 방패 팔이 +z(좌), 곤봉 팔이 −z(우)라
   // 좌측 다리(위상 0)의 반대인 방패 팔에 위상 π를 준다.
   const [legL, legR] = rig.leg(hip, { amp: 0.4 });
-  const shieldArm = rig.add([0, 0.76, 0.16], [0, 0, 1], { phase: Math.PI, amp: 0.24 });
+  const shieldArm = rig.add([0, 0.76, 0.16], [0, 0, 1], {
+    phase: Math.PI,
+    amp: 0.24,
+    role: ATK_ROLE_OFF,
+  });
   // 곤봉은 어깨 뒤로 넘겨 든 무거운 돌덩이라 진폭을 줄인다
-  const clubArm = rig.add([0, 0.76, -0.16], [0, 0, 1], { amp: 0.14 });
+  const clubArm = rig.add([0, 0.76, -0.16], [0, 0, 1], { amp: 0.14, role: ATK_ROLE_MAIN });
+  /**
+   * 부족 전사의 공격 — **큰 돌을 던진다** (변형이 없는 종이라 포즈 슬롯 0).
+   *
+   * 데이터상 warrior 는 사거리 2.2 의 원거리다(data/enemies.ts). 정지 거리
+   * SIEGE_ENGAGE_RANGE(2.1)에서 곤봉(닿는 길이 0.6 남짓)으로는 타워에 절대 못 닿으므로
+   * 근접 내려치기로 그리면 **허공을 때리는 그림**이 된다 — 실제로 그것이 이번 요청의
+   * 발단이었다. 그래서 곤봉 팔의 큰 호를 그대로 '던지는 팔'로 쓴다:
+   *   back +0.6 → 곤봉이 등 뒤로 더 넘어가 몸이 감긴다
+   *   fwd −2.0 → 곤봉이 머리 앞 위로 넘어오며 그 궤적 끝에서 돌이 나간다
+   * 방패 팔은 앞으로 세워 몸을 가린다 — 던지는 반동을 받치는 자세이자,
+   * 정지 사격 중 타워 반격 앞에 서 있는 이유를 만들어 준다.
+   */
+  rig.attack(0, [
+    { role: ATK_ROLE_MAIN, back: 0.6, fwd: -2.0 },
+    { role: ATK_ROLE_OFF, back: -0.28, fwd: 0.6, take: 0.95 },
+  ]);
   const parts: PartSpec[] = [
     // 다리 2단 + 발
     ...mirLimb(
@@ -918,7 +946,7 @@ function shaman(rig: RigBuilder): PartSpec[] {
  *     염료만 다른 편이 "같은 마을에서 몰려나온 무리"로 읽힌다.
  *
  * 구분은 전적으로 **머리 실루엣 + 무기 실루엣 + 염료색** 세 축이 맡는다:
- *   blade  머리띠 · 세워 든 돌칼   · 붉은 염료
+ *   blade  머리띠 · 등에 멘 투창 다발 + 던지는 투창 · 붉은 염료
  *   lancer 투구   · 긴 창 + 둥근 방패 · 청록 염료
  *   archer 두건   · 활 + 등에 멘 화살통 · 이끼 초록
  *   hexer  뼈가면+뿔 · 발광 지팡이   · 남보라 + 마젠타 발광
@@ -932,6 +960,10 @@ interface RaiderIds {
   armL: number;
   armR: number;
   head: number;
+  /** 주무기 손에서 **던져 나가는** 물건 전용 그룹 (armR 과 같이 움직이다 놓는 순간 사라진다) */
+  throwR: number;
+  /** 보조 손에서 던져 나가는 물건 (궁수의 메긴 화살) */
+  throwL: number;
 }
 
 /** 4종 공용 몸통 — 다리·팔·머리 리그를 여기서 전부 등록한다 */
@@ -942,9 +974,33 @@ function raiderBody(rig: RigBuilder): { parts: PartSpec[]; ids: RaiderIds } {
   // 작고 귀여운 인상의 절반은 여기서 나온다 — 다리가 길면 곧바로 '작은 어른'이 된다.
   const [legL, legR] = rig.leg(hip, { amp: 0.44 });
   // 사람 걸음은 다리와 **반대쪽** 팔이 나간다. 좌측 다리가 위상 0 이므로 좌측 팔에 π 를 준다.
+  // 공격 배역: −z(우)팔이 무기를 놓는 손(MAIN), +z(좌)팔이 보조(OFF).
+  // 궁수만 반대로 쓰지만(활이 좌, 시위가 우) 배역은 **자리 이름**일 뿐이라 포즈 표에서
+  // 값만 뒤집으면 된다 — 팔 정점이 4종 공통이라 정점 태그로는 갈 수 없기 때문이다.
   const [armL, armR] = rig.pair([0, 0.42, 0.105], [0, 0, 1], { phase: Math.PI, amp: 0.34 });
+  rig.setRole(armL, ATK_ROLE_OFF);
+  rig.setRole(armR, ATK_ROLE_MAIN);
   // 큰 머리가 걸음마다 까딱인다(2배 주파수) — 2.5등신에서 가장 눈에 띄는 2차 모션
-  const head = rig.add([0, 0.45, 0], [0, 0, 1], { phase: HALF_PI, amp2: 0.06 });
+  const head = rig.add([0, 0.45, 0], [0, 0, 1], { phase: HALF_PI, amp2: 0.06, role: ATK_ROLE_HEAD });
+  /**
+   * 던져 나가는 물건 전용 그룹 — 팔과 **완전히 같은 피벗·축·위상·진폭**이라
+   * 걷는 동안에는 팔에 붙어 있는 것과 구별되지 않는다. 다른 것은 단 하나,
+   * 놓는 순간 접혀 사라진다는 점이다(gait.ts throwAway). 손목이 없는 강체 팔에서
+   * 던진 창이 뒤집히지 않게 하는 유일한 방법이고, 정점 비용은 0이다.
+   * pair() 가 좌(+z) 위상 π · 우(−z) 위상 2π 를 주므로 그대로 맞춘다.
+   */
+  const throwR = rig.add([0, 0.42, -0.105], [0, 0, 1], {
+    phase: Math.PI * 2,
+    amp: 0.34,
+    role: ATK_ROLE_MAIN,
+    throwAway: true,
+  });
+  const throwL = rig.add([0, 0.42, 0.105], [0, 0, 1], {
+    phase: Math.PI,
+    amp: 0.34,
+    role: ATK_ROLE_OFF,
+    throwAway: true,
+  });
   const parts: PartSpec[] = [
     // 다리 (허벅지 가죽 / 맨 정강이 / 가죽신) — 굵고 짧게
     ...mirLimb(
@@ -984,7 +1040,7 @@ function raiderBody(rig: RigBuilder): { parts: PartSpec[]; ids: RaiderIds } {
       armR,
     ),
   ];
-  return { parts, ids: { armL, armR, head } };
+  return { parts, ids: { armL, armR, head, throwR, throwL } };
 }
 
 /**
@@ -1001,7 +1057,29 @@ function raiderVest(dye: number): PartSpec[] {
   ];
 }
 
-/** 칼잡이 — 붉은 머리띠 + 세워 든 돌칼 */
+/**
+ * 투창병 — 붉은 머리띠 + 등에 멘 투창 다발 + 던지는 손의 짧은 투창.
+ *
+ * 원래 돌칼잡이였다. 전원 원거리 개편으로 이 종이 **던지는 종**이 되었으므로
+ * 모델도 그렇게 읽혀야 한다 ("칼을 든 놈이 원거리로 때린다"가 화면에서 어긋났다).
+ * 두 축으로 갈아탔다:
+ *  ① 등에 멘 다발 — 정지 상태에서도 "던질 것을 여러 개 갖고 다닌다"가 보인다.
+ *    몸통 고정이라 팔과 따로 놀고, 부감 카메라에서 어깨 위로 창끝 3개가 삐져나온다.
+ *  ② 손의 투창 — **어깨에 걸쳐 멘 자세**(2.6rad, 창끝이 뒤로 간다)로 눕혔다.
+ *
+ * ②의 각도는 눈대중이 아니라 캡처 세 번에서 나온 역산이다. 강체 팔은 어깨 한 축으로만
+ * 돌고 손목이 없으니 **창의 방향 = 정지 방향 + 팔 각도**라는 제약이 전부를 정한다.
+ *  · 앞으로 낮게 겨눈 자세(0.16rad) → 젖힌 순간 창끝이 뒤통수로 돌아갔다. 탈락.
+ *  · 팔 축과 나란히(−1.055rad) → 한 주기 내내 앞선 끝이 바뀌지 않아 뒤집힘은 없앴지만,
+ *    **가장 오래 보이는 자세**(쿨다운 내내 유지되는 조준 자세)에서 창이 몸 뒤에 숨어
+ *    "겨누고 있다"가 화면에서 사라졌다. 탈락.
+ *  · 채택: 2.6rad. 젖힌 자세(−2.5rad)에서 창이 **머리 옆을 지나 앞으로 수평**이 되어
+ *    조준이 한눈에 읽히고, 걸을 때는 "창을 어깨에 메고 간다"가 된다. 대가인 뒤집힘은
+ *    **던지는 순간 창을 접어 없애서**(gait.ts THROW_GONE, 0.40~0.47) 아예 안 보이게 했다 —
+ *    어차피 던진 창은 손에 없어야 맞다.
+ * 창 전체를 어깨 피벗에서 반경 0.42(= 어깨 높이) 안에 두어 보행·공격 어느 각도에서도
+ * 지면을 찍지 않는다.
+ */
 function kitBlade(ids: RaiderIds): PartSpec[] {
   const dye = 0xd2492f;
   return [
@@ -1015,13 +1093,20 @@ function kitBlade(ids: RaiderIds): PartSpec[] {
       ...mirZ([{ kind: 'box', pos: [0.128, 0.578, 0.088], rot: [0, 0, 0.45], scale: [0.022, 0.075, 0.05], color: dye }]),
     ]),
     ...raiderVest(dye),
-    // 돌칼 — 세워 들되 앞으로 살짝 기울인다. 날 끝이 머리보다 위로 올라와야
-    // 위에서 내려다보는 카메라에서 '칼을 든 실루엣'으로 읽힌다.
-    ...tag(ids.armR, [
-      link([0.1, 0.225, -0.132], [0.114, 0.305, -0.132], 0.042, 0.042, C.wood, { kind: 'cyl', seg: 4 }),
-      { kind: 'box', pos: [0.116, 0.322, -0.132], scale: [0.062, 0.028, 0.15], color: C.boneDark },
-      { kind: 'box', pos: [0.142, 0.472, -0.132], rot: [0, 0, -0.18], scale: [0.072, 0.3, 0.036], color: 0xd9d4c6 },
-      { kind: 'cone', pos: [0.172, 0.638, -0.132], rot: [0, 0, -0.18], scale: [0.072, 0.085, 0.036], color: 0xd9d4c6, seg: 4 },
+    // 등에 멘 투창 다발 (몸통 고정) — 어깨 너머로 창끝이 솟아 '던지는 종'을 예고한다
+    { kind: 'cyl', pos: [-0.128, 0.4, 0.055], rot: [0, 0, 0.26], scale: [0.06, 0.3, 0.06], color: RAIDER_HIDE_D, seg: 4 },
+    ...mirZ([
+      link([-0.16, 0.31, 0.085], [-0.098, 0.7, 0.115], 0.022, 0.022, C.wood, { kind: 'cyl', seg: 3 }),
+      { kind: 'cone', pos: [-0.09, 0.735, 0.118], rot: [0, 0, 0.15], scale: [0.046, 0.085, 0.034], color: C.stone, seg: 4 },
+    ]),
+    // 던지는 손의 투창 — 손(0.1, 0.244, −0.118)을 지나 어깨 뒤 위로 걸쳐 멘다
+    ...tag(ids.throwR, [
+      link([0.22, 0.172, -0.132], [-0.26, 0.46, -0.132], 0.03, 0.03, C.wood, { kind: 'cyl', seg: 4 }),
+      // 자루 감은 가죽 — 손 위치를 눈으로 짚어 준다
+      { kind: 'box', pos: [0.1, 0.244, -0.132], rot: [0, 0, -0.54], scale: [0.075, 0.05, 0.05], color: C.rope },
+      { kind: 'cone', pos: [-0.325, 0.499, -0.132], rot: [0, 0, 1.029], scale: [0.07, 0.17, 0.04], color: C.stone, seg: 4 },
+      // 자루 끝 깃 — 던지기 전후로 손 앞쪽에 형태를 남긴다
+      { kind: 'box', pos: [0.245, 0.157, -0.132], rot: [0, 0, -0.54], scale: [0.07, 0.05, 0.018], color: dye },
     ]),
   ];
 }
@@ -1042,11 +1127,17 @@ function kitLancer(ids: RaiderIds): PartSpec[] {
       { kind: 'cyl', pos: [0.167, 0.295, 0.158], rot: [0, 0, HALF_PI], scale: [0.235, 0.032, 0.235], color: dye, seg: 6, hueJitter: 0.02 },
       { kind: 'cone', pos: [0.188, 0.295, 0.158], rot: [0, 0, -HALF_PI], scale: [0.085, 0.065, 0.085], color: C.stone, seg: 5 },
     ]),
-    // 창 (오른팔) — 앞으로 기울여 세운다. 실루엣에서 blade 와 즉시 갈린다.
-    ...tag(ids.armR, [
-      link([0.045, 0.075, -0.138], [0.21, 0.64, -0.138], 0.036, 0.036, C.wood, { kind: 'cyl', seg: 4 }),
-      { kind: 'box', pos: [0.163, 0.49, -0.138], scale: [0.05, 0.034, 0.055], color: C.rope },
-      { kind: 'cone', pos: [0.238, 0.725, -0.138], rot: [0, 0, -0.28], scale: [0.06, 0.18, 0.05], color: C.bone, seg: 4 },
+    /**
+     * 큰창 (오른팔) — blade 의 투창과 **같은 걸침 각(2.6rad)** 에 눕히되 더 길고 굵고
+     * 뼈촉이다. 각을 맞추는 이유는 미학이 아니라 역학이다(kitBlade 주석의 역산 참조).
+     * 예전에는 수직으로 세워 들었는데 그 자세로 던지면 창끝이 지면을 찍고 지나갔다.
+     * blade(0.56)와의 구분은 길이(0.68)·굵기·뼈촉이 맡고, 부감 실루엣에서는
+     * 방패와 청록 염료가 먼저 읽힌다.
+     */
+    ...tag(ids.throwR, [
+      link([0.254, 0.151, -0.138], [-0.329, 0.502, -0.138], 0.042, 0.042, C.wood, { kind: 'cyl', seg: 4 }),
+      { kind: 'box', pos: [0.1, 0.244, -0.138], rot: [0, 0, -0.54], scale: [0.08, 0.055, 0.055], color: C.rope },
+      { kind: 'cone', pos: [-0.406, 0.548, -0.138], rot: [0, 0, 1.029], scale: [0.075, 0.2, 0.05], color: C.bone, seg: 4 },
     ]),
   ];
 }
@@ -1081,6 +1172,10 @@ function kitArcher(ids: RaiderIds): PartSpec[] {
     ...tag(ids.armL, [
       ...tube(arc([0.14, 0.1, 0.03], [0.3, 0.3, 0.19], [0.14, 0.5, 0.35], 3), 0.032, 0.026, C.wood, { flat: 1 }),
       link([0.14, 0.1, 0.03], [0.14, 0.5, 0.35], 0.012, 0.012, C.bone, { kind: 'cyl', seg: 3 }),
+    ]),
+    // 메긴 화살만 **던져 나가는 그룹**에 둔다 — 활은 남고 화살만 시위를 떠난다.
+    // (활 팔과 피벗·위상이 같으므로 겨누는 동안에는 활에 붙어 있는 것과 구별되지 않는다)
+    ...tag(ids.throwL, [
       link([0.13, 0.3, 0.19], [0.35, 0.3, 0.19], 0.013, 0.013, C.wood, { kind: 'cyl', seg: 3 }),
       { kind: 'cone', pos: [0.383, 0.3, 0.19], rot: [0, 0, -HALF_PI], scale: [0.034, 0.07, 0.034], color: C.bone, seg: 3 },
     ]),
@@ -1123,6 +1218,48 @@ function kitHexer(ids: RaiderIds): PartSpec[] {
     ]),
   ];
 }
+
+/**
+ * 습격대 4종의 **공격 포즈** (변형 번호 1~4 = RAIDER_KITS 순서).
+ *
+ * 팔 정점이 4종 공통이라(raiderBody) 종별 동작을 정점으로 가를 수 없다 — 그래서
+ * 인스턴스별 변형 번호 × 배역으로 포즈를 고른다(gait.ts 공격 채널). 각도는 전부
+ * 어깨 피벗 둘레의 **z축 회전**이라 보행과 같은 축을 재사용한다(추가 유니폼 0).
+ *
+ * 각도 감각 (오른팔 손은 정지 시 어깨 아래 (0.1, −0.176)):
+ *   −2.5rad → 손이 어깨 뒤 위로 (던지려고 젖힌 자세)
+ *   +1.75rad → 손이 머리 앞 위로 (놓는 순간)
+ * back 은 **조준 유지 자세이기도 하다** — 멈춰 서 있는 동안 이 각으로 굳으므로
+ * "겨누고 있다"가 쿨다운 내내 보인다.
+ */
+const RAIDER_ATTACKS: readonly (readonly AttackPose[])[] = [
+  // 1) 투창병 — 짧은 투창을 어깨 너머로 젖혔다 앞으로 뿌린다. 가장 크고 빠른 동작.
+  [
+    { role: ATK_ROLE_MAIN, back: -2.5, fwd: 1.75 },
+    { role: ATK_ROLE_OFF, back: 0.62, fwd: -0.2, take: 0.9 },
+    { role: ATK_ROLE_HEAD, back: 0.12, fwd: -0.2 },
+  ],
+  // 2) 큰창잡이 — 같은 던지기지만 무겁다. 덜 젖히고 덜 뻗되 방패 팔을 앞으로 세워 버틴다.
+  [
+    { role: ATK_ROLE_MAIN, back: -2.1, fwd: 1.5 },
+    { role: ATK_ROLE_OFF, back: 0.8, fwd: 0.55, take: 0.95 },
+    { role: ATK_ROLE_HEAD, back: 0.16, fwd: -0.24 },
+  ],
+  // 3) 궁수 — 배역이 뒤집힌 유일한 종. MAIN(오른팔)이 **시위를 당겼다 놓고**,
+  //    OFF(왼팔)가 활을 앞으로 들어 겨눈 채 유지한다(back≈fwd 라 놓는 순간에도 안 흔들린다).
+  [
+    { role: ATK_ROLE_MAIN, back: -1.75, fwd: -0.5 },
+    { role: ATK_ROLE_OFF, back: 1.3, fwd: 1.24 },
+    { role: ATK_ROLE_HEAD, back: 0.06, fwd: -0.12 },
+  ],
+  // 4) 주술 저주사 — 지팡이를 뒤로 젖혀 들었다가 **앞으로 내질러** 구슬을 타워로 겨눈다.
+  //    지팡이 구슬이 어깨 위에 있어 z축 회전으로는 더 들 수 없다 — 젖힘이 곧 '들어올림'이다.
+  [
+    { role: ATK_ROLE_MAIN, back: 0.62, fwd: -1.15 },
+    { role: ATK_ROLE_OFF, back: 0.3, fwd: 0.95, take: 0.9 },
+    { role: ATK_ROLE_HEAD, back: 0.22, fwd: -0.28 },
+  ],
+];
 
 // --- 아군 마을 부족원 3종 (clubber / slinger / guardian) ---------------------
 /**
@@ -1225,7 +1362,7 @@ function allyLivery(ids: RaiderIds): PartSpec[] {
   ];
 }
 
-/** 몽둥이꾼 — 굵고 짧은 나무 몽둥이 (돌 박은 혹). blade 의 얇고 긴 돌칼과 실루엣이 갈린다 */
+/** 몽둥이꾼 — 굵고 짧은 나무 몽둥이 (돌 박은 혹). blade 의 가늘고 긴 투창과 실루엣이 갈린다 */
 function kitClubber(ids: RaiderIds): PartSpec[] {
   return [
     ...allyLivery(ids),
@@ -1326,6 +1463,8 @@ function sharedWithKits(
 
 /** 전투용 습격대 공유 지오메트리 — 몸통 1벌 + 장비 4벌(각각 variant 태그) */
 function raiderShared(rig: RigBuilder): PartSpec[] {
+  // 공격 포즈는 변형 번호와 **같은 순서**로 등록한다 (RAIDER_KITS ↔ RAIDER_ATTACKS)
+  RAIDER_ATTACKS.forEach((poses, i) => rig.attack(i + 1, poses));
   return sharedWithKits(rig, RAIDER_KITS);
 }
 
@@ -1689,6 +1828,26 @@ const BUILDERS: Record<EnemyId, (rig: RigBuilder) => PartSpec[]> = {
 
 /** 보스 계열 (개별 메시 + 스케일/색 강조 + 넓은 체력바) */
 export const BOSS_ENEMIES: ReadonlySet<EnemyId> = new Set(['spino', 'trex']);
+
+/**
+ * 공격 한 주기 동안 **몸통이 앞뒤로 기우는 폭** (rad). 사지는 셰이더가 돌리지만
+ * 몸통 전체는 인스턴스 행렬이 맡으므로(추가 유니폼 0) 여기 값만 뷰가 읽어 간다.
+ * 젖힐 때 뒤로, 놓을 때 앞으로 — 팔만 도는 것과 온몸으로 던지는 것의 차이가 이 값이다.
+ * 무거운 무기일수록 크다. 활(archer)은 조준이 흔들리면 안 되므로 가장 작다.
+ * 값이 없는 종은 0 = 몸통 고정.
+ */
+const ATTACK_LEANS: Readonly<Partial<Record<EnemyId, number>>> = {
+  blade: 1,
+  lancer: 1.25,
+  archer: 0.4,
+  hexer: 0.7,
+  warrior: 1.15,
+};
+
+/** 그 종의 몸통 기울임 배율 (0 = 기울지 않는다) */
+export function enemyAttackLean(id: EnemyId): number {
+  return ATTACK_LEANS[id] ?? 0;
+}
 
 /**
  * 지오메트리를 공유하는 종 → 변형 번호(1-base).
