@@ -502,10 +502,18 @@ describe('정지 사격 (규칙 4)', () => {
     expect(r.planted, '실제로 멈춰 서서 쐈다').toBeGreaterThan(0);
   });
 
-  it('5종 전부 정지 사격을 한다 (SIEGE_ENGAGE_RANGE가 칼날 위가 아니다)', () => {
-    // 경로에서 두 칸(거리 정확히 2.0) — 2.0으로 잡으면 부등호의 칼날 위라
-    // lancer/archer/hexer가 한 발도 멈추지 못한다(balance.SIEGE_ENGAGE_RANGE 주석의 실측).
-    for (const id of ['blade', 'lancer', 'archer', 'hexer', 'warrior'] as EnemyId[]) {
+  /**
+   * SIEGE_ENGAGE_RANGE가 **1칸과 2칸을 가른다**는 것을 잠근다 — 이 게임에서
+   * "경로에서 얼마나 떨어뜨렸는가가 곧 위험도"(siege.ts 규칙 1)라는 약속의 실체다.
+   *
+   * ⚠ 10단계에서 **두 칸 → 한 칸**으로 옮겼다. 9단계까지는 정지선이 2.1이라 두 칸에
+   * 세운 타워도 붙잡혔고, 이 검증이 "칼날 위가 아니다"만 보느라 그 사실을 통과시켰다.
+   * 정지선이 1.7이 된 지금은 **두 칸이 정지 사격을 완전히 막는다**는 쪽이 잠글 값이라
+   * 대조군으로 함께 건다 — 한쪽만 보면 정지선을 0으로 만들어도 초록이 된다.
+   * (밀착 배치가 실제로 벌을 받는지는 autoplay.test.ts 4번이 판 단위로 잠근다)
+   */
+  it('한 칸에 붙이면 5종 전부 멈춰 서고, 두 칸이면 아무도 멈추지 않는다', () => {
+    const runAt = (id: EnemyId, cellZ: number): { planted: number; walking: number } => {
       const sim = createBattle(
         options({
           deck: ['spear'],
@@ -521,13 +529,21 @@ describe('정지 사격 (규칙 4)', () => {
         }),
       );
       for (const x of [3, 6]) {
-        if (sim.hasScenery(x, 0)) sim.applyCommand({ type: 'clearScenery', cellX: x, cellZ: 0 });
-        sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: x, cellZ: 0 });
+        if (sim.hasScenery(x, cellZ)) sim.applyCommand({ type: 'clearScenery', cellX: x, cellZ });
+        sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: x, cellZ });
       }
       sim.applyCommand({ type: 'callWave' });
-      const r = runPlanting(sim, 900);
-      expect(r.planted, `${id} 정지 사격`).toBeGreaterThan(0);
-      expect(r.walking, `${id} 걸으며 쏘기`).toBeGreaterThan(0);
+      return runPlanting(sim, 900);
+    };
+    // 경로는 z=2 직선이므로 z=1이 한 칸(1.0), z=0이 두 칸(2.0)이다
+    for (const id of ['blade', 'lancer', 'archer', 'hexer', 'warrior'] as EnemyId[]) {
+      const near = runAt(id, 1);
+      expect(near.planted, `${id} 한 칸 — 정지 사격`).toBeGreaterThan(0);
+      expect(near.walking, `${id} 한 칸 — 걸으며 쏘기`).toBeGreaterThan(0);
+      const far = runAt(id, 0);
+      expect(far.planted, `${id} 두 칸 — 아무도 멈추지 못한다`).toBe(0);
+      // 그래도 사거리 안이라 지나가며 쏘긴 쏜다 (전원 원거리 = 거리로 지워지지 않는다)
+      expect(far.walking, `${id} 두 칸 — 지나가며 쏘기`).toBeGreaterThan(0);
     }
   });
 
