@@ -6,9 +6,13 @@
  *    적은 항상 경로 폴리라인 위를 걷는다. 타워를 향해 다가가지 않는다.
  *    "걷다 보니 사거리에 들어온 타워"만 때린다. 경로 구조(path.ts의 호장 파라미터화)를
  *    건드리지 않으므로 기존 이동/타게팅/누수 로직이 전부 그대로 유효하다.
- *    → 결과적으로 **경로에 붙여 지은 타워만 위험하다**. 배치 거리가 곧 위험도라는
- *      읽기 쉬운 규칙이 생기고, 플레이어에게 "안전하게 멀리 vs 강하게 가까이"라는
- *      실제 선택지를 준다.
+ *    → 결과적으로 **경로에서 얼마나 떨어뜨렸는가가 곧 위험도**다. 읽기 쉬운 규칙이
+ *      생기고, 플레이어에게 "안전하게 멀리 vs 강하게 가까이"라는 실제 선택지를 준다.
+ *      (전원 원거리 개편의 부수 효과: **전위(blade·lancer)의 안전선이 2칸 → 3칸**으로
+ *       밀렸다. 근접 시절 1.5/1.95라 두 칸(2.0)이면 영구 무력화였는데 2.4/2.8이
+ *       두 칸에 닿기 때문이다. 전원에 대한 완전 안전선은 4칸으로 그대로다
+ *       — 최장 hexer 3.6은 3칸(3.0)에 닿고 4칸(4.0)에는 못 닿는다.
+ *       tests/sim/raiddefense.test.ts가 두 선을 다 잠근다)
  *
  * 1-b) **발이 묶이면 타워를 때리지 않는다.**
  *    아군 부족원이 봉쇄한 적(blockerAllyId >= 0)은 이 단계를 통째로 건너뛴다.
@@ -26,16 +30,51 @@
  *    유효 = 타워가 살아 있고 여전히 사거리 안. (타워의 lockedTarget 규약과 대칭)
  *    매 틱 최근접을 재평가하면 무리가 지나가며 타깃을 계속 바꿔 아무것도 부수지 못한다.
  *
- * 4) 멈춤 여부는 근접/원거리로 갈린다 (TowerAttackSpec.stopToAttack).
- *    · 근접(칼·창, 사거리 ~1.5): 멈춰 서서 두들긴다.
- *      멈추지 않으면 짧은 사거리 탓에 스쳐 지나가며 1~2대만 때리고 사라져 위협이 없다.
- *      멈춤은 플레이어에게 보상이기도 하다 — 타워가 방벽이 되어 적의 기지 도달이 늦어진다
- *      (타워를 잃는 대신 시간을 번다). 유닛 간 충돌이 없는 게임이라(경로 위 겹침 허용)
- *      "뒤 유닛이 밀린다" 문제는 발생하지 않고 그 자리에 겹쳐 함께 두들긴다.
- *    · 원거리(활·주술, 사거리 ~2.2+): 걸으면서 쏜다.
- *      멈추게 하면 긴 사거리 탓에 경로 초입에서부터 정지해 전선이 영구 정체되고,
- *      최악의 경우 아무도 기지에 도달하지 않는 스톨(무한 교착)이 난다.
- *      "지나가며 갉아먹는" 압박이 원거리의 정체성이다.
+ * 4) **공격 가능 지점에서 멈춰 서서 쏜다** — 습격대 전원이 원거리 정지 사격을 한다.
+ *
+ *    ── 옛 규칙 4 (전문 보존, 지우지 않는다) ─────────────────────────────────
+ *    "멈춤 여부는 근접/원거리로 갈린다 (TowerAttackSpec.stopToAttack).
+ *     · 근접(칼·창, 사거리 ~1.5): 멈춰 서서 두들긴다. 멈추지 않으면 짧은 사거리 탓에
+ *       스쳐 지나가며 1~2대만 때리고 사라져 위협이 없다. 멈춤은 플레이어에게
+ *       보상이기도 하다 — 타워가 방벽이 되어 적의 기지 도달이 늦어진다(타워를 잃는
+ *       대신 시간을 번다). 유닛 간 충돌이 없는 게임이라(경로 위 겹침 허용) '뒤 유닛이
+ *       밀린다' 문제는 발생하지 않고 그 자리에 겹쳐 함께 두들긴다.
+ *     · 원거리(활·주술, 사거리 ~2.2+): 걸으면서 쏜다. 멈추게 하면 긴 사거리 탓에
+ *       경로 초입에서부터 정지해 전선이 영구 정체되고, 최악의 경우 아무도 기지에
+ *       도달하지 않는 스톨(무한 교착)이 난다. '지나가며 갉아먹는' 압박이 원거리의
+ *       정체성이다."
+ *    ─────────────────────────────────────────────────────────────────────────
+ *    옛 규칙의 **위험 진단은 지금도 옳다**(그래서 지우지 않았다). 바뀐 것은 그 위험을
+ *    "원거리는 멈추지 않는다"로 피하지 않고 4-a·4-b 두 규칙으로 **막았다**는 점이다.
+ *    근접을 버린 이유는 밸런스가 아니라 기능 부재다: 근접(칼 1.5 / 창 1.95)은 경로에서
+ *    두 칸 떨어뜨리는 것만으로 영구 무력화되어, 3단계 실측에서 **칼잡이 108명의 타워
+ *    피해 총합이 0**이었다(enemies.ts archer 주석). 잘 두는 플레이어에게 존재하지 않는
+ *    기능이라면 그건 위협이 아니라 장식이다.
+ *
+ *  4-a) **멈추는 거리 = 반격당할 수 있는 거리.**
+ *    정지 거리 = min(자기 사거리, SIEGE_ENGAGE_RANGE, towerReach(대상)).
+ *    멈춰 선 습격대는 **언제나 자기가 때리는 타워의 사거리 안**에 있다
+ *    → "적이 타워 사거리 밖에 자리 잡고 일방적으로 두들긴다"가 규칙 차원에서 불가능하다.
+ *    반격하지 못하는 타워(화력 0인 전쟁북)의 towerReach는 0이라 그 앞에는 서지 않는다 —
+ *    쏘긴 쏘되 걸으면서 쏜다. **걸으며 쏘는 사격은 이 규칙 밖**이다(사거리 안에
+ *    들어온 순간부터 쏜다). 즉 정지는 '더 쏘기 위해 위험을 사는' 거래이고,
+ *    그 대가가 규칙으로 보장된다.
+ *
+ *    SIEGE_ENGAGE_RANGE(2.1)가 종별 취향이 아니라 공통값인 이유는 balance.ts 주석 참조 —
+ *    요약하면 2.0은 '두 칸 타워와의 거리 정확히 2.0'이라는 부등호의 칼날 위라
+ *    종에 따라 우연히 멈추고 안 멈춘다(실측 정지 사격 비율 13%). 2.1은 폭 1.28타일의
+ *    정지 구간을 열어 전원이 반드시 멈춘다(56%).
+ *
+ *  4-b) **유한 정지 — 한 번 멈추면 반드시 전진 의무를 진다.**
+ *    정지는 holdTicks(종별)까지만이고, 끝나는 사유(상한 소진 / 대상 파괴 / 사거리 이탈 /
+ *    스턴 / 아군 봉쇄) **무관하게** 그 뒤 SIEGE_ADVANCE_TICKS(120틱) 동안은 어떤 타워
+ *    앞에서도 다시 멈추지 못한다. 예외가 **0개**라는 것이 이 규칙의 전부다 —
+ *    "정지 → 전진 → 정지"의 전진 몫이 상수로 보장되므로 전진 이동 틱 비율이
+ *    W/(H+W) 아래로 내려갈 수 없다(최장 hold 90 → 57%). 스톨은 가능한 상태가 아니다.
+ *    전진 의무 잔여는 **실제로 전진한 틱에만** 준다(entities.ts siegeWalkLeft) —
+ *    봉쇄·스턴으로 못 걷는 시간이 의무를 갉아먹으면 "묶여 있다 풀리자마자 또 멈춤"이
+ *    가능해져 보장이 깨진다.
+ *    tests/sim/siege.test.ts의 '불멸 타워 도배' 넷이 이 성질을 잠근다.
  *
  * 5) 스턴은 완전 무력화 — 타깃을 놓고 쿨다운도 흐르지 않는다.
  *    (이동이 0인데 공격만 되는 그림은 설명이 안 된다)
@@ -96,9 +135,16 @@
  * three/DOM 임포트 금지.
  */
 import { STATUS_TICK_INTERVAL } from '@/data/types';
-import type { TowerId, TowerState } from '@/data/types';
-import { TOWER_REPAIR_PER_STATUS_TICK, towerMaxHpFor } from '@/data/balance';
-import { dist2 } from '@/core/mathx';
+import type { TowerAttackSpec, TowerId, TowerState } from '@/data/types';
+import {
+  RAID_ATTACK_ANIM_TICKS,
+  SIEGE_ADVANCE_TICKS,
+  SIEGE_ENGAGE_RANGE,
+  TOWER_REPAIR_PER_STATUS_TICK,
+  towerMaxHpFor,
+} from '@/data/balance';
+import { dist, dist2 } from '@/core/mathx';
+import { effAuraRadius, effRange } from './attack';
 import { damageTower } from './combat';
 import type { EnemySim, SimCtx } from './entities';
 import { isStunned, slowFactor } from './status';
@@ -137,17 +183,131 @@ function nearestTower(ctx: SimCtx, e: EnemySim, r2: number): TowerState | null {
 }
 
 /**
+ * 규칙 4-a) 이 타워가 **이 적에게 반격할 수 있는 반경** (타일). 0 = 반격 불가.
+ * 정지 거리의 상한이라, 여기가 0이면 그 타워 앞에서는 절대 멈추지 않는다.
+ * 타워의 실제 사격 판정과 같은 함수(effRange/effAuraRadius)를 써야
+ * "멈춰 섰는데 타워가 못 쏜다"는 어긋남이 생기지 않는다.
+ */
+function towerReach(ctx: SimCtx, t: TowerState, e: EnemySim): number {
+  const def = ctx.opts.towerDefs[t.defId];
+  const tier = def.tiers[t.tier];
+  if (tier === undefined) return 0;
+  // 지상/공중 표적 제한 — 못 겨누는 적에게는 반격이 없다
+  if (e.flying ? !def.canTargetAir : !def.canTargetGround) return 0;
+  if (def.attackKind === 'aura' || def.attackKind === 'pulse') {
+    const aura = tier.aura;
+    // 버프 전용(drum)은 화력이 0이다 — 반격하지 못하는 타워 앞에는 서지 않는다
+    if (!aura || aura.dmgPerStatusTick === undefined || aura.dmgPerStatusTick <= 0) return 0;
+    return effAuraRadius(ctx, def, aura.radius);
+  }
+  return tier.dmg > 0 ? effRange(ctx, def, tier) : 0;
+}
+
+/** 규칙 4-a) 이 적이 이 타워 앞에서 멈춰 설 수 있는 거리 (0이면 멈추지 않는다) */
+function stopDistFor(ctx: SimCtx, e: EnemySim, spec: TowerAttackSpec, t: TowerState): number {
+  // 자기 사거리도 상한이다 — 데이터가 SIEGE_ENGAGE_RANGE보다 짧은 사거리를 주면
+  // 2.1에 멈춰 서서 닿지도 않는 타워를 겨누는 그림이 된다
+  return Math.min(spec.range, SIEGE_ENGAGE_RANGE, towerReach(ctx, t, e));
+}
+
+/**
+ * 규칙 4-b) 전진 의무 부과 — **정지가 끝나는 모든 경로가 반드시 여기를 지난다.**
+ * 상한 소진도 예외가 아니다(그 사유만 빠뜨리면 무리가 타워를 옮겨 다니며 영구히
+ * 서 있게 되어 스톨이 그대로 재현된다 — 실제로 한 번 그렇게 짰다가 정지 듀티 97% ·
+ * 8마리 전원 기지 미도달로 잡혔다).
+ */
+function requireAdvance(e: EnemySim): void {
+  e.siegeHoldLeft = 0;
+  e.siegeWalkLeft = SIEGE_ADVANCE_TICKS;
+}
+
+/**
+ * 정지 종료 — 서 있었다면 전진 의무를 지운다.
+ * 걷던 적에게는 아무 일도 하지 않는다(의무를 씌우면 사거리 밖을 걷던 적까지 묶인다).
+ */
+function endHold(e: EnemySim): void {
+  if (e.siegeHoldLeft > 0) requireAdvance(e);
+}
+
+/** 규칙 4) 이번 틱의 정지 판정 — 멈춰 설 수 있으면 서고, 조건이 깨지면 즉시 전진 의무 */
+function updateHold(
+  ctx: SimCtx,
+  e: EnemySim,
+  spec: TowerAttackSpec,
+  target: TowerState | null,
+): void {
+  const canHold =
+    spec.stopToAttack &&
+    target !== null &&
+    e.siegeWalkLeft <= 0 && // 4-b) 전진 의무 중에는 어떤 타워 앞에서도 못 선다
+    dist2(target.cellX, target.cellZ, e.x, e.z) <= stopDistFor(ctx, e, spec, target) ** 2;
+  if (e.siegeHoldLeft > 0) {
+    // 상한 소진(--가 0 이하) 또는 조건 이탈 — 어느 쪽이든 **같은** 의무를 진다
+    if (!canHold || --e.siegeHoldLeft <= 0) requireAdvance(e);
+    return;
+  }
+  if (!canHold) return;
+  const hold = Math.max(0, Math.round(spec.holdTicks));
+  if (hold > 0) e.siegeHoldLeft = hold;
+}
+
+/**
+ * 한 발 — 무기를 놓고(raidAttack), 피해를 넣고(towerDamaged), 쿨다운을 건다.
+ * raidAttack을 **먼저** 보내는 이유는 인과 순서 그대로다: 던지는 것이 먼저이고
+ * 맞는 것이 나중이다. 연출이 두 사건을 순서대로 읽을 수 있어야 한다.
+ */
+function fireAtTower(ctx: SimCtx, e: EnemySim, spec: TowerAttackSpec, t: TowerState): void {
+  // 규칙 9) 감속(얼음)은 **타워를 부수는 힘**을 그만큼 깎는다 (헤더 참조).
+  // siegeMul은 무한 모드 초과분(1.06^n)뿐이라 정규 스테이지에서는 항상 1이다 (규칙 10).
+  const raw = spec.dmg * slowFactor(e) * e.siegeMul;
+  // damageTower와 **같은 식**으로 미리 확정한다 — 이벤트의 amount가 실제 피해와
+  // 어긋나면 연출 강도와 화면의 숫자가 갈라진다
+  const amount = Math.max(1, Math.round(raw));
+  const animTicks = Math.max(1, Math.min(RAID_ATTACK_ANIM_TICKS, Math.round(spec.cooldownTicks)));
+  e.attackAnimTicks = animTicks;
+  e.attackAnimLeft = animTicks;
+  ctx.events.push({
+    type: 'raidAttack',
+    attackerId: e.id,
+    attackerDefId: e.defId,
+    x: e.x,
+    z: e.z,
+    towerId: t.id,
+    towerDefId: t.defId,
+    cellX: t.cellX,
+    cellZ: t.cellZ,
+    aim: Math.atan2(t.cellZ - e.z, t.cellX - e.x),
+    dist: dist(t.cellX, t.cellZ, e.x, e.z),
+    ranged: spec.ranged,
+    planted: e.siegeHoldLeft > 0,
+    amount,
+    animTicks,
+  });
+  // damageTower가 round + 최소 1을 보장하므로 소수를 그대로 넘긴다
+  damageTower(ctx, t, raw, e, spec.ranged);
+  // 저주(hexer)는 **살아남은** 타워에만 건다 — 이번 타격에 부서졌으면 의미가 없다
+  if (spec.silenceTicks !== undefined && spec.silenceTicks > 0 && t.hp > 0) {
+    applySilence(ctx, t, spec.silenceTicks, e);
+  }
+  e.attackCdLeft = Math.max(1, Math.round(spec.cooldownTicks));
+}
+
+/**
  * 매 틱 — 적의 타워 공격 판정. moveEnemies보다 **먼저** 돌아야 한다:
- * 여기서 정한 towerTargetId를 보고 이동 단계가 전진 정지를 결정하기 때문이다.
+ * 여기서 정한 siegeHoldLeft를 보고 이동 단계가 전진 정지를 결정하기 때문이다.
  */
 export function updateSiege(ctx: SimCtx): void {
   const towers = ctx.world.towers.items;
   for (const e of ctx.world.enemies.items) {
     if (!e.alive) continue;
+    // 공격 동작은 판정과 무관하게 흘러간다 — 연출 전용 상태라 여기서만 준다.
+    // (스턴에도 멈추지 않는다: 최대 12틱짜리 '던지는 팔'이라 얼려 봐야 자세만 굳는다)
+    if (e.attackAnimLeft > 0) e.attackAnimLeft--;
     const spec = e.def.towerAttack;
-    if (spec === undefined) continue; // 타워를 무시하는 적 (기존 12종 대부분)
+    if (spec === undefined) continue; // 타워를 무시하는 적 (공룡·짐승 11종)
     if (isStunned(e)) {
-      // 규칙 5) 스턴 = 완전 무력화. 쿨다운도 멈춘다
+      // 규칙 5) 스턴 = 완전 무력화. 쿨다운도 멈춘다. 서 있었다면 규칙 4-b가 걸린다
+      endHold(e);
       e.towerTargetId = -1;
       continue;
     }
@@ -155,28 +315,25 @@ export function updateSiege(ctx: SimCtx): void {
       // 아군 부족원에게 발이 묶였다 — 눈앞의 사람을 놔두고 멀리 있는 움막을 때리지 않는다.
       // (allies.ts 규칙 5) 아군 유닛이 **타워의 수명을 사는** 카드가 되는 지점이다.
       // 스턴과 달리 쿨다운은 그대로 흐른다 — 무력화가 아니라 표적 전환이기 때문이다.
+      endHold(e);
       if (e.attackCdLeft > 0) e.attackCdLeft--;
       e.towerTargetId = -1;
       continue;
     }
     if (e.attackCdLeft > 0) e.attackCdLeft--;
     if (towers.length === 0) {
+      endHold(e);
       e.towerTargetId = -1;
       continue;
     }
     const r2 = spec.range * spec.range;
     const target = lockedTower(ctx, e, r2) ?? nearestTower(ctx, e, r2);
     e.towerTargetId = target ? target.id : -1;
+    // 규칙 4) 정지 판정을 **사격보다 먼저** — 이번 틱에 새로 멈춰 섰다면
+    // 그 첫 발도 정지 사격(planted)으로 나가야 화면과 계약이 어긋나지 않는다
+    updateHold(ctx, e, spec, target);
     if (!target || e.attackCdLeft > 0) continue;
-    // 규칙 9) 감속(얼음)은 **타워를 부수는 힘**을 그만큼 깎는다 (헤더 참조).
-    // siegeMul은 무한 모드 초과분(1.06^n)뿐이라 정규 스테이지에서는 항상 1이다 (규칙 10).
-    // damageTower가 round + 최소 1을 보장하므로 소수를 그대로 넘긴다.
-    damageTower(ctx, target, spec.dmg * slowFactor(e) * e.siegeMul, e, spec.ranged);
-    // 저주(hexer)는 **살아남은** 타워에만 건다 — 이번 타격에 부서졌으면 의미가 없다
-    if (spec.silenceTicks !== undefined && spec.silenceTicks > 0 && target.hp > 0) {
-      applySilence(ctx, target, spec.silenceTicks, e);
-    }
-    e.attackCdLeft = Math.max(1, Math.round(spec.cooldownTicks));
+    fireAtTower(ctx, e, spec, target);
   }
 }
 
@@ -201,9 +358,16 @@ export function applySilence(ctx: SimCtx, t: TowerState, ticks: number, caster: 
   });
 }
 
-/** 규칙 4) 이 적이 지금 타워를 때리느라 멈춰 서 있는가 (이동 단계가 묻는다) */
+/**
+ * 규칙 4) 이 적이 지금 타워를 쏘느라 멈춰 서 있는가 (이동 단계가 묻는다).
+ *
+ * **towerTargetId가 아니라 siegeHoldLeft로 판정한다.** 사거리 안에 타워가 있다는 것과
+ * 멈춰 섰다는 것은 이제 다른 사건이기 때문이다 — 사거리(2.4~3.6)에 들어오면 조준하고
+ * 걸으며 쏘다가, 정지 거리(4-a) 안에 들어와야 비로소 선다. towerTargetId로 판정하면
+ * 사거리에 들어온 순간부터 멈춰 서서 옛 규칙 4가 경고한 스톨이 그대로 재현된다.
+ */
 export function isSieging(e: EnemySim): boolean {
-  return e.towerTargetId >= 0 && e.def.towerAttack?.stopToAttack === true;
+  return e.siegeHoldLeft > 0;
 }
 
 /**

@@ -34,10 +34,10 @@ export type EnemyId =
   | 'warrior' // 적 부족 전사 (방패)
   | 'shaman' // 적 부족 주술사 (힐러)
   // --- 부족 습격대 (작고 귀여운 사람 무리 — 타워를 부수러 온다) -------------
-  | 'blade' // 칼잡이 (근접 속공)
-  | 'lancer' // 창잡이 (한 칸 밖에서 찌르는 방어형)
-  | 'archer' // 궁수 (뒤에서 쏘는 유리대포)
-  | 'hexer' // 주술사 (저주로 타워를 침묵시킨다)
+  | 'blade' // 투창병 (최단 사거리 2.4 · 발 빠름 · 연투)
+  | 'lancer' // 큰창잡이 (2.8 · 장갑 3 · 최장 정지 90틱 · 최대 단발)
+  | 'archer' // 궁수 (3.2 · 유리몸)
+  | 'hexer' // 저주사 (3.6 · 침묵 · 최단 정지)
   | 'mammoth' // 매머드 (대형 탱커)
   | 'spino' // 스피노사우루스 (미니보스)
   | 'trex' // 티라노사우루스 (보스)
@@ -166,13 +166,23 @@ export interface TowerAttackSpec {
   /** 타격 간격 틱 (30 = 1초) */
   cooldownTicks: number;
   /**
-   * 때리는 동안 전진을 멈추는가.
-   * 규약: 근접(칼·창)은 true — 멈춰 서서 두들긴다. 원거리(활·주술)는 false — 걸으며 쏜다.
+   * 공격 가능 지점에서 **멈춰 서는가**.
+   * 규약: 타워를 때리는 종은 전부 true — 사거리 안이라도 걸으며 쏘다가,
+   * SIEGE_ENGAGE_RANGE 안으로 들어오면 발을 멈추고 조준 사격한다(siege.ts 규칙 4).
+   * false면 절대 멈추지 않는 순수 '걸으며 쏘기'다 — 현재 데이터에는 없고,
+   * 규칙 4를 끄고 무엇이 달라지는지 재는 대조군(테스트)으로만 남아 있다.
    */
   stopToAttack: boolean;
   /**
+   * 한 번 멈춰 서면 **몇 틱까지 버티는가** (stopToAttack이 false면 무시).
+   * 종을 가르는 네 축 중 '버티는 시간'이다 — 길수록 한 자리에서 더 많이 쏘지만
+   * 그만큼 기지 도달이 늦고 타워 사거리 안에 오래 노출된다(규칙 4-a).
+   * 상한이 끝나면 사유와 무관하게 SIEGE_ADVANCE_TICKS 동안 전진 의무를 진다(규칙 4-b).
+   */
+  holdTicks: number;
+  /**
    * 원거리 공격인가 (연출 분기용 — 투척물/주문 궤적 유무).
-   * 시뮬레이션 판정에는 쓰이지 않고 towerDamaged 이벤트에 그대로 실려 나간다.
+   * 시뮬레이션 판정에는 쓰이지 않고 raidAttack/towerDamaged 이벤트에 그대로 실려 나간다.
    */
   ranged: boolean;
   /**
@@ -392,10 +402,27 @@ export interface EnemyState {
    */
   attackCdLeft: number;
   /**
-   * 지금 때리고 있는 타워 id (-1 = 없음). 렌더가 공격 모션/방향에 쓴다.
-   * stopToAttack 유닛은 이 값이 0 이상인 동안 전진을 멈춘다.
+   * 지금 조준하고 있는 타워 id (-1 = 없음). 렌더가 공격 방향에 쓴다.
+   * **정지 여부는 이 값이 아니라 siegeHoldLeft가 정한다** — 사거리 안이라도
+   * 아직 정지 거리(SIEGE_ENGAGE_RANGE)에 못 들어왔으면 걸으며 쏘기 때문이다.
    */
   towerTargetId: number;
+  /**
+   * 타워를 쏘려고 **멈춰 서 있는** 잔여 틱 (0 = 걷는 중). siege.ts 규칙 4.
+   * 0보다 크면 이동이 멈추고, 렌더는 보행 위상을 정지시킨 채 조준 포즈를 잡는다.
+   * 0이 되는 순간 규칙 4-b의 전진 의무가 걸린다.
+   */
+  siegeHoldLeft: number;
+  /**
+   * 공격 동작 잔여 틱 (0 = 동작 없음). 타격 순간
+   * min(RAID_ATTACK_ANIM_TICKS, cooldownTicks)로 채워지고 매 틱 1씩 준다.
+   * 렌더의 동작 진행도 = 1 − attackAnimLeft / attackAnimTicks (0 → 1).
+   * **raidAttack 이벤트와 짝**이다: 이벤트는 발사 순간 하나만 알리고(놓치면 끝),
+   * 이 값은 매 프레임 "지금 어디까지 던졌는가"를 알려 준다.
+   */
+  attackAnimLeft: number;
+  /** 지금 재생 중인 공격 동작의 전체 길이 (틱). attackAnimLeft의 분모. */
+  attackAnimTicks: number;
   /**
    * 지금 나를 막고 있는 아군 유닛 id (-1 = 없음). 매 틱 아군 단계가 다시 계산한다.
    * 0 이상이면 **전진이 멈추고**(유닛 충돌 대신 쓰는 봉쇄 표현) 타워 공격도 중단하며,
@@ -634,6 +661,45 @@ export type SimEvent =
       attackerZ: number;
       /** 원거리 공격 여부 (TowerAttackSpec.ranged 그대로) */
       ranged: boolean;
+    }
+  | {
+      /**
+       * 습격대가 무기를 **놓은 순간** (창을 던지고/화살을 놓고/주문을 쏜 시점).
+       * towerDamaged와 같은 틱에, 바로 **앞서** 나간다.
+       *
+       * 왜 towerDamaged로 부족한가: towerDamaged는 '타워가 맞았다'는 **피격자 쪽**
+       * 사건이라 fx가 TOWER_HIT_FX_MAX(배치당 4건)로 솎아 낸다 — 무리가 두들기면
+       * 절반 이상이 버려져 공격 동작이 시작도 못 한 채 팔만 흔드는 그림이 된다.
+       * raidAttack은 **공격자 쪽** 사건이라 상한을 공유하지 않고, 착탄이 아니라
+       * 발사 시점을 실어 궤적/포물선의 출발점이 정확해진다.
+       *
+       * 윈드업(던지기 전 준비)은 사건으로 미리 알릴 수 없고(발사보다 앞선다),
+       * 착탄은 렌더가 dist로 계산할 수 있다 — 그래서 **놓는 순간 하나만** 보낸다.
+       * 이벤트를 놓쳐도 EnemyState.attackAnimLeft로 매 프레임 복구할 수 있다.
+       */
+      type: 'raidAttack';
+      attackerId: number;
+      attackerDefId: EnemyId;
+      /** 발사 시점의 공격자 위치 (셀 연속 좌표) */
+      x: number;
+      z: number;
+      towerId: number;
+      towerDefId: TowerId;
+      /** 대상 타워 셀 */
+      cellX: number;
+      cellZ: number;
+      /** 조준 방향 atan2(dz, dx) — EnemyState.heading과 같은 규약 */
+      aim: number;
+      /** 공격자 ↔ 타워 거리 (타일). 투척물 비행 시간 산정용 */
+      dist: number;
+      /** TowerAttackSpec.ranged 그대로 */
+      ranged: boolean;
+      /** 멈춰 서서 쏜 것인가 (false = 걸으며 쏘기) */
+      planted: boolean;
+      /** 이 타격이 넣을 피해 (towerDamaged.amount와 같은 값) */
+      amount: number;
+      /** 이 동작의 길이 (틱) = min(RAID_ATTACK_ANIM_TICKS, cooldownTicks) */
+      animTicks: number;
     }
   | {
       /** 부족 주술사의 저주 — 타워가 잠시 침묵한다 (재적용 시마다 발행) */

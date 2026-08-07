@@ -30,6 +30,16 @@ export interface EnemySim extends EnemyState {
    */
   brawlCdLeft: number;
   /**
+   * 규칙 4-b의 **전진 의무** 잔여 틱. 0보다 크면 어떤 타워 앞에서도 멈추지 못한다.
+   * 한 번 멈춘 뒤 SIEGE_ADVANCE_TICKS로 채워지고, **실제로 전진한 틱에만** 준다
+   * (봉쇄·스턴으로 못 걷는 틱에는 줄지 않는다 — 의무는 시간이 아니라 전진이다).
+   *
+   * **공개 상태가 아니다.** siegeHoldLeft가 "지금 서 있는가"를 이미 말해 주므로
+   * 렌더가 볼 이유가 없고, 노출하면 "왜 사거리 안인데 안 멈추지"를 연출이 흉내 내려
+   * 들 수 있다. 그 판단은 시뮬레이션 혼자 한다.
+   */
+  siegeWalkLeft: number;
+  /**
    * 공성 피해 배율 — **무한 모드 초과분(1.06^n)만** 반영한다. 6개 스테이지의
    * 정규 웨이브(wave <= waveCount)에서는 항상 정확히 1이라 밸런스가 바뀌지 않는다.
    *
@@ -77,11 +87,15 @@ function makeEnemy(): EnemySim {
     hpMul: 1,
     attackCdLeft: 0,
     towerTargetId: -1,
+    siegeHoldLeft: 0,
+    attackAnimLeft: 0,
+    attackAnimTicks: 0,
     blockerAllyId: -1,
     def: null as unknown as EnemyDef, // 스폰 시 반드시 채워짐
     stunImmuneUntil: -1,
     siegeMul: 1,
     brawlCdLeft: 0,
+    siegeWalkLeft: 0,
   };
 }
 
@@ -94,6 +108,10 @@ function resetEnemy(e: EnemySim): void {
   // 풀 재사용 시 이전 개체의 공성 상태가 새어 나가면 결정론이 깨진다
   e.attackCdLeft = 0;
   e.towerTargetId = -1;
+  e.siegeHoldLeft = 0;
+  e.siegeWalkLeft = 0;
+  e.attackAnimLeft = 0;
+  e.attackAnimTicks = 0;
   e.siegeMul = 1;
   e.blockerAllyId = -1;
   e.brawlCdLeft = 0;

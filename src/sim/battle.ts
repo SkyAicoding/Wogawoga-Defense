@@ -230,10 +230,13 @@ class Battle implements BattleSim {
       e.prevZ = e.z;
       // 아군에게 발이 묶였다 — 유닛 충돌 대신 쓰는 봉쇄 표현 (allies.ts 규칙 5)
       if (e.blockerAllyId >= 0) continue;
-      // 근접 부족원은 타워를 때리는 동안 그 자리에 멈춰 선다 (siege.ts 규칙 4)
+      // 습격대는 타워를 쏘는 동안 그 자리에 멈춰 선다 (siege.ts 규칙 4)
       if (isSieging(e)) continue;
       const sp = effectiveSpeed(e);
       if (sp <= 0) continue;
+      // 규칙 4-b) 전진 의무는 **실제로 전진한 틱에만** 준다 — 봉쇄·스턴으로 서 있는
+      // 시간이 의무를 갉으면 "묶였다 풀리자마자 또 정지"가 되어 보장이 깨진다
+      if (e.siegeWalkLeft > 0) e.siegeWalkLeft--;
       e.dist += sp * TICK_DT;
       const path = pathFor(ctx, e);
       if (e.dist >= path.totalLength) {
@@ -435,6 +438,14 @@ class Battle implements BattleSim {
       // 공성 상태 — 이게 빠지면 "언제 누구를 때리는가"의 발산을 해시가 못 잡는다
       h = mix(h, e.attackCdLeft);
       h = mix(h, e.towerTargetId);
+      // 정지 사격(siege.ts 규칙 4) — 셋이 **각각** 다른 발산을 잡는다.
+      //  · siegeHoldLeft : 지금 서 있는가 = 이동 여부. 1틱만 어긋나도 위치가 갈린다
+      //  · siegeWalkLeft : 언제 다시 멈출 수 있는가 = 앞으로의 정지 시점 전부
+      //  · attackAnimLeft: 연출 전용이지만 타격 시점의 파생값이라, 여기가 갈리면
+      //    "언제 쐈는가"가 갈린 것이다 (판정에 되먹임은 없어도 증거로는 유효하다)
+      h = mix(h, e.siegeHoldLeft);
+      h = mix(h, e.siegeWalkLeft);
+      h = mix(h, e.attackAnimLeft);
       // 봉쇄/난투 — 봉쇄는 이동·공성·반격을 동시에 바꾸므로 1틱만 어긋나도 전부 갈라진다
       h = mix(h, e.blockerAllyId);
       h = mix(h, e.brawlCdLeft);

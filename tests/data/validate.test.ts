@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EnemyId, TowerId } from '@/data/types';
 import * as balance from '@/data/balance';
+import { SIEGE_ADVANCE_TICKS, SIEGE_ENGAGE_RANGE } from '@/data/balance';
 import { ALL_ENEMY_IDS, BOUNTY_PER_COST, ENEMY_DEFS } from '@/data/enemies';
 import { ALL_TOWER_IDS, TOWER_DEFS } from '@/data/towers';
 
@@ -178,27 +179,51 @@ describe('enemies', () => {
       const atk = ENEMY_DEFS[id].towerAttack!;
       expect(atk.dmg, id).toBeGreaterThan(0);
       expect(atk.cooldownTicks, id).toBeGreaterThanOrEqual(1);
-      // 근접 = 멈춰서 공격 + 투척물 없음 (siege.ts 규칙 4의 데이터 규약)
-      expect(atk.stopToAttack, id).toBe(!atk.ranged);
-      if (atk.stopToAttack) {
-        // 근접 사거리는 "경로 옆 한 칸(대각 포함)"에 닿고 두 칸에는 닿지 않아야 한다.
-        // 이게 깨지면 '경로에 붙여 지은 타워만 위험' 규칙이 화면에서 안 읽힌다.
-        expect(atk.range, id).toBeGreaterThan(Math.SQRT2);
-        expect(atk.range, id).toBeLessThan(2);
-      } else {
-        // 원거리는 멈추지 않는다(전선 정체 방지) — 대신 근접보다 확실히 멀리 닿아야
-        // "뒤에서 갉는다"는 역할이 성립한다
-        expect(atk.range, id).toBeGreaterThan(2);
-      }
+      // 타워를 때리는 종은 **전부 원거리이고 전부 멈춰 선다** (siege.ts 규칙 4).
+      // 근접(옛 규약)은 경로 이격 두 칸으로 영구 무력화돼 기능이 존재하지 않았다.
+      expect(atk.ranged, id).toBe(true);
+      expect(atk.stopToAttack, id).toBe(true);
+      // 정지 규칙이 물리려면 사거리가 정지 판정 거리보다 커야 한다 — 짧으면
+      // "닿지도 않는 거리에 멈춰 선다"가 되어 규칙 4-a의 min()이 조용히 무력화된다
+      expect(atk.range, id).toBeGreaterThan(SIEGE_ENGAGE_RANGE);
+      // 그리고 유한 정지(규칙 4-b)의 상한이 반드시 있어야 한다 — 0이면 아예 안 서고,
+      // 상한 없이 크면 옛 규칙 4가 경고한 전선 영구 정체로 되돌아간다
+      expect(atk.holdTicks, id).toBeGreaterThan(0);
+      expect(atk.holdTicks, id).toBeLessThan(SIEGE_ADVANCE_TICKS);
     }
   });
 
-  it('습격대 역할 분리: 근접 2 / 원거리 2, 침묵은 hexer 전용', () => {
-    const melee = RAIDERS.filter((id) => ENEMY_DEFS[id].towerAttack!.stopToAttack);
-    expect(melee).toEqual(['blade', 'lancer']);
-    // 창잡이는 칼잡이보다 한 걸음 뒤에서 찌른다 (사거리로 역할이 갈린다)
-    expect(ENEMY_DEFS.lancer.towerAttack!.range).toBeGreaterThan(
-      ENEMY_DEFS.blade.towerAttack!.range,
+  /**
+   * 역할 분리의 축이 바뀌었다. 옛 축은 "근접 2 / 원거리 2"였는데, 전원이 원거리가 된
+   * 지금은 **사거리 · 버티는 시간 · 한 방 대 연사 · 특수** 넷으로 가른다.
+   * 앞의 둘은 네 종이 전부 서로 다른 값이어야 한다 — 같아지는 순간 두 종이
+   * 화면에서 구분되지 않는다("왜 둘 다 있는가"에 답할 수 없다).
+   */
+  it('습격대 역할 분리: 어느 두 종도 네 축에서 겹치지 않고, 침묵은 hexer 전용', () => {
+    const ranges = RAIDERS.map((id) => ENEMY_DEFS[id].towerAttack!.range);
+    const holds = RAIDERS.map((id) => ENEMY_DEFS[id].towerAttack!.holdTicks);
+    // 사거리는 4종이 전부 다르다 — 이 축 하나만으로도 종이 갈린다
+    expect(new Set(ranges).size, `사거리 ${ranges.join()}`).toBe(RAIDERS.length);
+    // 버티는 시간은 **세 단(90 / 75 / 60)** 이다. 넷을 다 벌리면 상·하한이 무의미해질
+    // 만큼 촘촘해지므로, 같은 단을 쓰는 두 종은 다른 축(사거리·연사)이 가른다
+    expect(new Set(holds).size, `정지 상한 ${holds.join()}`).toBeGreaterThanOrEqual(3);
+    // 같은 정지 상한을 쓰는 종끼리는 반드시 연사 간격이 달라야 한다 (한 방 대 연사 축)
+    for (const a of RAIDERS) {
+      for (const b of RAIDERS) {
+        if (a === b) continue;
+        const x = ENEMY_DEFS[a].towerAttack!;
+        const y = ENEMY_DEFS[b].towerAttack!;
+        if (x.holdTicks !== y.holdTicks) continue;
+        expect(x.cooldownTicks, `${a}/${b} 정지 상한이 같으면 연사가 달라야 한다`).not.toBe(
+          y.cooldownTicks,
+        );
+      }
+    }
+    // 사거리 서열: 투창병 < 큰창잡이 < 궁수 < 저주사 (뒤로 갈수록 멀리서 시작한다)
+    expect(ranges).toEqual([...ranges].sort((a, b) => a - b));
+    // 가장 멀리 닿는 종이 가장 오래 버티면 "안전한 자리에서 눌러앉기"가 최적해가 된다
+    expect(ENEMY_DEFS.hexer.towerAttack!.holdTicks).toBeLessThan(
+      ENEMY_DEFS.lancer.towerAttack!.holdTicks,
     );
     // 침묵은 주술사 하나만 — 여럿이 가지면 타워가 영구 봉쇄된다
     for (const id of EXPECTED_ENEMIES) {

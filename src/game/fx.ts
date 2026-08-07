@@ -47,6 +47,13 @@ const TOWER_HIT_FX_MAX = 4;
  * 상한이 없으면 돌팔매 궤적만으로 파티클 예산을 먹고 적 피격 연출이 사라진다.
  */
 const ALLY_SHOT_FX_MAX = 3;
+/**
+ * 한 배치에서 궤적을 그릴 **습격대 투척** 수 상한 (raidAttack).
+ * 타워 피격 상한(TOWER_HIT_FX_MAX 4)보다 넉넉한 이유는 이 궤적이 "무리가 지금
+ * 어디서 던지고 있는가"를 읽는 유일한 단서라서다 — 착탄 연출은 솎여도 되지만
+ * 발사가 통째로 사라지면 무리 절반이 팔만 흔드는 그림이 된다.
+ */
+const RAID_SHOT_FX_MAX = 6;
 
 export function fxStrength(dmg: number, tier: number): number {
   const d = Math.max(1, dmg);
@@ -56,8 +63,11 @@ export function fxStrength(dmg: number, tier: number): number {
 /**
  * 적 부족의 타워 타격 연출 사양 — 무기별로 소리와 파편이 달라야 "누가 때리는지"가 들린다.
  * 기존 SFX/파티클 자산만 조합한다(새 레시피 없음).
- *  · 근접(칼/창/곤봉): 나무·돌 파편이 튀는 둔탁한 타격. trail 없음.
- *  · 원거리(화살): 날아온 궤적을 점선으로 그리고 뼈색 파편이 튄다.
+ * **전원 원거리 개편 이후 trail은 전부 true다** — 타워를 때리는 종은 모두 무언가를
+ * 던지거나 쏘므로, 궤적이 없으면 피해가 어디서 왔는지 화면에서 읽히지 않는다.
+ * 궤적은 towerDamaged(착탄)가 아니라 raidAttack(발사) 사건이 그린다.
+ *  · 투창/장창: 나무·돌 파편이 튀는 둔탁한 명중.
+ *  · 화살: 뼈색 파편.
  *  · 저주(주술): 마젠타 룬이 타워를 감싸며 올라온다.
  */
 interface RaidHitStyle {
@@ -71,10 +81,12 @@ interface RaidHitStyle {
 }
 const RAID_HIT_DEFAULT: RaidHitStyle = { sfx: 'enemyHit', chip: 0xc8b189, chips: 1, trail: false };
 const RAID_HIT: Partial<Record<string, RaidHitStyle>> = {
-  // 돌칼 난타 — 가볍고 빠르다
-  blade: { sfx: 'enemyHit', chip: 0xd9c8a0, chips: 1, trail: false },
-  // 창 찌르기 — 한 방이 무거워 파편이 크게 튄다
-  lancer: { sfx: 'boulderImpact', chip: 0xc8b189, chips: 1.5, trail: false },
+  // 짧은 창 연투 — 가볍고 빠르다
+  blade: { sfx: 'spearThrow', chip: 0xd9c8a0, chips: 1, trail: true },
+  // 장창 투척 — 한 방이 무거워 파편이 크게 튄다
+  lancer: { sfx: 'boulderImpact', chip: 0xc8b189, chips: 1.5, trail: true },
+  // 부족 전사도 이제 던진다 — 습격대보다 가벼운 한 방
+  warrior: { sfx: 'spearThrow', chip: 0xc8b189, chips: 0.9, trail: true },
   // 화살 — 궤적 + 뼈색 파편
   archer: { sfx: 'spearThrow', chip: 0xece0c4, chips: 0.8, trail: true },
   // 저주 — 마젠타. 피해 자체는 작아 파편도 적다
@@ -292,6 +304,7 @@ export class FxRouter {
   /** 타워 피격 파편/숫자 스팸 방지 — 무리가 동시에 두들기면 금방 찬다 */
   private towerHits = 0;
   private allyShots = 0;
+  private raidShots = 0;
 
   constructor(
     private stage3d: Stage3D,
@@ -334,6 +347,7 @@ export class FxRouter {
     this.auraFlecks = 0;
     this.towerHits = 0;
     this.allyShots = 0;
+    this.raidShots = 0;
     for (const ev of events) {
       switch (ev.type) {
         case 'waveStarted': {
@@ -461,9 +475,6 @@ export class FxRouter {
             this.towerHits++;
             const st = RAID_HIT[ev.attackerDefId] ?? RAID_HIT_DEFAULT;
             const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
-            // 원거리는 날아온 궤적을 점선으로 — 어디서 날아왔는지가 보여야
-            // "뒤에 있는 궁수를 먼저 칠 것인가"라는 판단이 생긴다
-            if (st.trail && ev.ranged) this.raidShot(ev.attackerX, ev.attackerZ, ev.cellX, ev.cellZ, st.chip);
             s3.particles.burst(w.x, 0.55, w.z, st.chip, Math.round(4 * st.chips), 1.5, 0.055, 0.4, {
               gravity: 9,
               drag: 1.4,
@@ -480,6 +491,24 @@ export class FxRouter {
           if (ev.hpLeft > 0 && ev.hpLeft < ev.maxHp / 3 && ev.hpLeft + ev.amount >= ev.maxHp / 3) {
             this.shake(0.14);
             this.buzz(25);
+          }
+          break;
+        }
+        case 'raidAttack': {
+          /**
+           * 습격대가 무기를 놓은 순간 — **공격자 쪽** 사건이라 towerDamaged의
+           * TOWER_HIT_FX_MAX(피격 연출 상한)와 예산을 공유하지 않는다.
+           * 궤적을 여기로 옮긴 이유가 그것이다: 착탄 연출이 솎여 나가도 "누가 어디서
+           * 던졌는가"는 남아야 무리 전체의 동작이 화면에서 읽힌다.
+           * 발사 위치(ev.x/z)를 쓰므로 착탄 시점의 위치를 쓰던 예전보다 궤적이 정확하다.
+           *
+           * 공격 동작(팔·무기) 자체는 EnemyState.attackAnimLeft를 읽는 **렌더 쪽** 몫이다 —
+           * 이벤트는 놓칠 수 있지만 per-frame 상태는 못 놓치기 때문이다.
+           */
+          const st = RAID_HIT[ev.attackerDefId] ?? RAID_HIT_DEFAULT;
+          if (st.trail && ev.ranged && this.raidShots < RAID_SHOT_FX_MAX) {
+            this.raidShots++;
+            this.raidShot(ev.x, ev.z, ev.cellX, ev.cellZ, st.chip);
           }
           break;
         }

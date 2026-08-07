@@ -42,8 +42,9 @@ export const stage02: StageDef = {
     hpBase: 1.2,
     hpGrowth: 1.048,
     seed: 2027,
-    // 습격대 데뷔 2단계 — 창잡이(lancer) 합류. 사거리 1.95라 칼잡이(1.5)가 못 닿던
-    // 자리까지 찌른다. 경로 이격이 '한 칸으로는 부족하다'를 배우는 스테이지.
+    // 습격대 데뷔 2단계 — 큰창잡이(lancer) 합류. 사거리 2.8이라 투창병(2.4)이 못 닿던
+    // 자리까지 던지고, 정지 상한 90틱으로 전 종 최장이라 한 자리에서 제일 오래 쏜다.
+    // 경로 이격이 '한 칸으로는 부족하다'를 배우는 스테이지.
     allowedEnemies: [
       'raptor', 'compy', 'boar', 'trike', 'ptera', 'warrior', 'blade', 'archer', 'lancer',
     ],

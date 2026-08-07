@@ -1,6 +1,6 @@
 /** 같은 시드+같은 커맨드 → 해시 완전 일치, 다른 시드 → 상이 */
 import { describe, expect, it } from 'vitest';
-import type { BattleCommand } from '@/data/types';
+import type { BattleCommand, BattleSim, EnemyState } from '@/data/types';
 import { createBattle } from '@/sim/battle';
 import { allyDefs, baseLevels, enemyDefs, options, stageDef, towerDefs, wave } from './fixtures';
 
@@ -64,12 +64,12 @@ function runSiege(seed: number): { hashes: number[]; destroyed: number } {
         warrior: {
           hp: 4000,
           speed: 0.35,
-          towerAttack: { dmg: 45, range: 1.6, cooldownTicks: 20, stopToAttack: true, ranged: false },
+          towerAttack: { dmg: 45, range: 1.6, cooldownTicks: 20, stopToAttack: true, holdTicks: 60, ranged: false },
         },
         shaman: {
           hp: 3000,
           speed: 0.4,
-          towerAttack: { dmg: 18, range: 2.6, cooldownTicks: 25, stopToAttack: false, ranged: true },
+          towerAttack: { dmg: 18, range: 2.6, cooldownTicks: 25, stopToAttack: false, holdTicks: 0, ranged: true },
         },
       }),
       towerDefs: towerDefs(),
@@ -105,21 +105,22 @@ const RAID_SCRIPT: [number, BattleCommand][] = [
   [6, { type: 'callWave' }],
 ];
 
-function runRaid(seed: number): { hashes: number[]; destroyed: number; silenced: number } {
-  const sim = createBattle(
+function makeRaidSim(seed: number): BattleSim {
+  return createBattle(
     options({
       seed,
       endless: true,
       deck: ['spear', 'frost', 'catapult'],
       stage: stageDef({ waveCount: 2, baseHp: 9999, startGold: 100000 }),
       enemyDefs: enemyDefs({
-        blade: { hp: 2500, speed: 0.4, towerAttack: { dmg: 30, range: 1.6, cooldownTicks: 20, stopToAttack: true, ranged: false } },
-        lancer: { hp: 3000, speed: 0.35, towerAttack: { dmg: 40, range: 2.0, cooldownTicks: 36, stopToAttack: true, ranged: false } },
-        archer: { hp: 1800, speed: 0.5, towerAttack: { dmg: 12, range: 3.2, cooldownTicks: 40, stopToAttack: false, ranged: true } },
+        // 전원 원거리 + 정지 사격 — siegeHoldLeft/siegeWalkLeft/attackAnimLeft가 실제로 도는 시나리오다
+        blade: { hp: 2500, speed: 0.4, towerAttack: { dmg: 30, range: 2.4, cooldownTicks: 20, stopToAttack: true, holdTicks: 75, ranged: true } },
+        lancer: { hp: 3000, speed: 0.35, towerAttack: { dmg: 40, range: 2.8, cooldownTicks: 36, stopToAttack: true, holdTicks: 90, ranged: true } },
+        archer: { hp: 1800, speed: 0.5, towerAttack: { dmg: 12, range: 3.2, cooldownTicks: 40, stopToAttack: true, holdTicks: 75, ranged: true } },
         hexer: {
           hp: 2000,
           speed: 0.3,
-          towerAttack: { dmg: 8, range: 3.6, cooldownTicks: 60, stopToAttack: false, ranged: true, silenceTicks: 30 },
+          towerAttack: { dmg: 8, range: 3.6, cooldownTicks: 60, stopToAttack: true, holdTicks: 60, ranged: true, silenceTicks: 30 },
         },
       }),
       towerDefs: towerDefs(),
@@ -134,6 +135,10 @@ function runRaid(seed: number): { hashes: number[]; destroyed: number; silenced:
       ],
     }),
   );
+}
+
+function runRaid(seed: number): { hashes: number[]; destroyed: number; silenced: number } {
+  const sim = makeRaidSim(seed);
   const hashes: number[] = [];
   let destroyed = 0;
   let silenced = 0;
@@ -183,7 +188,7 @@ function runAllies(seed: number): {
           hp: 900,
           speed: 0.5,
           cost: 40,
-          towerAttack: { dmg: 30, range: 1.6, cooldownTicks: 20, stopToAttack: true, ranged: false },
+          towerAttack: { dmg: 30, range: 1.6, cooldownTicks: 20, stopToAttack: true, holdTicks: 60, ranged: false },
         },
         raptor: { hp: 300, speed: 0.9, cost: 25 },
       }),
@@ -263,7 +268,7 @@ function runMixed(seed: number): {
           hp: 900,
           speed: 0.5,
           cost: 40,
-          towerAttack: { dmg: 30, range: 1.6, cooldownTicks: 20, stopToAttack: true, ranged: false },
+          towerAttack: { dmg: 30, range: 1.6, cooldownTicks: 20, stopToAttack: true, holdTicks: 60, ranged: false },
         },
         raptor: { hp: 300, speed: 0.9, cost: 25 },
       }),
@@ -387,6 +392,35 @@ describe('결정론', () => {
     expect(a.destroyed).toBeGreaterThan(0);
     expect(a.hashes).toEqual(b.hashes);
     expect(b.silenced).toBe(a.silenced);
+  });
+
+  /**
+   * 정지 사격이 들여온 상태 셋(siege.ts 규칙 4)이 **각각** 해시에 반영되는지.
+   * 한꺼번에 흔들면 하나만 들어가 있어도 통과하므로 반드시 하나씩 흔든다.
+   *  · siegeHoldLeft  — 지금 서 있는가 (이동 여부를 직접 바꾼다)
+   *  · siegeWalkLeft  — 언제 다시 멈출 수 있는가 (앞으로의 정지 시점 전부를 바꾼다)
+   *  · attackAnimLeft — 연출 전용이지만 타격 시점의 파생값이라, 갈리면 "언제 쐈는가"가 갈렸다는 뜻
+   */
+  it('정지 사격 상태 셋이 각각 hash()에 들어간다', () => {
+    const fields = ['siegeHoldLeft', 'siegeWalkLeft', 'attackAnimLeft'] as const;
+    for (const f of fields) {
+      const sim = makeRaidSim(2024);
+      let ticked = 0;
+      // 정지가 실제로 서 있는 순간까지 돌린다 — 0을 1로 바꾸는 것과 구분되게
+      while (ticked++ < 1200) {
+        for (const [at, cmd] of RAID_SCRIPT) if (at === ticked - 1) sim.applyCommand(cmd);
+        sim.tick();
+        sim.drainEvents();
+        if (sim.state.enemies.some((e: EnemyState) => e.siegeHoldLeft > 0)) break;
+      }
+      const target = sim.state.enemies[0];
+      expect(target, `${f}: 관측할 적이 있다`).toBeDefined();
+      const h0 = sim.hash();
+      // siegeWalkLeft는 EnemyState에 없는 내부 필드라 캐스트로 흔든다 (의도된 비공개)
+      const obj = target as unknown as Record<string, number>;
+      obj[f] = (obj[f] ?? 0) + 1;
+      expect(sim.hash(), `${f}가 해시에 없다`).not.toBe(h0);
+    }
   });
 
   it('아군을 뽑아 싸우다 죽는 시나리오도 해시 전 구간 일치', () => {

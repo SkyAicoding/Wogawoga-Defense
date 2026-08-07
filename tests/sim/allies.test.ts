@@ -648,12 +648,19 @@ describe('전투 (규칙 5·6)', () => {
 
 // ---------------------------------------------------------------------------
 describe('봉쇄된 적은 타워를 때리지 않는다 (siege.ts 규칙 1-b)', () => {
-  /** 근접 습격대 — 붙잡히지 않으면 타워를 두들긴다 */
+  /**
+   * 목 습격대 — 붙잡히지 않으면 타워를 두들긴다.
+   * 여기서 재는 것은 **봉쇄가 공성을 끊는가**(규칙 1-b)뿐이므로 사거리·정지 규칙은
+   * 일부러 최소로 둔다. 적 speed 0.2는 "타워 앞을 천천히 지나간다"를 만들어
+   * 정지 상한(규칙 4-b)이 끝난 뒤에도 관측 창이 닫히지 않게 하는 장치다 —
+   * 그렇지 않으면 봉쇄를 재기 전에 적이 사거리 밖으로 걸어 나간다.
+   */
   const RAID: TowerAttackSpec = {
     dmg: 20,
     range: 1.6,
     cooldownTicks: 20,
     stopToAttack: true,
+    holdTicks: 60,
     ranged: false,
   };
 
@@ -666,7 +673,7 @@ describe('봉쇄된 적은 타워를 때리지 않는다 (siege.ts 규칙 1-b)',
     useAlly: boolean,
     towerX: number,
   ): { total: number; whileBlocked: number; blockedTicks: number; destroyTick: number } {
-    const sim = allySim({ enemy: { speed: 1, towerAttack: RAID, cost: 20 } });
+    const sim = allySim({ enemy: { speed: 0.2, towerAttack: RAID, cost: 20 } });
     place(sim, towerX, 1);
     if (useAlly) expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
@@ -674,7 +681,7 @@ describe('봉쇄된 적은 타워를 때리지 않는다 (siege.ts 규칙 1-b)',
     let whileBlocked = 0;
     let blockedTicks = 0;
     let destroyTick = -1;
-    for (let i = 0; i < 900; i++) {
+    for (let i = 0; i < 2400; i++) {
       sim.tick();
       let tickDmg = 0;
       for (const ev of sim.drainEvents()) {
@@ -718,8 +725,8 @@ describe('봉쇄된 적은 타워를 때리지 않는다 (siege.ts 규칙 1-b)',
    */
   it('아군이 쓰러지면 적은 다시 타워를 때린다', () => {
     const guarded = towerDamageWith(true, 5);
-    // 900틱 중 봉쇄는 일부 구간뿐 — 아군(hp 100)이 난투(11/1초)에 쓰러진 뒤가 있다
-    expect(guarded.blockedTicks).toBeLessThan(900);
+    // 2400틱 중 봉쇄는 일부 구간뿐 — 아군(hp 100)이 난투(11/1초)에 쓰러진 뒤가 있다
+    expect(guarded.blockedTicks).toBeLessThan(2400);
     expect(guarded.destroyTick).toBeGreaterThan(0);
   });
 
