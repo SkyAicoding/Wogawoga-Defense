@@ -85,6 +85,15 @@ export interface ArenaResult {
   /** 관측된 타워 피격 1회 최소/최대 피해 (감속이 한 방의 위력을 깎는지 확인용). 피격 없으면 0 */
   minHit: number;
   maxHit: number;
+  /**
+   * **정지 사격 비율** — 살아 있는 적의 누적 틱 중 `siegeHoldLeft > 0`(= 멈춰 서서 쏘는 중)인 몫.
+   *
+   * 왜 필요한가: 이 게임에서 배치 거리가 사는 것은 딱 하나, **정지 사격을 당하지 않는 것**이다
+   * (siege.ts 규칙 4-a). 그런데 그 축은 지금까지 전 스테이지 자동플레이에서만 간접적으로
+   * 재고 있었고(승수·파괴 수), 거기서는 웨이브 편성·경제·경로가 전부 섞인다.
+   * 여기서는 (종 × 이격) 둘만 남기고 직접 잰다 — 결정론이고 분산이 정확히 0이다.
+   */
+  holdRatio: number;
 }
 
 export interface ArenaOptions {
@@ -190,11 +199,18 @@ export function runArena(opts: ArenaOptions): ArenaResult {
   let towersLost = 0;
   let minHit = Infinity;
   let maxHit = 0;
+  let aliveTicks = 0;
+  let holdingTicks = 0;
   const total = opts.pack.reduce((a, p) => a + p.count, 0);
   const maxTicks = opts.maxTicks ?? 3600;
   let ticks = 0;
   for (; ticks < maxTicks; ticks++) {
     sim.tick();
+    for (const e of sim.state.enemies) {
+      if (!e.alive) continue;
+      aliveTicks++;
+      if (e.siegeHoldLeft > 0) holdingTicks++;
+    }
     for (const ev of sim.drainEvents()) {
       if (ev.type === 'enemyDied') killed++;
       else if (ev.type === 'towerDamaged') {
@@ -210,5 +226,6 @@ export function runArena(opts: ArenaOptions): ArenaResult {
     killed, total, towerDamage, towersLost, invested, ticks,
     minHit: minHit === Infinity ? 0 : minHit,
     maxHit,
+    holdRatio: aliveTicks > 0 ? holdingTicks / aliveTicks : 0,
   };
 }

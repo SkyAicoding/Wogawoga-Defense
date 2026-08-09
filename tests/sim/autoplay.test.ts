@@ -49,6 +49,10 @@
  * 12) **입구 요격 금지**(7단계) — 전 스테이지·전 레벨에서 실효 한계선이 최단 경로의 절반
  *     이하이고, 가장 짧은 s4에서 실제 봉쇄 지점이 스폰에서 경로의 35% 밖이다
  * 13) **무한 모드에서 아군이 무한 방벽이 되지 않는다**(7단계) — 부족 갈래 ≤ 타워 몰빵
+ * 14) **아군의 한계 가치**(12단계) — 마을 레벨을 **양 팔에 똑같이 못 박고** 위약과 대조한다.
+ *     10단계가 confounded라며 뺀 자리를 "마을을 빼는" 대신 "마을을 고정하는" 설계로 메웠다.
+ *     같은 실험을 레벨별로 돌리면 아군의 한계 가치가 마을 레벨의 함수라는 것도 드러난다
+ *     (Lv1 44/37 · Lv3 48/43 · **Lv5 58/58**) — 항목 주석에 전문
  *
  * ── 8단계: 봉투를 **참으로 만든 것에 대하여** ────────────────────────────────
  * 검증에서 8·10·11번이 "커밋된 시드 표본에서만 참"이라는 지적이 왔고, 셋 다 재현됐다
@@ -878,6 +882,67 @@ describe('autoplay 난이도 봉투', () => {
     // 아군 몰빵은 확실히 벌을 받는다
     expect(avgWave(allIn), msg).toBeLessThan(avgWave(tower) * 0.8);
   }, 600_000);
+
+  /**
+   * ── 12단계 14번: **아군의 한계 가치** — 마을을 양 팔에 똑같이 못 박고 잰다 ──────
+   *
+   * 무엇을 메우는 항목인가: 10단계가 부족 팔(아군+마을)의 위약 대조를 **뺐다**. 이유는
+   * confounding이었다 — 위약이 지우는 것은 아군뿐인데 마을은 그대로 남아, 마을을 올려 둔
+   * 봇에서는 아군을 지워도 마을(홈타운 화력)이 그 자리를 대신 메웠다. 그래서 그 국면에는
+   * **아무 대조군도 없는 상태**로 남아 있었다.
+   *
+   * 고치는 방법은 마을을 빼는 게 아니라 **양 팔에 똑같이 고정**하는 것이다. 레벨이 하나뿐인
+   * 표(`[{...BASE_LEVELS[2], cost: 0}]`)를 주면 마을은 처음부터 Lv3 성능이고 올릴 수도
+   * 없다 — 두 팔의 마을이 바이트 단위로 같아지므로 남는 차이는 **아군의 전투 능력뿐**이다.
+   * (레벨업 지출도 사라져 골드 흐름까지 같아진다. 위약은 가격·수명·속도·hp가 진짜와 같고
+   *  dmg·봉쇄·사거리만 0이라, 아군에 태우는 골드도 거의 같다)
+   *
+   * ── 왜 Lv3인가 — 이 항목의 가장 중요한 실측이 여기 있다 ────────────────────
+   * 마을 레벨을 바꿔 가며 같은 A/B를 돌리면 **아군의 한계 가치가 마을 레벨의 함수**임이
+   * 그대로 보인다(각 80시드 · minNear 1 · 예비비 600. `진짜 승수/위약 승수`):
+   *   마을 Lv1 고정 → 44/37 (잔여 241/181)
+   *   마을 Lv3 고정 → 48/43 (잔여 825/655)
+   *   마을 Lv5 고정 → **58/58** (잔여 1396/1370)
+   * 곧 **만렙 마을 앞에서는 아군의 전투 능력이 사실상 값을 하지 않는다**(dps 168 · 사거리
+   * 4.6의 마을이 같은 자리를 이미 지킨다). 10단계가 confounding이라고 부른 것의 정체가
+   * 이것이고, 이제 수치로 확인됐다. 그래서 문턱은 **마을이 다 자라기 전 국면**에 건다.
+   *
+   * ⚠ 시작점을 옮긴 독립 표본 5벌(각 80시드)로 확인했다. 문턱은 그 최악값에서 나왔다:
+   *   Lv3 진짜/위약 승수 48/43 · 47/43 · 43/41 · 45/43 · **38/37**  → 5벌 전부 우위
+   *   Lv3 잔여 합       825/655 · 801/650 · 735/617 · 773/660 · 670/600 → 5벌 전부 우위
+   *   (Lv5는 같은 5벌에서 58/58 · 57/57 · 55/52 · 55/55 · **48/50** — 승수는 1벌만 우위이고
+   *    한 벌은 **열세**다. Lv5에 문턱을 걸면 그게 바로 "커밋된 표본에서만 참"인 항목이 된다)
+   *
+   * 판별력: 위약이 곧 되돌리기다 — 아군의 dmg·봉쇄를 지우면 두 팔이 같아져 즉시 빨개진다.
+   * 위 8번(U 팔)과 다른 점은 **마을이 Lv1이 아니라는 것 하나**이고, 그게 이 항목이
+   * 새로 잠그는 사실이다.
+   */
+  it('아군의 한계 가치 — 마을을 양 팔에 똑같이 고정해도 진짜가 위약을 이긴다', () => {
+    const stage = stageById(1);
+    if (!stage) throw new Error('no stage 1');
+    // 레벨 하나짜리 표 = 마을을 Lv3 성능에 못 박는다 (비용 0이지만 살 다음 레벨이 없다)
+    const PIN: BaseLevelDef[] = [{ ...BASE_LEVELS[2]!, cost: 0 }];
+    const opts: BotOptions = { towerReserve: 600, allies: { minNear: 1 } };
+    const run = (defs: Record<AllyId, AllyDef>): BotResult[] =>
+      SEEDS80.map((seed) =>
+        runBot(makeBotSimFor(stage, seed, STAGE1_DECK, 0, false, PIN, defs), stage, opts),
+      );
+    const real = run(ALLY_DEFS);
+    const sham = run(PLACEBO_ALLIES);
+    const msg =
+      `진짜 ${wins(real)}/80 (잔여 ${sum(real, (r) => r.baseHpLeft)} · 봉쇄 ${sum(real, (r) => r.allyBlockTicks)}) / ` +
+      `위약 ${wins(sham)}/80 (잔여 ${sum(sham, (r) => r.baseHpLeft)} · 봉쇄 ${sum(sham, (r) => r.allyBlockTicks)})`;
+    // 실험이 공허하지 않은지 — 양 팔이 실제로 아군을 뽑고 비슷한 골드를 태웠고, 마을이 고정됐다
+    expect(sum(real, (r) => r.alliesTrained), msg).toBeGreaterThan(0);
+    expect(sum(sham, (r) => r.goldAllies), msg).toBeGreaterThan(sum(real, (r) => r.goldAllies) * 0.7);
+    expect(sum(real, (r) => r.goldBase), msg).toBe(0);
+    expect(Math.max(...real.map((r) => r.baseLevel)), msg).toBe(1);
+    // 위약은 정의상 한 틱도 못 막는다
+    expect(sum(sham, (r) => r.allyBlockTicks), msg).toBe(0);
+    // 그리고 두 축 모두에서 진짜가 앞선다 (독립 5벌 전부 성립)
+    expect(wins(real), msg).toBeGreaterThanOrEqual(wins(sham));
+    expect(sum(real, (r) => r.baseHpLeft), msg).toBeGreaterThan(sum(sham, (r) => r.baseHpLeft));
+  }, 900_000);
 
   it('불도저 봇도 스테이지6은 클리어 불가 (지형 개조가 서열을 뒤집지 않는다)', () => {
     const { sim, stage } = makeBotSim(6, 11, ALL_DECK);

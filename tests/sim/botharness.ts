@@ -95,7 +95,18 @@ import { createBattle } from '@/sim/battle';
 import { buildPath } from '@/sim/path';
 import { ALLY_DEFS, BASE_LEVELS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
 import { ALLY_SORTIE_RANGE, SIEGE_ENGAGE_RANGE } from '@/data/balance';
-import type { AllyDef, AllyId, BaseLevelDef, BattleSim, StageDef, TowerDef, TowerId } from '@/data/types';
+import type {
+  AllyDef,
+  AllyId,
+  BaseLevelDef,
+  BattleSim,
+  EnemyDef,
+  EnemyId,
+  SimEvent,
+  StageDef,
+  TowerDef,
+  TowerId,
+} from '@/data/types';
 
 /**
  * 봇 배치 상한 — 지가 상승으로 8기 이후는 업그레이드가 우세.
@@ -316,6 +327,14 @@ export interface BotOptions {
      */
     save?: boolean;
   };
+  /**
+   * **계측 훅** — 사건 하나와 그 사건이 난 웨이브 번호를 그대로 넘긴다.
+   * `BotResult`는 판 하나를 한 줄로 압축하므로 "몇 번째 웨이브에서 맞았나"처럼
+   * 구간별로 갈라 보는 질문에는 답할 수 없다. 결과 필드를 종류마다 늘리는 대신
+   * 훅 하나를 둬서 부르는 쪽이 원하는 것만 세게 한다.
+   * 지정하지 않으면 이 기능은 **한 줄도 돌지 않는다**(runBot의 행동·결과 무변).
+   */
+  onEvent?: (ev: SimEvent, wave: number) => void;
 }
 
 export interface BotResult {
@@ -456,6 +475,13 @@ export function makeBotSimFor(
   endless = false,
   baseLevelTable: readonly BaseLevelDef[] = BASE_LEVELS,
   allyDefTable: Readonly<Record<AllyId, AllyDef>> = ALLY_DEFS,
+  /**
+   * 적 정의 표. 위 둘과 같은 취지의 주입구다 — 한 종의 수치만 갈아 끼운 대조군을
+   * 만들 때 쓴다. **`makeWaveFor`는 모듈 상수 ENEMY_DEFS를 쓰므로 편성은 안 바뀐다**:
+   * hp·cost를 건드리지 않는 한 대조군과 실험군의 웨이브가 바이트 단위로 같다
+   * (raidmeasure.test.ts가 정확히 이 성질 위에 서 있다).
+   */
+  enemyDefTable: Readonly<Record<EnemyId, EnemyDef>> = ENEMY_DEFS,
 ): BattleSim {
   const starMap: Partial<Record<TowerId, number>> = {};
   for (const id of deck) starMap[id] = stars;
@@ -466,7 +492,7 @@ export function makeBotSimFor(
     endless,
     seed,
     towerDefs: TOWER_DEFS,
-    enemyDefs: ENEMY_DEFS,
+    enemyDefs: enemyDefTable,
     allyDefs: allyDefTable,
     baseLevels: baseLevelTable,
     waveFor: makeWaveFor(stage),
@@ -558,6 +584,17 @@ function placementKey(def: TowerDef, d: number, hugPath: boolean, grade0?: numbe
  *
  * `cap`·`allies`·`base`·`alwaysRush`·`bulldoze`를 일부러 넣지 않은 이유가 그것이다 —
  * 상한을 만들지 못하는 손잡이를 기준점에 섞으면 기준점이 흐려지기만 한다.
+ *
+ * ⚠ **12단계 정정: 위 "아군 −11승"은 11단계 이전 상태의 값이고, 지금은 참이 아니다.**
+ * w50 클라이맥스 복원 뒤 최강 봇의 결과는 **오직 w50의 trex 한 마리**가 정한다 —
+ * 40시드 전부가 40/40 승 · 종료 기지 HP 13으로 완전히 같은 값이다. 그 위에서 아군을
+ * 켜고 다시 재면(예비비 600 · minNear 1, 40시드):
+ *   최강           40/40 · 잔여합 520 · 아군골드 0
+ *   최강 + 아군    40/40 · 잔여합 **520** · 아군골드 66,943 · 봉쇄 924틱
+ * 곧 판당 1,674골드를 태우고 실제로 924틱을 붙잡는데 **결과가 한 자리도 안 바뀐다.**
+ * 아군은 이제 최강 정책에게 손해도 이득도 아니다 — 그 골드가 사는 것(누수 방지)이
+ * 이 봇에게는 이미 0이고, 태워도 남는 골드로 타워를 더 올릴 자리가 없기 때문이다.
+ * (minNear 3에서는 아예 한 명도 안 뽑는다 — 마을 앞에 적이 셋 모이는 일이 없다)
  *
  * 구성이 `{catapult: 8}`(몰빵)이 아닌 이유: 스테이지1에 비행 적이 하나도 없어서 성립하는
  * 값이라 기준점으로 부적절하다. 2/5/1은 대공 2기(spear)를 남긴다.
@@ -838,6 +875,30 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     }
   };
 
+  /**
+   * 사건 집계 — 외곽 루프 끝(기본)이든 매 틱(계측 훅)이든 **같은 함수**가 처리한다.
+   * 두 자리에 같은 코드를 두면 훅을 켠 판과 끈 판의 결과가 갈라질 수 있다.
+   */
+  const handleEvent = (ev: SimEvent): void => {
+    if (ev.type === 'towerDestroyed') {
+      destroyed++;
+      lostTiers += ev.tier;
+      lostGold += investedById.get(ev.towerId) ?? 0;
+    } else if (ev.type === 'baseDamaged') {
+      leaked += ev.amount;
+      leaks++;
+    } else if (ev.type === 'baseFired') {
+      baseShots++;
+    } else if (ev.type === 'enemyDamaged') {
+      if (ev.source === 'hometown') baseDamage += ev.amount;
+      lastHit.set(ev.enemyId, ev.source);
+    } else if (ev.type === 'enemyDied') {
+      if (lastHit.get(ev.enemyId) === 'hometown') baseKills++;
+      lastHit.delete(ev.enemyId);
+    }
+  };
+  const onEvent = opts.onEvent;
+
   let guard = 0;
   while (sim.state.phase !== 'won' && sim.state.phase !== 'lost' && guard < maxIters) {
     guard++;
@@ -888,25 +949,16 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       // 아군만 외곽 루프가 아니라 틱 루프 안에서 본다 — 수명 20초짜리 긴급 자원이라
       // 4초 늦으면 이미 늦다 (ALLY_DECIDE_INTERVAL 주석)
       if (allyPolicy && i % ALLY_DECIDE_INTERVAL === 0) stepAllies();
-    }
-    for (const ev of sim.drainEvents()) {
-      if (ev.type === 'towerDestroyed') {
-        destroyed++;
-        lostTiers += ev.tier;
-        lostGold += investedById.get(ev.towerId) ?? 0;
-      } else if (ev.type === 'baseDamaged') {
-        leaked += ev.amount;
-        leaks++;
-      } else if (ev.type === 'baseFired') {
-        baseShots++;
-      } else if (ev.type === 'enemyDamaged') {
-        if (ev.source === 'hometown') baseDamage += ev.amount;
-        lastHit.set(ev.enemyId, ev.source);
-      } else if (ev.type === 'enemyDied') {
-        if (lastHit.get(ev.enemyId) === 'hometown') baseKills++;
-        lastHit.delete(ev.enemyId);
+      // 계측 훅이 있을 때만 **매 틱** 비운다 — 웨이브 번호를 사건과 같은 틱에서 읽어야
+      // "몇 번째 웨이브에서 맞았나"가 성립하기 때문이다. 훅이 없으면 한 줄도 안 돈다.
+      if (onEvent) {
+        for (const ev of sim.drainEvents()) {
+          handleEvent(ev);
+          onEvent(ev, sim.state.waveIndex);
+        }
       }
     }
+    for (const ev of sim.drainEvents()) handleEvent(ev);
   }
   const spent = goldTowers + goldAllies + goldBase + clearGold;
   return {

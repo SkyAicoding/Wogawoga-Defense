@@ -23,6 +23,16 @@ const BLADES: { id: EnemyId; count: number }[] = [{ id: 'blade', count: 12 }];
 const LANCERS: { id: EnemyId; count: number }[] = [{ id: 'lancer', count: 10 }];
 const ARCHERS: { id: EnemyId; count: number }[] = [{ id: 'archer', count: 12 }];
 
+/**
+ * 타워를 때리는 **다섯 종 전부**. `range`로 갈리는 두 무리를 이름으로 못 박는다:
+ *  · 전위(2.2~2.8)는 세 칸에 못 닿고, 뒤열(3.2~3.6)은 닿는다.
+ * warrior는 습격대가 아니지만 towerAttack을 가진 종이라 같은 잣대로 잰다
+ * (src/data/enemies.ts warrior 주석 — 이 표가 그 주석의 근거다).
+ */
+const SHORT: EnemyId[] = ['blade', 'lancer', 'warrior'];
+const LONG: EnemyId[] = ['archer', 'hexer'];
+const ALL_ATTACKERS: EnemyId[] = [...SHORT, ...LONG];
+
 describe('습격대 대응 수단', () => {
   /**
    * 개편의 부수 효과를 정면으로 잠근다 — **두 칸은 더 이상 안전선이 아니다.**
@@ -52,6 +62,51 @@ describe('습격대 대응 수단', () => {
       const r = runArena({ towers: ['spear'], pack, dist: 3, gold: GOLD });
       expect(r.towerDamage, `${id} 이격3`).toBe(0);
       expect(r.towersLost, `${id} 이격3`).toBe(0);
+    }
+  });
+
+  /**
+   * ── 12단계: **거리 축을 다섯 종 전부에 대해 잠근다** ───────────────────────
+   *
+   * 왜 필요했나: 봇의 사망 웨이브가 lancer·hexer의 첫 등장 웨이브보다 앞서서, 전
+   * 스테이지 자동플레이 20시드 합계로 **lancer 사격 0회 · hexer 사격 0회**였다.
+   * 실제로 s2~s6에서 습격대 5종 전원의 `towerAttack.range`를 0으로 만들어도 봇 결과가
+   * 소수점까지 동일하다 — 곧 그 스테이지들에 문턱을 걸면 전부 공허한 초록이 된다.
+   * 실험장은 반대다: 봇도 경제도 없고 (종 × 이격) 둘만 남으므로 **분산이 정확히 0**이고
+   * 한 판에 0.2초다. 잴 수 없던 두 종이 여기서는 잴 수 있다.
+   *
+   * 두 문장을 잠근다. 실측(창던지기 4기 · 각 종 12명 · 예산 900):
+   *  (a) **세 칸은 전위의 안전선이다** — 전위 셋은 피해 0, 뒤열 둘은 0이 아니다.
+   *        blade 0 · lancer 0 · warrior 0 / archer 480 · hexer 240
+   *  (b) **정지 사격은 1칸에서만 일어난다** (siege.ts 규칙 4-a의 약속 그 자체).
+   *        이격 1 → blade 37.7% · archer 35.6% · lancer 35.5% · hexer 23.3% · warrior 21.9%
+   *        이격 2 → **다섯 종 전부 정확히 0.0%**
+   * 문턱은 1칸 >15%(실측 최저 21.9%에서 7%p 아래) · 2칸 ===0.
+   *
+   * 판별력 확인(실제로 되돌려 봤다): `balance.SIEGE_ENGAGE_RANGE`를 9단계 값 2.1로
+   * 되돌리면 이격 2칸의 정지 사격 비율이 다섯 종 전부 0이 아니게 되어
+   * (blade 31.2% · lancer 34.2% · archer 34.6% · hexer 23.2% · warrior 21.7%)
+   * (b)가 다섯 종 모두에서 즉시 빨개진다 — 곧 이 항목은 "정지선이 1칸과 2칸을 가르는가"를
+   * 다섯 종 전부에 대해 잠근다. (a)는 각 종의 `range`를 3 위로 올리면 빨개진다.
+   */
+  it('타워를 때리는 다섯 종: 세 칸이 전위의 안전선이고, 정지 사격은 한 칸에서만 난다', () => {
+    for (const id of ALL_ATTACKERS) {
+      const pack = [{ id, count: 12 }];
+      const d1 = runArena({ towers: ['spear'], pack, dist: 1, gold: GOLD });
+      const d2 = runArena({ towers: ['spear'], pack, dist: 2, gold: GOLD });
+      const d3 = runArena({ towers: ['spear'], pack, dist: 3, gold: GOLD });
+      const msg = `${id} d1 ${d1.towerDamage}/${(d1.holdRatio * 100).toFixed(1)}% · d2 ${d2.towerDamage}/${(d2.holdRatio * 100).toFixed(1)}% · d3 ${d3.towerDamage}`;
+      // (a) 세 칸 — 사거리 3 미만인 종은 한 대도 못 때리고, 넘는 종은 때린다
+      if (SHORT.includes(id)) {
+        expect(ENEMY_DEFS[id].towerAttack!.range, `${id} 사거리 < 3`).toBeLessThan(3);
+        expect(d3.towerDamage, msg).toBe(0);
+      } else {
+        expect(ENEMY_DEFS[id].towerAttack!.range, `${id} 사거리 > 3`).toBeGreaterThan(3);
+        expect(d3.towerDamage, msg).toBeGreaterThan(0);
+      }
+      // (b) 정지 사격 — 한 칸에서는 확실히 멈춰 서고(연출이 살아 있다), 두 칸에서는 절대 안 선다
+      expect(d1.holdRatio, `이격1 정지 사격 ${msg}`).toBeGreaterThan(0.15);
+      expect(d2.holdRatio, `이격2 정지 사격 ${msg}`).toBe(0);
     }
   });
 
