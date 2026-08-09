@@ -7,7 +7,7 @@ import type { EnemyId, WaveDef } from '@/data/types';
 import { WAVE_GOLD_BASE, WAVE_GOLD_PER_WAVE, WAVE_MAX_SPAWNS } from '@/data/balance';
 import { BOUNTY_PER_COST, ENEMY_DEFS } from '@/data/enemies';
 import { STAGES } from '@/data/stages';
-import { makeWaveFor } from '@/data/wavegen';
+import { makeWaveFor, waveBudgetFor } from '@/data/wavegen';
 
 const BOSS_IDS: EnemyId[] = ['spino', 'trex'];
 
@@ -219,13 +219,11 @@ describe('wavegen', () => {
       it(`stage ${stage.id}: 전 웨이브에서 처치 보상 합 <= 예산 × ${BOUNTY_PER_COST}`, () => {
         const plan = stage.wavePlan;
         const waveFor = makeWaveFor(stage);
-        const maxSpend =
-          WAVE_MAX_SPAWNS *
-          (plan.allowedEnemies.reduce((a, id) => a + ENEMY_DEFS[id].cost, 0) /
-            plan.allowedEnemies.length);
         for (let wave = 1; wave <= 50; wave++) {
           if (plan.bossOverrides[wave]) continue; // 보스 보상은 수동 설계다
-          const budget = Math.min(plan.budgetBase * plan.budgetGrowth ** (wave - 1), maxSpend);
+          // 예산 공식은 **생성기에서 직접 가져온다** — 여기에 사본을 두면 곡선 풀 규칙이
+          // 바뀔 때(공중 게이트 도입이 그랬다) 이 테스트만 조용히 어긋난다.
+          const budget = waveBudgetFor(stage, wave);
           const def = waveFor(wave);
           let bounty = 0;
           for (const g of def.groups) {

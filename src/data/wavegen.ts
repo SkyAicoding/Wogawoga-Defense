@@ -13,7 +13,7 @@
  * endless 10배수 웨이브는 오버라이드가 없으므로 보스(spino/50배수는 trex)를 자동 주입한다.
  */
 import { Rng } from '@/core/rng';
-import type { EnemyId, SpawnGroup, StageDef, WaveDef } from './types';
+import type { EnemyId, SpawnGroup, StageDef, WaveDef, WavePlanParams } from './types';
 import { BOUNTY_PER_COST, ENEMY_DEFS } from './enemies';
 import {
   ELITE_HP_BONUS,
@@ -111,11 +111,20 @@ interface Gen {
   groundLanes: number;
   airLanes: number;
   spawnsLeft: number;
+  /**
+   * 이 웨이브에 아직 넣을 수 있는 **비행 마릿수** (상한이 없으면 Infinity).
+   * Infinity면 아래 클램프가 한 번도 물리지 않아 예전 편성과 바이트 단위로 같다.
+   */
+  airLeft: number;
 }
 
 /**
  * 예산 share만큼 해당 적 그룹 추가. count = floor(share / (cost × hpBonus)), min~캡 클램프.
  * min(기본 1)은 습격대처럼 **마릿수 자체가 정체성**인 편성이 예산 부족으로 흩어지지 않게 한다.
+ *
+ * 반환값 = **공중 상한이 거절한 예산**. 부르는 쪽이 그 몫을 다른 그룹에 넘긴다
+ * (genAirRaid 주석). 상한이 없거나 물리지 않으면 언제나 0이므로 기존 호출부는
+ * 반환값을 무시해도 동작이 한 자리도 바뀌지 않는다.
  */
 function push(
   g: Gen,
@@ -125,13 +134,22 @@ function push(
   delay: number,
   hpBonus: number,
   min = 1,
-): void {
+): number {
   const def = ENEMY_DEFS[id];
   let count = Math.floor(share / (def.cost * hpBonus));
   if (count < min) count = min;
   if (count > GROUP_MAX_COUNT) count = GROUP_MAX_COUNT;
   if (count > g.spawnsLeft) count = g.spawnsLeft;
-  if (count < 1) return; // 스폰 캡 소진
+  // 공중 상한 — 거절한 마릿수만큼의 예산을 반환해 지상으로 흘려보낸다.
+  let rejected = 0;
+  if (def.flying) {
+    if (count > g.airLeft) {
+      rejected = (count - g.airLeft) * def.cost * hpBonus;
+      count = g.airLeft;
+    }
+    g.airLeft -= count;
+  }
+  if (count < 1) return rejected; // 스폰 캡 소진 (또는 공중 상한이 0)
   g.spawnsLeft -= count;
   // 스폰폭 클램프 — 마릿수가 확정된 **뒤에야** 간격의 상한을 알 수 있다 (GROUP_MAX_SPAN 주석).
   // 간격은 줄기만 하므로 다른 템플릿의 형태 판정을 침범하지 않는다: 마릿수 상한이 25라
@@ -146,6 +164,7 @@ function push(
     pathIndex: lanes > 1 ? g.rng.int(0, lanes - 1) : 0,
     hpMul: g.hpMul * hpBonus,
   });
+  return rejected;
 }
 
 /**
@@ -201,7 +220,62 @@ const RAID_GUARANTEE_FROM_WAVE = 24;
 const RAID_GUARANTEE_TO_WAVE = 40;
 const RAID_GUARANTEE_EVERY = 6;
 
-function chooseTemplate(rng: Rng, wave: number, allowed: readonly EnemyId[]): Template {
+/**
+ * **하늘길 주기** — `wavePlan.airFromWave`부터 이 간격마다 한 번은 반드시 공중 편성이다.
+ *
+ * 왜 보장이 필요한가: 추첨(`c.push('air_raid')`)은 장기적으로만 공평한데 한 스테이지는
+ * 50웨이브짜리 짧은 표본이다. 해금만 해 두면 "하늘이 열렸는데 정작 안 온다"가 실제로
+ * 일어난다 — 습격대 쪽에서 이미 겪은 병이고(RAID_GUARANTEE_FROM_WAVE 주석의 7웨이브 가뭄)
+ * 같은 처방을 쓴다. chooseTemplate은 순수·결정론 계약이라 **웨이브 번호만으로** 못 박는다.
+ *
+ * ⚠⚠ **주기를 고를 때 실제로 세어야 하는 것은 '살아남는 회차 수'다** ⚠⚠
+ * 보스는 10의 배수 웨이브이고 bossOverrides가 chooseTemplate보다 **먼저** 가로챈다.
+ * 곧 하늘길 웨이브가 10의 배수에 떨어지면 그 회차는 **통째로 사라진다**.
+ * 스테이지1(airFromWave 22, w50까지)에서 예정 회차와 실제 회차:
+ *   주기 4 → 22·26·[30]·34·38·42·46·[50]  → 예정 8, 보스에 2 먹힘, **실제 6**
+ *   주기 5 → 22·27·32·37·42·47            → 예정 6, 충돌 0,      **실제 6**
+ *   주기 6 → 22·28·34·[40]·46             → 예정 5, 보스에 1 먹힘, **실제 4**
+ * 실측이 정확히 이 순서를 따라간다 (상한 2 · `하한 팔 20시드 / 최강 여유 / 중반 손실`):
+ *   주기 4 → 14/20 · **41.4%** ·  77   ← 채택
+ *   주기 5 → 15/20 ·   45.9%  ·  34
+ *   주기 6 → 14/20 ·   51.1%  ·   9   ← 회차가 넷뿐이라 중반이 거의 안 살아난다
+ * 곧 주기 6은 **의도한 것보다 20% 적게 투여된다** — 숫자만 보고 고르면 이 누수가 안 보인다.
+ *
+ * 주기 4와 5는 실제 회차가 여섯으로 같은데, 4 쪽이 중반(w21~40)에 22·26·34·38을 놓아
+ * 예산이 큰 w34~38에 두 번 걸린다(5는 22·27·32·37). 그 차이가 중반 손실 77 대 34다.
+ * 시드 교차(wavePlan.seed 1013/4099/8081)에서 하한 팔의 대조 대비 변화도 4 쪽이 낫다:
+ *   주기 4 → 0 / −1 / +1      주기 5 → +1 / −2 / +1
+ *
+ * 습격대 보장(w24 · 30 · 36)과는 한 웨이브도 겹치지 않는다 — 둘 다 웨이브 번호의
+ * 함수라 겹침 여부가 데이터에서 확정되고, 만에 하나 겹치면 습격대 보장이 먼저 이긴다.
+ */
+const AIR_GUARANTEE_EVERY = 4;
+
+/**
+ * 이 웨이브가 **하늘길 웨이브**인가 (게이트가 없으면 언제나 false).
+ *
+ * 게이트 스테이지에서 비행 종은 **이 웨이브에만** 편성 풀에 들어간다. 곧 하늘은
+ * "해금된 뒤 아무 때나"가 아니라 **주기적으로만** 열린다. 그렇게 못 박는 이유가 실측에 있다:
+ * 해금만 하고 추첨에 맡기면 genMixed가 allowed 전체에서 뽑으므로 w22~50의 절반 가까이가
+ * 비행을 섞게 되고, 그러면 투여량이 설계의 2.3배가 된다
+ * (실측: 최강 봇 w21~40 기지손실 255 대 목표 113, 하한 팔 7/20 대 하한 13).
+ * 주기 편성은 플레이어 쪽에서도 낫다 — "여섯 웨이브마다 하늘을 본다"는 배울 수 있는
+ * 규칙이지만 "가끔 섞여 나온다"는 대공 카드를 상비하라는 뜻이라 덱 선택을 죽인다.
+ */
+function isAirWave(wave: number, airFromWave: number | undefined): boolean {
+  return (
+    airFromWave !== undefined &&
+    wave >= airFromWave &&
+    (wave - airFromWave) % AIR_GUARANTEE_EVERY === 0
+  );
+}
+
+function chooseTemplate(
+  rng: Rng,
+  wave: number,
+  allowed: readonly EnemyId[],
+  airFromWave?: number,
+): Template {
   if (wave <= 2) return 'swarm'; // 초반 온보딩 — 약한 스웜만
   // 중반 가뭄 방지 (RAID_GUARANTEE_FROM_WAVE 주석). 습격대가 해금되지 않은 스테이지는
   // 전위 풀이 비어 raid 편성 자체가 성립하지 않으므로 같은 조건으로 막는다.
@@ -213,6 +287,9 @@ function chooseTemplate(rng: Rng, wave: number, allowed: readonly EnemyId[]): Te
   ) {
     return 'raid';
   }
+  // 하늘길 보장 (AIR_GUARANTEE_EVERY 주석). allowed는 이 웨이브의 풀이라
+  // 하늘길 웨이브가 아니면 ptera가 없어 조건이 성립하지 않는다.
+  if (isAirWave(wave, airFromWave) && allowed.includes('ptera')) return 'air_raid';
   const c: Template[] = ['mixed', 'mixed', 'swarm']; // mixed 가중 2배 (HP 분산 완화)
   if (wave >= 4 && inter(TANKS, allowed).length > 0) c.push('tank_escort');
   if (wave >= 5 && allowed.includes('ptera')) c.push('air_raid');
@@ -242,10 +319,22 @@ function genTankEscort(g: Gen, budget: number, allowed: readonly EnemyId[]): voi
   }
 }
 
+/**
+ * 공중 습격 — 익룡이 하늘길로 오고 지상 호위가 뒤따른다.
+ *
+ * ── 공중 상한이 거절한 예산은 **버리지 않는다** ─────────────────────────────
+ * `wavePlan.airMaxCount`가 익룡 마릿수를 자르면 그 몫의 예산이 편성에서 사라지는데,
+ * 그대로 두면 **공중을 넣을수록 그 웨이브가 헐거워진다** — 총 HP는 normalize()가
+ * 곡선으로 되돌리지만 되돌리는 방식이 "남은 개체를 두껍게" 하는 것이라, 몸 수가 줄고
+ * 밀도가 무너진다(GROUP_MAX_SPAN 주석이 다룬 것과 같은 병이다).
+ * 그래서 잘린 예산은 지상 호위의 몫에 그대로 얹는다. 상한이 없는 스테이지에서는
+ * 거절이 0이라 예전 편성과 **바이트 단위로 같다**.
+ */
 function genAirRaid(g: Gen, budget: number, allowed: readonly EnemyId[]): void {
-  push(g, 'ptera', budget * 0.55, g.rng.int(14, 22), g.rng.int(0, 40), 1);
+  const rejected = push(g, 'ptera', budget * 0.55, g.rng.int(14, 22), g.rng.int(0, 40), 1);
   const ground = inter([...SWARMERS, ...MIDS], allowed);
-  push(g, pickAffordable(g.rng, ground, budget * 0.45), budget * 0.45, g.rng.int(12, 24), g.rng.int(60, 120), 1);
+  const share = budget * 0.45 + rejected;
+  push(g, pickAffordable(g.rng, ground, share), share, g.rng.int(12, 24), g.rng.int(60, 120), 1);
 }
 
 function genMixed(g: Gen, budget: number, allowed: readonly EnemyId[]): void {
@@ -361,14 +450,48 @@ function normalize(groups: SpawnGroup[], targetHp: number): void {
   for (const sg of groups) sg.hpMul = round3(sg.hpMul * corr);
 }
 
+/** 비행 종을 뺀 풀 (WavePlanParams.airFromWave 게이트가 쓰는 것과 같은 필터) */
+function groundPoolOf(plan: WavePlanParams): EnemyId[] {
+  return plan.allowedEnemies.filter((id) => !ENEMY_DEFS[id].flying);
+}
+
+/**
+ * **곡선 계수를 재는 풀은 지상 풀로 고정한다** (게이트 스테이지에 한해).
+ *
+ * 왜: `ref`(평균 hp/cost)와 `maxSpend`(평균 cost × 스폰 캡)는 **전 웨이브의 목표 HP
+ * 곡선**을 정하는 계수인데, allowedEnemies에 비행 종을 한 줄 더하는 것만으로 두 값이
+ * 움직인다. 그러면 **공중이 한 마리도 없는 w1~21까지 곡선이 따라 내려간다** —
+ * 곧 "공중을 더했는데 앞부분이 쉬워졌다"가 된다. refHpPerCost가 towerAttack 종을
+ * 평균에서 빼는 것과 정확히 같은 사유이고, 처방도 같다.
+ * 실측(스테이지1, ptera 추가 전후 w1~50 총 HP 합): 편차 **0.026%** — 이 차이는
+ * normalize()의 round3 반올림뿐이고 곡선 자체는 움직이지 않는다.
+ * (게이트가 없는 스테이지 2~6은 이 분기를 타지 않아 값이 한 자리도 안 바뀐다)
+ */
+function curvePoolOf(plan: WavePlanParams): readonly EnemyId[] {
+  return plan.airFromWave === undefined ? plan.allowedEnemies : groundPoolOf(plan);
+}
+
+/**
+ * 이 웨이브의 예산 = min(예산 곡선, 스폰 캡 소비 한계).
+ *
+ * **내보내는 이유**: 보상 상한 검증(tests/data/wavegen.test.ts)이 이 공식을 베껴 두고
+ * 있었는데, 곡선 풀 규칙이 바뀌면 그 사본만 조용히 어긋난다(공식이 두 곳에 있으면
+ * 언젠가 반드시 갈라진다). 한 곳에서만 유도하고 테스트는 그것을 부른다.
+ */
+export function waveBudgetFor(stage: StageDef, wave: number): number {
+  const plan = stage.wavePlan;
+  const maxSpend = WAVE_MAX_SPAWNS * avgCost(curvePoolOf(plan));
+  return Math.min(plan.budgetBase * plan.budgetGrowth ** (wave - 1), maxSpend);
+}
+
 export function makeWaveFor(stage: StageDef): (wave: number) => WaveDef {
   const plan = stage.wavePlan;
   const groundLanes = stage.paths.length;
   // 공중 레인: airPaths가 없으면 sim이 paths[i] 직선화를 쓰므로 레인 수는 paths와 동일
   const airLanes = stage.airPaths && stage.airPaths.length > 0 ? stage.airPaths.length : groundLanes;
-  const ref = refHpPerCost(plan.allowedEnemies);
-  // 스폰 캡 하에서 소비 가능한 최대 예산 — 목표 HP 곡선의 상한
-  const maxSpend = WAVE_MAX_SPAWNS * avgCost(plan.allowedEnemies);
+  /** 게이트 이전 웨이브가 쓰는 풀 — 비행 종을 통째로 뺀다 (WavePlanParams.airFromWave) */
+  const groundPool = groundPoolOf(plan);
+  const ref = refHpPerCost(curvePoolOf(plan));
 
   return (wave: number): WaveDef => {
     const hpMul = plan.hpBase * plan.hpGrowth ** (wave - 1);
@@ -385,10 +508,26 @@ export function makeWaveFor(stage: StageDef): (wave: number) => WaveDef {
 
     const rng = new Rng((plan.seed + wave) >>> 0);
     // min(예산 곡선, 캡 소비 한계) — 두 단조 증가 곡선의 min이라 목표 HP도 단조 증가
-    const budget = Math.min(plan.budgetBase * plan.budgetGrowth ** (wave - 1), maxSpend);
-    const g: Gen = { rng, groups: [], hpMul, groundLanes, airLanes, spawnsLeft: WAVE_MAX_SPAWNS };
-    const allowed = plan.allowedEnemies;
-    const template = chooseTemplate(rng, wave, allowed);
+    const budget = waveBudgetFor(stage, wave);
+    const g: Gen = {
+      rng,
+      groups: [],
+      hpMul,
+      groundLanes,
+      airLanes,
+      spawnsLeft: WAVE_MAX_SPAWNS,
+      airLeft: plan.airMaxCount ?? Infinity,
+    };
+    /**
+     * 이 웨이브의 풀. 게이트 스테이지에서는 **하늘길 웨이브에서만** 비행 종이 들어간다
+     * (isAirWave 주석). 추첨 풀에서도 빼야 한다 — genMixed는 allowed 전체에서 뽑으므로
+     * air_raid 템플릿만 막아서는 익룡이 아무 mixed 웨이브에나 섞여 나온다.
+     */
+    const allowed =
+      plan.airFromWave === undefined || isAirWave(wave, plan.airFromWave)
+        ? plan.allowedEnemies
+        : groundPool;
+    const template = chooseTemplate(rng, wave, allowed, plan.airFromWave);
     if (template === 'swarm') genSwarm(g, budget, allowed);
     else if (template === 'tank_escort') genTankEscort(g, budget, allowed);
     else if (template === 'air_raid') genAirRaid(g, budget, allowed);

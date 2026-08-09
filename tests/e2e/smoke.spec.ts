@@ -976,3 +976,129 @@ test('최악 프레임 예산 — 삼각형 150,000 / 드로우콜 상한', asyn
   await page.evaluate(() => window.__wgd?.pause(false));
   expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
 });
+
+/**
+ * **하늘길이 실제로 화면에 나온다** (15단계).
+ *
+ * 스테이지1에 처음으로 비행 적이 생겼다(stage01.airPaths + wavePlan.airFromWave).
+ * 시뮬레이션 쪽은 봉투가 잠그지만, 렌더는 별개다 — 익룡 메시가 없거나 공중 레인이
+ * 지상 경로로 잘못 물리면 시뮬레이션은 멀쩡한데 **화면에는 아무 일도 안 일어난다**.
+ * 그래서 여기서는 세 가지를 눈으로 확인할 수 있는 형태로 잰다:
+ *  (a) w22부터 실제로 비행 적이 스폰된다 (그 전 웨이브에는 한 마리도 없다 = 온보딩)
+ *  (b) 그 적이 **지상 경로가 아니라 하늘길** 위에 있다 (x가 지상 S자가 아니라 4 근처)
+ *  (c) 그리는 동안 예산(드로우콜 90 / 삼각형 150,000)을 넘지 않고 콘솔 에러가 없다
+ */
+test('하늘길: w22부터 익룡이 공중 레인으로 온다 (렌더 + 예산)', async ({ page }) => {
+  test.setTimeout(180_000);
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/?test=1', { waitUntil: 'networkidle' });
+  await page.mouse.click(100, 300);
+  await page.getByRole('button', { name: /전투/ }).first().click();
+  await page.waitForFunction(() => window.__wgd !== undefined);
+  await page.waitForTimeout(900);
+
+  /**
+   * 이 웨이브를 돌려 보고 나온 비행 적의 좌표를 모은다.
+   * `freezeOnFlyer`면 익룡이 화면에 떠 있는 **그 순간 멈춘다** — 예산은 반드시
+   * 익룡이 살아 있는 프레임에서 재야 의미가 있다(다 죽은 뒤에 재면 빈 화면을 잰다).
+   */
+  const runWave = (
+    wave: number,
+    freezeOnFlyer: boolean,
+  ): Promise<{ flyers: number; xs: number[]; zs: number[]; alive: number }> =>
+    page.evaluate(
+      ([w, freeze]) => {
+        const g = window.__wgd!;
+        const st = g.sim.state as unknown as {
+          waveIndex: number;
+          baseHp: number;
+          baseHpMax: number;
+          phase: string;
+          enemies: { defId: string; x: number; z: number }[];
+        };
+        st.baseHp = 1e9;
+        st.baseHpMax = 1e9;
+        st.waveIndex = w as number;
+        g.callWave();
+        const xs: number[] = [];
+        const zs: number[] = [];
+        let flyers = 0;
+        for (let i = 0; i < 4000; i++) {
+          g.ff(1);
+          let live = 0;
+          for (const e of st.enemies) {
+            if (e.defId !== 'ptera') continue;
+            live++;
+            flyers++;
+            // 기지 근처는 지상·공중이 만나므로 레인 판정에서 뺀다
+            if (e.z < 11) {
+              xs.push(e.x);
+              zs.push(e.z);
+            }
+          }
+          // 익룡이 마을 쪽으로 충분히 내려온 시점에서 얼린다 (하늘길 중간 = 볼 만한 프레임)
+          if (freeze && live > 0 && zs.length > 0 && (zs[zs.length - 1] as number) > 6) {
+            g.pause(true);
+            return { flyers, xs, zs, alive: live };
+          }
+          if (st.phase !== 'wave' && i > 60) break;
+        }
+        return { flyers, xs, zs, alive: 0 };
+      },
+      [wave, freezeOnFlyer] as [number, boolean],
+    );
+
+  // (a) 게이트 이전 웨이브에는 비행이 한 마리도 없다
+  const before = await runWave(21, false);
+  expect(before.flyers, `w21 비행 적 ${before.flyers}마리 (게이트 이전인데 나왔다)`).toBe(0);
+
+  // (a) w22 = 첫 하늘길 웨이브
+  const at22 = await runWave(22, false);
+  expect(at22.flyers, 'w22에 익룡이 한 마리도 안 나왔다').toBeGreaterThan(0);
+
+  // (b) 하늘길(x=4 직선) 위에 있다 — 지상 S자는 같은 z에서 x가 1이나 9다
+  const maxDx = Math.max(...at22.xs.map((x) => Math.abs(x - 4)));
+  expect(
+    maxDx,
+    `익룡이 하늘길(x=4)에서 최대 ${maxDx.toFixed(2)}타일 벗어났다 — 지상 경로를 타고 있다`,
+  ).toBeLessThan(1.0);
+  expect(Math.min(...at22.zs), '익룡이 스폰(z=0) 근처에서 관측되지 않았다').toBeLessThan(3);
+  expect(Math.max(...at22.zs), '익룡이 마을 쪽으로 내려오지 않았다').toBeGreaterThan(8);
+
+  // (c) 익룡이 **화면에 떠 있는 프레임**에서 예산을 잰다
+  const frozen = await runWave(22, true);
+  expect(frozen.alive, '익룡이 떠 있는 프레임을 못 잡았다').toBeGreaterThan(0);
+  await page.waitForTimeout(500);
+  const info = await page.evaluate(
+    () =>
+      new Promise<{ calls: number; tris: number; flyers: number }>((res) => {
+        const g = window.__wgd!;
+        let calls = 0;
+        let tris = 0;
+        let i = 0;
+        const step = (): void => {
+          const r = g.renderInfo();
+          calls = Math.max(calls, r.calls);
+          tris = Math.max(tris, r.triangles);
+          if (++i >= 20) {
+            const st = g.sim.state as unknown as { enemies: { defId: string }[] };
+            res({ calls, tris, flyers: st.enemies.filter((e) => e.defId === 'ptera').length });
+          } else requestAnimationFrame(step);
+        };
+        requestAnimationFrame(() => requestAnimationFrame(step));
+      }),
+  );
+  const msg = `w22 렌더 ${JSON.stringify(info)} (관측 좌표 ${at22.xs.length}개)`;
+  // 검증이 공허하지 않은지 — 익룡이 실제로 그려지는 중이어야 한다
+  expect(info.flyers, msg).toBeGreaterThan(0);
+  expect(info.calls, msg).toBeGreaterThan(0);
+  expect(info.calls, msg).toBeLessThanOrEqual(90);
+  expect(info.tris, msg).toBeLessThanOrEqual(150_000);
+  await page.evaluate(() => window.__wgd?.pause(false));
+  expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
+});

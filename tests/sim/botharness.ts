@@ -92,7 +92,7 @@
  * lostGold(파괴로 날아간 누적 투자)가 그 값을 계측한다.
  */
 import { createBattle } from '@/sim/battle';
-import { buildPath } from '@/sim/path';
+import { buildPath, buildStraight } from '@/sim/path';
 import { ALLY_DEFS, BASE_LEVELS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
 import { ALLY_SORTIE_RANGE, SIEGE_ENGAGE_RANGE } from '@/data/balance';
 import type {
@@ -586,6 +586,10 @@ function placementKey(def: TowerDef, d: number, hugPath: boolean, grade0?: numbe
  * 상한을 만들지 못하는 손잡이를 기준점에 섞으면 기준점이 흐려지기만 한다.
  *
  * ⚠ **12단계 정정: 위 "아군 −11승"은 11단계 이전 상태의 값이고, 지금은 참이 아니다.**
+ * (아래 12단계 문단은 **15단계 공중 축 이전**의 상태를 서술한다. 지금은 하늘길이
+ *  w22·26·34·38·42·46에 오므로 최강 봇의 종료 HP가 8~12로 갈리고, 결과를 정하는 것이
+ *  w50 한 웨이브가 아니다 — 곧 아군의 값어치도 다시 재야 하는 상태다. 봉투는 그 축을
+ *  8·14번에서 따로 잠그므로 이 기준점 자체는 그대로 둔다)
  * w50 클라이맥스 복원 뒤 최강 봇의 결과는 **오직 w50의 trex 한 마리**가 정한다 —
  * 40시드 전부가 40/40 승 · 종료 기지 HP 13으로 완전히 같은 값이다. 그 위에서 아군을
  * 켜고 다시 재면(예비비 600 · minNear 1, 40시드):
@@ -596,8 +600,13 @@ function placementKey(def: TowerDef, d: number, hugPath: boolean, grade0?: numbe
  * 이 봇에게는 이미 0이고, 태워도 남는 골드로 타워를 더 올릴 자리가 없기 때문이다.
  * (minNear 3에서는 아예 한 명도 안 뽑는다 — 마을 앞에 적이 셋 모이는 일이 없다)
  *
- * 구성이 `{catapult: 8}`(몰빵)이 아닌 이유: 스테이지1에 비행 적이 하나도 없어서 성립하는
- * 값이라 기준점으로 부적절하다. 2/5/1은 대공 2기(spear)를 남긴다.
+ * 구성이 `{catapult: 8}`(몰빵)이 아닌 이유: 그건 **대공이 하나도 없는** 구성이라
+ * 기준점으로 부적절하다. 2/5/1은 대공 2기(spear)를 남긴다.
+ * ⚠ 15단계 전까지 이 문장은 "스테이지1에 비행 적이 하나도 없어서 성립하는 값"이라고
+ *   적혀 있었다 — 곧 그 시점의 덱에는 **함정 카드**가 있었다(spear의 대공이 이 스테이지에서
+ *   아무 값도 하지 않았다). 하늘길이 생기면서 그게 해소됐고, 실측이 그것을 보여준다
+ *   (최강 봇 40시드 · 여유): `{catapult:8}` 52.0% → **26.1%** · `{spear:8}` 15.5% → 13.7%.
+ *   곧 대공을 통째로 버린 구성이 처음으로 대가를 치른다.
  */
 export const STRONG_BOT: BotOptions = {
   placement: 'kill',
@@ -700,6 +709,19 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
   // ── 아군/기지 정책 준비 ────────────────────────────────────────────────────
   /** 경로별 총 길이 — 적의 '기지까지 남은 거리' = totalLength − enemy.dist */
   const pathLens = stage.paths.map((wp) => buildPath(wp).totalLength);
+  /**
+   * **하늘길의 총 길이** — 비행 적의 '기지까지 남은 거리'는 지상 경로로 재면 틀린다.
+   *
+   * 왜 필요한가 (15단계에서 고친 자의 버그): 비행 적의 `pathIndex`는 **airPaths의**
+   * 인덱스이고, 하늘길은 지상 경로와 길이가 전혀 다르다(스테이지1 설계에서 17.0 대 36.19).
+   * 지상 표로 빼면 남은 거리가 두 배로 부풀어, 마을 문턱에 닿은 비행 적이
+   * "아직 한참 멀다"로 읽힌다. sim과 **같은 폴백**(airPaths가 없으면 스폰→기지 직선,
+   * 인덱스 초과는 0번)을 그대로 쓴다 — 두 곳이 다른 경로를 보면 트리거가 거짓말을 한다.
+   */
+  const airLens =
+    stage.airPaths && stage.airPaths.length > 0
+      ? stage.airPaths.map((wp) => buildPath(wp).totalLength)
+      : stage.paths.map((wp) => buildStraight(wp[0] ?? stage.baseCell, stage.baseCell).totalLength);
   const allyPolicy = opts.allies;
   /**
    * 지금의 출동 트리거 거리. 고정하지 않고 **매 판정마다 다시 읽는다** —
@@ -717,12 +739,34 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     allyPolicy === undefined || allyPolicy.pick === undefined || allyPolicy.pick === 'rotate'
       ? ['clubber', 'slinger', 'guardian']
       : [allyPolicy.pick];
+  /**
+   * 공중 위협이 있을 때 고를 종 — allyOrder 중 **대공이 되는 것만** (15단계).
+   *
+   * 왜 주입 표가 아니라 모듈 상수 ALLY_DEFS로 판정하는가: 위약 대조군(PLACEBO_ALLIES)은
+   * `canTargetAir`를 0으로 지운다. 주입 표를 읽으면 위약 팔에서 이 목록이 비어 진짜 팔과
+   * **다른 카드**를 뽑고, 그러면 두 팔의 골드 흐름이 갈라져 위약 실험의 전제
+   * ("같은 골드를 같은 시점에 태운다")가 깨진다. 사람 쪽 근거도 같다 — 누가 대공인지는
+   * 카드에 적혀 있는 **지식**이지 전투에서 관측하는 결과가 아니다.
+   *
+   * `pick`으로 종을 못 박은 통제 실험은 이 규칙이 건드리지 않는다: 그 경우 allyOrder가
+   * 한 종뿐이라 목록이 비거나(대공 아님 → 폴백) 같은 종 하나이거나 둘 중 하나다.
+   */
+  const allyAntiAir: AllyId[] = allyOrder.filter((id) => ALLY_DEFS[id].canTargetAir);
   let allyTurn = 0;
 
   /**
-   * 아군 출동 판정 — "마을 앞까지 온 지상 적이 있으면 뽑는다".
+   * 아군 출동 판정 — "마을 앞까지 온 적이 있으면 뽑는다".
    * 전진 중인 적만이 아니라 **이미 봉쇄된 적도** 트리거로 센다: 앞줄이 붙잡고 있는
    * 동안 뒷사람을 채워 넣지 않으면 줄이 한 명씩 갈려 나가기만 한다.
+   *
+   * ── 15단계: **비행 적을 아예 못 보던 맹점을 고쳤다** ───────────────────────
+   * 예전 판정은 `if (e.flying) continue`라 하늘길로 웨이브가 통째로 들어와도 봇은
+   * "위험이 없다"고 읽고 아군을 한 명도 안 뽑았다. 그건 정책이 아니라 **자의 버그**다 —
+   * 봇이 화면에 보이는 위협의 절반을 못 보면 그 봇으로 잰 난이도는 게임의 난이도가 아니다.
+   * 이제 지상·공중을 함께 세고(각자 자기 경로 길이로 남은 거리를 잰다),
+   * 공중이 섞여 있으면 **대공이 되는 종**을 고른다.
+   * ⚠ 비행 적이 없는 스테이지에서는 `air`가 언제나 0이고 `near`도 예전과 같은 값이라
+   *   **결과가 한 자리도 바뀌지 않는다**(스테이지1 기준 전 항목 무변으로 확인).
    */
   const stepAllies = (): void => {
     if (!allyPolicy) return;
@@ -732,13 +776,17 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     if (st.allies.length >= max) return;
     const trigger = allyTriggerNow();
     let near = 0;
+    let air = 0;
     for (const e of st.enemies) {
-      if (e.flying) continue;
-      const len = pathLens[e.pathIndex] ?? 0;
-      if (len - e.dist <= trigger) near++;
+      const lens = e.flying ? airLens : pathLens;
+      const len = lens[e.pathIndex] ?? lens[0] ?? 0;
+      if (len - e.dist > trigger) continue;
+      near++;
+      if (e.flying) air++;
     }
     if (near < allyMinNearNow(trigger)) return;
-    const defId = allyOrder[allyTurn % allyOrder.length] as AllyId;
+    const order = air > 0 && allyAntiAir.length > 0 ? allyAntiAir : allyOrder;
+    const defId = order[allyTurn % order.length] as AllyId;
     const cost = sim.allyCost(defId);
     if (st.gold - cost < allyReserve) return;
     if (!sim.canTrainAlly(defId)) return;

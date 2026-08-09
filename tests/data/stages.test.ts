@@ -35,6 +35,15 @@ function rasterize(stage: StageDef): Set<string> {
   return cells;
 }
 
+/** 웨이포인트 폴리라인의 길이 (코너 라운딩 없는 근사 — 여기서는 비교만 한다) */
+function polyLength(path: readonly { x: number; z: number }[]): number {
+  let n = 0;
+  for (let i = 0; i + 1 < path.length; i++) {
+    n += Math.hypot(path[i + 1]!.x - path[i]!.x, path[i + 1]!.z - path[i]!.z);
+  }
+  return n;
+}
+
 function slotCells(stage: StageDef): { x: number; z: number }[] {
   const out: { x: number; z: number }[] = [];
   for (let z = 0; z < stage.gridH; z++) {
@@ -88,6 +97,37 @@ describe('stages', () => {
             expect(a.x === b.x || a.z === b.z, `축 정렬 (${a.x},${a.z})→(${b.x},${b.z})`).toBe(true);
             expect(a.x !== b.x || a.z !== b.z, '중복 웨이포인트 금지').toBe(true);
           }
+        }
+      });
+
+      /**
+       * **공중 레인**(있는 스테이지만) — 지상 경로와 같은 기하 계약을 지킨다.
+       * 물(`~`)은 검사하지 않는다: 날아가는 길이라 지형을 밟지 않고, 실제로 그 위를
+       * 지나는 것이 정상이다. 대신 **어디서 시작해 어디서 끝나는가**는 같아야 한다 —
+       * 스폰이 가장자리가 아니면 화면 밖에서 튀어나오고, 끝이 화덕이 아니면 누수가
+       * 영원히 안 난다. 그리고 하늘길은 지상보다 **짧아야** 의미가 있다(우회로이므로).
+       */
+      it('공중 레인: 가장자리에서 시작해 화덕에서 끝나고, 지상보다 짧다', () => {
+        const air = stage.airPaths;
+        if (!air) return;
+        expect(air.length).toBeGreaterThanOrEqual(1);
+        const groundLen = Math.min(...stage.paths.map(polyLength));
+        for (const path of air) {
+          expect(path.length).toBeGreaterThanOrEqual(2);
+          for (const wp of path) {
+            expect(Number.isInteger(wp.x) && Number.isInteger(wp.z), '정수 웨이포인트').toBe(true);
+            expect(wp.x).toBeGreaterThanOrEqual(0);
+            expect(wp.x).toBeLessThan(stage.gridW);
+            expect(wp.z).toBeGreaterThanOrEqual(0);
+            expect(wp.z).toBeLessThan(stage.gridH);
+          }
+          const first = path[0]!;
+          const onEdge =
+            first.x === 0 || first.x === stage.gridW - 1 || first.z === 0 || first.z === stage.gridH - 1;
+          expect(onEdge, '공중 스폰은 가장자리').toBe(true);
+          expect(path[path.length - 1]!).toEqual(stage.baseCell);
+          const len = polyLength(path);
+          expect(len, `공중 ${len.toFixed(2)} / 지상 ${groundLen.toFixed(2)}`).toBeLessThan(groundLen);
         }
       });
 

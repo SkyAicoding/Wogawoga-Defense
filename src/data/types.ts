@@ -328,6 +328,22 @@ export interface WavePlanParams {
   hpGrowth: number;
   seed: number;
   allowedEnemies: EnemyId[];
+  /**
+   * **공중 해금 웨이브** — 이 웨이브 전에는 `allowedEnemies`의 비행 종이 편성에서
+   * 통째로 빠진다(추첨 풀에서도 빠지므로 mixed·swarm에도 섞이지 않는다).
+   * 생략하면 게이트가 없다 = 지금까지의 동작 그대로.
+   *
+   * 왜 `allowedEnemies`에서 빼는 것으로는 안 되는가: 그러면 그 스테이지에 공중이
+   * **영원히** 없다. 이 손잡이는 "언제부터 하늘이 열리는가"를 온보딩과 분리해서
+   * 정하기 위한 것이다 — 스테이지1은 w1~20이 온보딩 약속이라 그 뒤여야 한다.
+   */
+  airFromWave?: number;
+  /**
+   * 한 웨이브의 **비행 마릿수 상한**. 생략하면 상한 없음(지금까지의 동작 그대로).
+   * 상한이 거절한 예산은 버리지 않고 **지상 호위가 받는다** — 안 그러면 공중을
+   * 넣을수록 그 웨이브의 실질 예산이 줄어 난이도가 **내려간다**(wavegen.genAirRaid 주석).
+   */
+  airMaxCount?: number;
   /** 웨이브 번호(1-base) → 수동 보스 웨이브 오버라이드 */
   bossOverrides: Record<number, WaveDef>;
 }

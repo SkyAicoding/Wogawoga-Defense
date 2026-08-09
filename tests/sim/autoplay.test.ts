@@ -30,7 +30,9 @@
  *  3) 죽음의 나선 금지 — **웨이브 15 이후** 타워 수 하한 (실측 전 시드 8, 상한선=배치상한)
  *     웨이브 10부터 재던 예전 지표는 '건설 진도'를 재고 있어 구조적으로 무력했다
  *     (botharness.MIN_TOWERS_FROM_WAVE 주석에 판별력 실측 있음)
- *  4) 배치 거리 = 실력 축 — 경로 밀착 봇은 클리어 0
+ *  4) 배치 거리 = 실력 축 — 경로 밀착 봇은 클리어 0 + **평균 도달 웨이브 비 ≤ 0.93**
+ *     (15단계: minT합 역전 금지에서 옮겼다 — 공중 축이 들어오면 옛 지표가 죽는다.
+ *      항목 주석에 독립 5벌 실측과 정지선 되돌리기 판별력 전문)
  *  5) 방치(타워 0)는 웨이브 10 안에 패배 / 스테이지6 별0은 클리어 불가 (난이도 서열)
  *  6) 지형 개조가 지배 전략이 아니다 — 승수 우위 ≤ 1, 여유(기지HP)도 앞서지 않는다
  *  7) **골드 배분 네 갈래**(4단계) — 적정 배분은 기준선 근처, 몰빵은 붕괴
@@ -187,13 +189,21 @@ const ALL_DECK: TowerId[] = [
   'spear', 'catapult', 'frost', 'lightning', 'poison', 'ballista', 'brazier', 'drum',
 ];
 
-/** 같은 스윕을 여러 항목이 재사용한다 — 20시드 × 재실행은 순수 낭비라 캐시한다 */
+/**
+ * 같은 스윕을 여러 항목이 재사용한다 — 시드 × 재실행은 순수 낭비라 캐시한다.
+ * `seeds`는 전부 같은 등차수열의 앞부분이라 **길이가 곧 표본의 신원**이다.
+ */
 const cache = new Map<string, BotResult[]>();
-function playAll(stageId: number, deck: TowerId[], opts: BotOptions = {}): BotResult[] {
-  const key = `${stageId}|${deck.join()}|${JSON.stringify(opts)}`;
+function playAll(
+  stageId: number,
+  deck: TowerId[],
+  opts: BotOptions = {},
+  seeds: readonly number[] = SEEDS,
+): BotResult[] {
+  const key = `${stageId}|${deck.join()}|${JSON.stringify(opts)}|n${seeds.length}`;
   const hit = cache.get(key);
   if (hit) return hit;
-  const rs = SEEDS.map((seed) => {
+  const rs = seeds.map((seed) => {
     const { sim, stage } = makeBotSim(stageId, seed, deck);
     return runBot(sim, stage, opts);
   });
@@ -203,10 +213,28 @@ function playAll(stageId: number, deck: TowerId[], opts: BotOptions = {}): BotRe
 
 const wins = (rs: BotResult[]): number => rs.filter((r) => r.won).length;
 const sum = (rs: BotResult[], f: (r: BotResult) => number): number => rs.reduce((a, r) => a + f(r), 0);
+/**
+ * **평균 도달 웨이브** — 승수보다 분산이 한 자릿수 작은 잣대 (10번 항목 주석의 유도).
+ * 승수가 천장/바닥에 붙어 아무것도 못 재는 국면에서도 계속 움직인다.
+ * 4·10·13번이 같은 함수를 쓴다 — 세 항목의 잣대가 갈라지지 않게 한 곳에 둔다.
+ */
+const avgWave = (rs: BotResult[]): number => sum(rs, (r) => r.wave) / rs.length;
 
 /** 상한 팔의 잣대 — 남긴 기지 체력의 비율. 승수가 천장에 붙은 뒤에도 계속 움직인다 */
 const slack = (rs: BotResult[]): number =>
   sum(rs, (r) => r.baseHpLeft) / sum(rs, (r) => r.baseHpMax);
+/** 승률 — 표본 크기가 다른 팔끼리 같은 잣대로 비교하려면 승수가 아니라 이쪽이다 */
+const rate = (rs: BotResult[]): number => wins(rs) / rs.length;
+/**
+ * **판당 여유의 평균** (= 판마다 baseHpLeft/baseHpMax를 내고 평균).
+ *
+ * 갈래 비교에서 `Σ baseHpLeft`를 그냥 쓰면 안 된다 — 마을을 올린 갈래는 baseHpMax가
+ * 1.7배까지 커지므로 "HP를 산 쪽이 당연히 많이 남는" 자명한 결과를 우위로 오독한다
+ * (botharness.BotResult.baseHpMax 주석이 정확히 이걸 경고한다). 실제로 15단계에서
+ * 표본을 넓히자 기지 갈래가 이 오독 때문에 '지배 전략'으로 잡혔다.
+ */
+const slackAvg = (rs: BotResult[]): number =>
+  sum(rs, (r) => (r.baseHpMax > 0 ? r.baseHpLeft / r.baseHpMax : 0)) / rs.length;
 
 /** 상한 팔 스윕 (여러 항목이 재사용하므로 캐시) */
 function playStrong(opts: BotOptions = STRONG_BOT): BotResult[] {
@@ -307,10 +335,17 @@ describe('autoplay 난이도 봉투', () => {
    *    하나도 없다는 뜻이 된다 — 착수 전 상태가 정확히 그랬다(w1~49 누수 피해 0.0).
    *
    * ── 이 팔이 왜 시드 운으로 통과할 수 없는가 ────────────────────────────────
-   * 최강 봇의 종료 HP는 전 시드에서 **정확히 같은 값**이다(40시드 전부 13). 스테이지1의
-   * 웨이브 편성이 시드와 무관하게 고정이고(makeWaveFor는 wavePlan.seed만 쓴다) 목표 구성 +
-   * 새로고침이 핸드 드로우 운을 지우기 때문이다. 곧 이 팔의 여유는 표본이 아니라
-   * **스테이지 데이터의 함수**이고, 시드를 옮겨도 값이 바뀌지 않는다.
+   * 스테이지1의 웨이브 편성은 시드와 무관하게 고정이고(makeWaveFor는 wavePlan.seed만 쓴다)
+   * 목표 구성 + 새로고침이 핸드 드로우 운을 거의 지운다. 곧 이 팔의 여유는 표본이 아니라
+   * 주로 **스테이지 데이터의 함수**다.
+   *
+   * ⚠ **15단계: 실측치가 움직였다** (문턱이 아니라 기록을 고친 것이다). 공중 축이
+   *   들어오기 전에는 종료 HP가 40시드 **전부 13**이었다 — 결과를 w50의 trex 한 마리가
+   *   혼자 정했기 때문이다. 이제는 8/9/10/11/12로 갈린다: 하늘길(w22·26·34·38·42·46)이
+   *   기지 체력을 조금씩 가져가고, 그 몫은 대공 타워를 **어디에** 세웠느냐에 따라 달라진다.
+   *   곧 이 팔은 이제 "마지막 한 마리"만이 아니라 **판 전체**를 재게 됐다.
+   *      여유 52.0% → **41.4%** · 첫 피격 웨이브 중앙값 50 → **38**
+   *   문턱(승수 ≥ 34 · 여유 ≤ 0.55)은 한 톨도 건드리지 않았다.
    *
    * ⚠ 3번(minTowers)을 이 팔로 옮기지 않은 이유: 최강 봇은 전 시드에서 minT가 상한(8)이라
    *   판별력이 0이다. 그 항목은 하한 팔에 남아 있어야 무언가를 잡는다.
@@ -331,7 +366,8 @@ describe('autoplay 난이도 봉투', () => {
   /**
    * 봉투가 "통과하지만 아무 일도 안 일어나는" 상태로 썩지 않게 한다.
    * 습격대를 삭제하거나 무력화하면(예: 근접만 남기면 경로 이격 배치에 영원히 못 닿는다)
-   * 파괴 수가 0으로 떨어져 여기서 걸린다. 실측 177기(시드 20 합계) → 하한 100기.
+   * 파괴 수가 0으로 떨어져 여기서 걸린다. 실측 **228기**(시드 20 합계) → 하한 100기.
+   * (15단계 공중 축 이후. 그 전 실측은 177기였고, 하늘길이 지상 호위를 두껍게 만든 몫이다)
    */
   it('스테이지1: 습격대가 실제로 타워를 부순다 (클리어해도 값은 치른다)', () => {
     const rs = playAll(1, STAGE1_DECK);
@@ -362,9 +398,29 @@ describe('autoplay 난이도 봉투', () => {
    * 이 격차가 사라지면 습격대는 그냥 체력이 늘어난 적일 뿐이다.
    *
    * 파괴 '총수'로는 재지 않는다 — 밀착 봇은 일찍 죽어 부서질 시간이 짧아 오히려
-   * 총수가 적게 나온다(실측 194 대 228). 대신 **방어선이 남아나는지**를 본다:
-   * 웨이브 15+ 최소 타워 수가 밀착 봇에서 확실히 낮다 (실측 합계 153 대 160,
-   * 밀착 봇의 최악 시드는 2기까지 떨어지고 안전 봇은 전 시드 8기 = 상한).
+   * 총수가 적게 나온다(실측 194 대 228). 대신 **얼마나 멀리 가는지**를 본다:
+   * 밀착 봇의 평균 도달 웨이브가 안전 봇보다 확실히 짧다 (실측 비 **0.8023**).
+   *
+   * ── 15단계: 잣대를 **minT합 → 평균 도달 웨이브 비**로 갈았다 (문턱은 낮추지 않았다) ──
+   * 14단계까지 이 자리는 `minT합(밀착) < minT합(안전)`이었다. 그 지표는 **공중 축이
+   * 들어오면 죽는다**: 하늘길이 킬존을 우회하므로 밀착 봇은 방어선이 갈리기 **전에**
+   * 기지가 먼저 무너지고(웨평 42.8 → 35.1), 그러면 웨이브 15+ 최소 타워 수는 양쪽
+   * 모두 상한(160)에 붙어 두 값이 같아진다. 투여량으로는 못 고친다 —
+   * 6개 레인 × 5개 상한 전부에서 160 대 160이 확인됐다.
+   *
+   * 대체 지표는 **분산이 승수의 1/10인 평균 도달 웨이브**다(10번 항목이 같은 이유로
+   * 이미 쓰는 축). 시작점을 옮긴 독립 5벌(각 20시드) 웨평비:
+   *   0.8716 · 0.8360 · 0.8822 · 0.8436 · 0.7788  → 최악(최댓값) **0.8822**
+   * 문턱 0.93은 그 최악에서 4.8%p 위이고, 되돌리기는 그보다 훨씬 크게 넘어간다.
+   *
+   * **그리고 실제로 그렇게 됐다.** 공중 축을 넣은 뒤 같은 20시드에서:
+   *    웨평비 0.8716 → **0.8023** (더 잘 갈린다) · minT합 152 대 160 → **160 대 160**
+   * 곧 옛 지표는 지금 완전히 죽어 있다 — 하늘길이 킬존을 우회하므로 밀착 봇은
+   * 방어선이 갈리기 전에 기지가 먼저 무너지고, 그러면 양쪽 모두 minT가 상한(8×20)에
+   * 붙는다. 지표를 **공중보다 먼저** 갈아 둔 이유가 이것이다.
+   *
+   * ⚠ minT 지표를 버린 것이 아니다 — 3번 항목(죽음의 나선)이 그 축을 그대로 쓴다.
+   *   여기서만 교체한 것이고, 아래 msg에는 참고값으로 계속 찍는다.
    *
    * ── 10단계: 이 항목이 실제로 재는 것은 **정지선**이다 ─────────────────────
    * 9단계에서 이 항목이 빨개진 뒤 셋을 차례로 시험했고, 앞의 둘은 **버렸다**:
@@ -374,25 +430,39 @@ describe('autoplay 난이도 봉투', () => {
    *    밀착 봇이 3승 → 9승으로 **좋아지고** 안전 봇은 18승 → 15승으로 나빠졌다
    *    (타워 8기를 36타일 경로에 흩으면 어디에도 킬존이 안 생긴다). 3번 항목도 깨졌다.
    *  · 정지선을 내린다 → 성공. 봇은 한 줄도 안 바뀌고 게임이 바뀐다.
-   * 그래서 이 항목의 **문턱은 한 톨도 건드리지 않았다**(밀착 ≤ 2 · minT합 역전 금지).
-   * 판별력 확인: 정지선을 9단계 값 2.1로 되돌리면 밀착 3/20 · minT합 160 대 160으로
-   * 즉시 빨개진다 — 곧 이 항목은 지금 "정지선이 1칸과 2칸을 가르는가"를 잠그고 있다.
+   * 그래서 이 항목의 **문턱은 낮춘 적이 없다**(밀착 ≤ 2 · 웨평비 상한).
+   *
+   * ── 판별력 증명 (실제로 되돌려 보고 적는다) ────────────────────────────────
+   * 정지선을 9단계 값 2.1로 되돌리면(balance.SIEGE_ENGAGE_RANGE 1.7 → 2.1, 봇의
+   * SAFE_DIST가 유도값이라 2 → 3으로 따라 움직인다) 같은 20시드에서:
+   *    1.7 → 안전 14/20 웨평 49.05 · 밀착 1/20 웨평 42.75 · **웨평비 0.8716** (통과)
+   *    2.1 → 안전  1/20 웨평 42.45 · 밀착 1/20 웨평 42.70 · **웨평비 1.0059** (실패)
+   * 곧 이 항목은 지금도 "정지선이 1칸과 2칸을 가르는가"를 잠그고 있고, 새 지표는
+   * 옛 지표(2.1에서 158 대 158)와 **같은 자리에서 같은 크기로** 빨개진다.
+   * (되돌린 값은 측정 직후 1.7로 복구했다)
    */
   it('스테이지1: 경로 밀착 배치는 클리어하지 못한다 (배치 거리 = 실력 축)', () => {
     const safe = playAll(1, STAGE1_DECK);
     const hug = playAll(1, STAGE1_DECK, { hugPath: true });
-    const msg = `안전배치 ${JSON.stringify(safe)} / 밀착배치 ${JSON.stringify(hug)}`;
+    const ratio = avgWave(hug) / avgWave(safe);
+    const msg =
+      `웨평비 ${ratio.toFixed(4)} (밀착 ${avgWave(hug).toFixed(2)} / 안전 ${avgWave(safe).toFixed(2)}) · ` +
+      `minT합 ${sum(hug, (r) => r.minTowers)} 대 ${sum(safe, (r) => r.minTowers)} — ` +
+      `안전배치 ${JSON.stringify(safe)} / 밀착배치 ${JSON.stringify(hug)}`;
     expect(wins(hug), msg).toBeLessThan(wins(safe));
     expect(wins(hug), msg).toBeLessThanOrEqual(2);
-    expect(sum(hug, (r) => r.minTowers), msg).toBeLessThan(sum(safe, (r) => r.minTowers));
+    // 실측 최악 0.8822 (독립 5벌) / 되돌리기 1.0059. 문턱은 그 사이를 가른다.
+    expect(ratio, msg).toBeLessThanOrEqual(0.93);
 
     /*
      * ── 11단계: **상한 팔에서도 같은 주장이 선다** (하한 팔 문턱은 위에 그대로 둔다) ──
      * 기준선 봇에서만 재면 "밀착은 못 이긴다"가 약한 봇의 성질인지 게임의 성질인지
      * 구분되지 않는다. 나머지를 전부 최강 정책으로 맞추고 **배치 거리만** 되돌리면
-     * 그 하나로 40/40이 2/40이 된다 — 목표 구성도, 새로고침도, 킬존도 그대로인데도.
-     * 실측(시드 40): 최강 40/40 · 여유 52.0% 대 최강+밀착 **18/40 · 여유 3.6%**,
-     * 첫 피격 웨이브 중앙값 50 대 **2**.
+     * 그 하나로 40/40이 0/40이 된다 — 목표 구성도, 새로고침도, 킬존도 그대로인데도.
+     * 실측(시드 40, 15단계 공중 축 이후): 최강 40/40 · 여유 41.4% 대
+     * 최강+밀착 **0/40 · 여유 0.0%**. (공중 이전에는 18/40 · 3.6%였다 —
+     * 하늘길이 밀착 배치의 대가를 더 키운다: 밀착한 타워는 습격대에 먼저 부서지고,
+     * 부서진 자리는 대공 커버까지 함께 잃기 때문이다)
      *
      * 문턱을 승수(≤ 24)와 여유(≤ 0.10) 둘로 거는 이유: 승수는 20시드에서 ±1이 잡음이고
      * 40시드에서도 ±2인데, **여유는 이 팔에서 자릿수가 다르다**(3.6% 대 52.0%). 곧
@@ -435,20 +505,42 @@ describe('autoplay 난이도 봉투', () => {
    * 승수 +1은 20시드에서 노이즈 폭(제거 0회인 BASE 470에서도 ±1이 나온다)이라
    * 하한을 +1까지 허용하되, **여유까지 동시에 앞서면** 실패로 잡는다.
    * BASE 120(3단계 값)에서는 17승·166으로 승수 +2라 이 항목이 걸린다.
+   *
+   * ── 15단계: 표본을 20 → 80시드로 넓혔다. **넓히자 이 항목이 거짓이었음이 드러났다** ──
+   * 문턱은 한 톨도 안 바꿨다. 바꾼 것은 (a) 표본 크기와 (b) 문턱을 **승수가 아니라
+   * 승률**로 적은 것뿐이다 — `+1/20`은 곧 `+5%p`이고, 표본이 바뀌어도 뜻이 같으려면
+   * 비율로 적어야 한다(승수로 적으면 n=80에서 문턱이 조용히 +1.25%p로 4배 조여진다).
+   *
+   * 넓힌 결과(시작점을 옮긴 독립 3벌 × 80시드, 승률차 %p):
+   *      BASE 300(옛 값) → +3.75 · +1.25 · +7.50   평균 **+4.2%p**, 부호가 안 뒤집힌다
+   * 곧 불도저는 노이즈가 아니라 **작지만 실재하는 우위**였고, 20시드가 그걸 못 봤을
+   * 뿐이다(같은 5벌의 20시드 승수차는 +1 · +1 · 0 · +1 · 0). 문턱을 늘리는 대신
+   * **게임을 고쳤다** — 제거비 300 → 380(balance.SCENERY_CLEAR_BASE_COST 주석에 스윕
+   * 전문). 380에서는 같은 3벌이 +0.00 · +0.00 · +1.25%p로 대등해지고, 판당 0.4회의
+   * 제거는 그대로 산다(80판에 31~35회).
+   *
+   * ⚠ **남은 위험 — 아래 '지배 전략' 연언은 여유가 0 근처일 때 여전히 뒤집힌다.**
+   * 이 연언에는 노이즈 폭이 없다(`>` 두 개). 두 팔이 **대등하게 맞춰져 있을 때**
+   * 순전한 우연으로 양쪽 다 앞서는 일이 생기고, 그게 곧 이 상수가 목표하는 상태다.
+   * 실제로 380에서도 독립 3벌 중 한 벌이 +1승 · 여유 +0.05%p로 이 연언을 건드린다.
+   * **폭을 더하지 않았다** — 그건 문턱을 낮추는 것이기 때문이다. 다음 사람이 고칠 자리로
+   * 남긴다(연언의 양 항을 '측정 분해능보다 크게 앞선다'로 다시 유도하는 것이 답이다).
    */
   it('불도저 봇(소품 제거로 자리 사기)이 스테이지1을 더 쉽게 만들지 않는다', () => {
-    const plain = playAll(1, STAGE1_DECK);
-    const dozer = playAll(1, STAGE1_DECK, { bulldoze: true });
-    const msg = `일반 ${JSON.stringify(plain)} / 불도저 ${JSON.stringify(dozer)}`;
+    const plain = playAll(1, STAGE1_DECK, {}, SEEDS80);
+    const dozer = playAll(1, STAGE1_DECK, { bulldoze: true }, SEEDS80);
+    const msg =
+      `일반 ${wins(plain)}/${plain.length} 여유 ${(slackAvg(plain) * 100).toFixed(2)}% / ` +
+      `불도저 ${wins(dozer)}/${dozer.length} 여유 ${(slackAvg(dozer) * 100).toFixed(2)}% · ` +
+      `제거 ${sum(dozer, (r) => r.clears)}회 ${sum(dozer, (r) => r.clearGold)}골드`;
     // 검증이 공허하지 않은지 — 봇이 실제로 골드를 내고 지형을 갈아엎었어야 한다
     expect(sum(dozer, (r) => r.clears), msg).toBeGreaterThan(0);
     expect(sum(dozer, (r) => r.clearGold), msg).toBeGreaterThan(0);
-    expect(wins(dozer), msg).toBeLessThanOrEqual(wins(plain) + 1);
-    const better =
-      wins(dozer) > wins(plain) &&
-      sum(dozer, (r) => r.baseHpLeft) > sum(plain, (r) => r.baseHpLeft);
-    expect(better, `불도저가 승수와 여유 둘 다에서 앞선다 = 지배 전략: ${msg}`).toBe(false);
-  }, 240_000);
+    // 승률 +5%p = 옛 `+1/20`을 표본 무관하게 다시 적은 것이다 (문턱 불변)
+    expect(rate(dozer), msg).toBeLessThanOrEqual(rate(plain) + 0.05 + 1e-9);
+    const better = rate(dozer) > rate(plain) && slackAvg(dozer) > slackAvg(plain);
+    expect(better, `불도저가 승률과 여유 둘 다에서 앞선다 = 지배 전략: ${msg}`).toBe(false);
+  }, 900_000);
 
   /**
    * ── 4단계: 골드 배분 네 갈래 ────────────────────────────────────────────────
@@ -478,24 +570,50 @@ describe('autoplay 난이도 봉투', () => {
    * 또 하나 — 4단계는 기지 갈래를 `{towerReserve:600, base:{}}` **하나로만** 쟀다.
    * 그건 예비비 때문에 과투자하는 조합이라, 플레이어의 자연스러운 행동(**살 수 있으면
    * 산다** = 예비비 없음)은 재지 않았다. 그 자연 정책을 별도 갈래로 추가한다.
+   *
+   * ── 15단계: 표본 20 → 80시드 + 하한 지표 교체 + 여유 정규화 (문턱은 불변) ─────
+   * 셋 다 "20시드에서만 참"이던 것을 고친 것이고, **부등호를 느슨하게 한 곳은 없다**.
+   *
+   *  (1) **표본 20 → 80.** 기준점(타워 갈래)이 20시드에서 ±3 흔들려 상대 가드가 잡음으로
+   *      뒤집힌다. 실제로 시작점을 옮긴 독립 5벌(각 20시드)에서 옛 하한(`≥ 타워−3`)이
+   *      **두 벌에서 깨진다**: off1 기지(자연) −4 · off2 유닛 −4.
+   *  (2) **하한을 승수 → 웨평비로.** 80시드로 넓혀도 승수 하한은 여유가 2.5%p뿐이다
+   *      (유닛 갈래 최악 −12.5%p 대 문턱 −15%p). 10번 항목이 같은 이유로 이미 옮긴 축을
+   *      쓴다. 독립 5벌 × 80시드 실측(웨평비):
+   *        유닛 0.9934·0.9901·0.9940·1.0005·0.9965  기지 0.9929·0.9957·1.0000·1.0000·0.9972
+   *        지형 1.0005·1.0023·1.0028·1.0008·0.9990  기지자연 0.9894·0.9944·0.9965·1.0013·0.9975
+   *      최악 0.9894. **판별력**: 같은 5벌에서 유닛 몰빵은 0.6884·0.6882·0.6821·0.6811·0.6980
+   *      으로 문턱(0.93)보다 23%p 아래다 — 곧 붕괴는 그대로 잡고 잡음만 걸러낸다.
+   *  (3) **여유를 정규화.** 옛 판본은 `Σ baseHpLeft`를 그대로 비교했는데, 기지 갈래는
+   *      마을을 올려 baseHpMax가 커지므로 그 합이 구조적으로 1.7배다. 80시드에서 그
+   *      오독이 실제로 터졌다(기지자연 off1: 승 +3 · 잔여합 +250 → '지배 전략'으로 적색).
+   *      판당 비율의 평균으로 바꾸면 그 자명한 우위가 사라진다.
+   *
+   * ⚠ 남은 위험은 불도저 항목과 같다 — '지배 전략' 연언에 노이즈 폭이 없어서, 갈래가
+   *   기준선과 **대등하게 맞춰져 있을 때** 우연히 양쪽이 앞서면 뒤집힌다. 폭을 더하는
+   *   것은 문턱을 낮추는 것이라 하지 않았다(불도저 항목 주석에 같은 기록).
    */
   it('골드 배분 네 갈래 — 적정 배분은 살아 있고, 몰빵은 무너진다', () => {
-    const tower = playAll(1, STAGE1_DECK);
+    const tower = playAll(1, STAGE1_DECK, {}, SEEDS80);
     const branches: [string, BotResult[]][] = [
-      ['유닛', playAll(1, STAGE1_DECK, { towerReserve: 600, allies: { minNear: 3 } })],
-      ['기지', playAll(1, STAGE1_DECK, { towerReserve: 600, base: {} })],
-      ['지형', playAll(1, STAGE1_DECK, { bulldoze: true })],
+      ['유닛', playAll(1, STAGE1_DECK, { towerReserve: 600, allies: { minNear: 3 } }, SEEDS80)],
+      ['기지', playAll(1, STAGE1_DECK, { towerReserve: 600, base: {} }, SEEDS80)],
+      ['지형', playAll(1, STAGE1_DECK, { bulldoze: true }, SEEDS80)],
       // 예비비 없이 "살 수 있으면 산다" — 플레이어가 실제로 하는 행동
-      ['기지(자연)', playAll(1, STAGE1_DECK, { base: {} })],
+      ['기지(자연)', playAll(1, STAGE1_DECK, { base: {} }, SEEDS80)],
     ];
     for (const [name, rs] of branches) {
-      const msg = `${name}: ${wins(rs)}/20 (타워 ${wins(tower)}/20) ${JSON.stringify(rs)}`;
-      expect(wins(rs), msg).toBeGreaterThanOrEqual(wins(tower) - 3);
-      expect(wins(rs), msg).toBeLessThanOrEqual(wins(tower) + 1);
-      // 지배 전략 금지 — 승수와 여유(잔여 기지 HP) 둘 다에서 앞서면 실패 (불도저와 같은 잣대)
-      const dominant =
-        wins(rs) > wins(tower) && sum(rs, (r) => r.baseHpLeft) > sum(tower, (r) => r.baseHpLeft);
-      expect(dominant, `${name} 갈래가 승수와 여유 둘 다에서 앞선다 = 지배 전략: ${msg}`).toBe(false);
+      const ratio = avgWave(rs) / avgWave(tower);
+      const msg =
+        `${name}: ${wins(rs)}/${rs.length} (타워 ${wins(tower)}/${tower.length}) · ` +
+        `웨평비 ${ratio.toFixed(4)} · 여유 ${(slackAvg(rs) * 100).toFixed(2)}% 대 ${(slackAvg(tower) * 100).toFixed(2)}%`;
+      // 갈래가 살아 있다 — **승수가 아니라 평균 도달 웨이브**로 잠근다 (위 ⚠⚠ 참조).
+      expect(ratio, msg).toBeGreaterThanOrEqual(0.93);
+      // 지배 전략 금지 — 승률 상한은 옛 `+1/20`을 표본 무관하게 다시 적은 것이다 (문턱 불변)
+      expect(rate(rs), msg).toBeLessThanOrEqual(rate(tower) + 0.05 + 1e-9);
+      // 그리고 승률과 여유 둘 다에서 앞서면 실패 (불도저와 같은 잣대)
+      const dominant = rate(rs) > rate(tower) && slackAvg(rs) > slackAvg(tower);
+      expect(dominant, `${name} 갈래가 승률과 여유 둘 다에서 앞선다 = 지배 전략: ${msg}`).toBe(false);
     }
     // 검증이 공허하지 않은지 — 각 갈래가 실제로 골드를 썼어야 한다
     expect(sum(branches[0]![1], (r) => r.goldAllies)).toBeGreaterThan(0);
@@ -703,7 +821,6 @@ describe('autoplay 난이도 봉투', () => {
     const tribe = go(TRIBE_BOT);
     const norm = (rs: BotResult[]): number =>
       sum(rs, (r) => (r.baseHpMax > 0 ? r.baseHpLeft / r.baseHpMax : 0)) / rs.length;
-    const avgWave = (rs: BotResult[]): number => sum(rs, (r) => r.wave) / rs.length;
     const waveRatio = avgWave(tribe) / avgWave(tower);
     const msg =
       `부족 ${wins(tribe)}/40 (웨평 ${avgWave(tribe).toFixed(2)} · 여유 ${(norm(tribe) * 100).toFixed(1)}% · 잔여합 ${sum(tribe, (r) => r.baseHpLeft)}) / ` +
@@ -811,6 +928,18 @@ describe('autoplay 난이도 봉투', () => {
    *     레벨 비용을 0으로 준 표로 **만렙을 강제**하고 가장 짧은 s4에서 잰다.
    *     실측 7.63타일 = 경로의 43%. 상한이 없었다면 17.59 − 12.0 − 1.0 = 4.6 = 26%다.
    *     문턱 35%가 그 둘을 가른다.
+   *
+   * ⚠ **15단계: 이 항목의 실측치가 움직였다 (문턱이 아니라 기록을 고친 것이다).**
+   * 봇의 공중 맹점을 고치면서(botharness.stepAllies) s4는 **비행 적이 있는 유일한
+   * 측정 지점**이라 값이 따라 움직였다. 같은 8시드·같은 정책으로:
+   *    고치기 전: 최전선 7.7267 · 적봉쇄 49,397틱 · 생산 238 · 아군골드 16,752
+   *    고친 뒤  : 최전선 **7.6333** · 적봉쇄 30,036틱 · 생산 256 · 아군골드 18,217
+   * 봉쇄틱이 준 것이 이 수정의 핵심 증거다 — 봇이 공중이 섞인 국면에서 **봉쇄를 못 하는
+   * 대공 유닛(무릿매)**을 고르기 때문이다. 곧 "붙잡는 양"이 줄고 "공중에 닿는 양"이 는다.
+   * 문턱(35%)은 한 톨도 건드리지 않았고, 43.9% → 43.4%로 여전히 크게 통과한다.
+   * (스테이지1에는 비행 적이 없어 나머지 아군 항목 7·8·10·11·13·14는 **한 자리도
+   *  움직이지 않았다** — U 팔 20시드 실측이 수정 전후로 승 9 · 봉쇄 11,573 ·
+   *  아군틱 431,984 · 생산 859 · 아군골드 83,762 · 잔여 57로 완전히 같다)
    */
   it('입구 요격 금지 — 짧은 경로에서도 아군은 경로의 마을 쪽 절반 안에 머문다', () => {
     // (a) 표 쪽 — 전 스테이지 × 전 레벨
@@ -867,7 +996,6 @@ describe('autoplay 난이도 봉투', () => {
     const seeds = SEEDS.slice(0, 12);
     const go = (opts: BotOptions): BotResult[] =>
       seeds.map((seed) => runBot(makeBotSimFor(stage, seed, STAGE1_DECK, 0, true, BASE_LEVELS), stage, opts));
-    const avgWave = (rs: BotResult[]): number => sum(rs, (r) => r.wave) / rs.length;
     const tower = go({});
     const tribe = go(TRIBE_BOT);
     const allIn = go({ towerReserve: 2400, allies: { minNear: 1 }, base: {} });
