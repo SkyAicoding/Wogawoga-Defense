@@ -5,6 +5,7 @@ import * as balance from '@/data/balance';
 import { SIEGE_ADVANCE_TICKS, SIEGE_ENGAGE_RANGE } from '@/data/balance';
 import { ALL_ENEMY_IDS, BOUNTY_PER_COST, ENEMY_DEFS } from '@/data/enemies';
 import { ALL_TOWER_IDS, TOWER_DEFS } from '@/data/towers';
+import { STAGES } from '@/data/stages';
 
 const EXPECTED_TOWERS: TowerId[] = [
   'spear', 'catapult', 'lightning', 'brazier', 'frost', 'poison', 'ballista', 'drum',
@@ -162,8 +163,17 @@ describe('enemies', () => {
       expect(!!def.shieldHits, id).toBe(id === 'warrior');
       expect(!!def.healAura, id).toBe(id === 'shaman');
     }
-    expect(ENEMY_DEFS.trex.baseDamage).toBe(10);
+    /*
+     * trex 12 (11단계, 10에서 올렸다 — 근거 전문은 src/data/enemies.ts trex 주석).
+     * 여기서 **정확한 값**으로 못 박는 이유는 난이도 문턱이라서가 아니라, 이 값이
+     * 기지 HP가 가장 낮은 스테이지2(20)에서 60%를 한 번에 가져가기 때문이다.
+     * 서열의 계약: 어떤 스테이지에서도 **한 마리가 판을 끝내지는 않는다**(< baseHp).
+     */
+    expect(ENEMY_DEFS.trex.baseDamage).toBe(12);
     expect(ENEMY_DEFS.spino.baseDamage).toBeGreaterThanOrEqual(5);
+    for (const s of STAGES) {
+      expect(ENEMY_DEFS.trex.baseDamage, `s${s.id} 기지 HP ${s.baseHp}`).toBeLessThan(s.baseHp);
+    }
   });
 
   /**

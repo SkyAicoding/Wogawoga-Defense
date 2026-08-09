@@ -76,6 +76,15 @@
  *  · **몰빵 대조군** `towerReserve: 2400` + 해당 정책
  *    타워를 굶겨 한 갈래에 몰아넣는다. 봉투 7번이 이 둘의 붕괴를 잠근다.
  *
+ * ── 11단계: 봇이 **하한선만이 아니라 상한선도** 된다 ────────────────────────
+ * 위의 모든 서술은 "봇이 이기면 사람도 이긴다"는 **하한선**을 만드는 이야기다. 그 하한선
+ * 하나로 봉투를 잠그면 난이도가 잘 두는 사람 쪽에서 통째로 무주공산이 된다 — 실제로
+ * 그랬다(기준선 160시드 75.6% 대 최강 정책 **100% · 여유 77.6%**). 그래서 같은 구현체에
+ * 손잡이 셋(`placement` · `comp` · `refresh`)을 더해 **상한선 봇**(STRONG_BOT)을 만들고,
+ * 봉투 1번을 두 팔로 쪼갰다(autoplay.test.ts).
+ * 셋 다 **기본값에서는 기존 코드 경로와 한 자리도 다르지 않다** — 하한선 팔의 숫자가
+ * 움직이면 두 팔을 비교할 수 없기 때문이다.
+ *
  * 파괴 대응은 별도 로직이 필요 없다 — 배치 상한 미만이면 채우는 기존 루프가
  * 부서진 자리를 그대로 다시 짓는다(안전거리 규칙을 그대로 다시 적용하므로 재건설은
  * 자동으로 더 나은 자리를 고른다). 다만 그 골드는 업그레이드에서 빠져나가므로
@@ -88,7 +97,19 @@ import { ALLY_DEFS, BASE_LEVELS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById 
 import { ALLY_SORTIE_RANGE, SIEGE_ENGAGE_RANGE } from '@/data/balance';
 import type { AllyDef, AllyId, BaseLevelDef, BattleSim, StageDef, TowerDef, TowerId } from '@/data/types';
 
-/** 봇 배치 상한 — 지가 상승으로 8기 이후는 업그레이드가 우세 */
+/**
+ * 봇 배치 상한 — 지가 상승으로 8기 이후는 업그레이드가 우세.
+ *
+ * ⚠ **"상한"이라는 이름과 달리 이 값은 새는 문이다** (코드는 그대로 두고 주석만 정정한다).
+ * 외곽 루프의 `else if (st.towers.length >= cap) tryPlace(1.5)` 가 "업그레이드를 살 수
+ * 없으면 대신 타워를 하나 더 짓는다"라서, 업그레이드가 비싸지는 후반에는 상한을 넘어
+ * 계속 늘어난다. 실측 궤적(스테이지1 · 시드 20 · 기본 봇 · 웨이브별 평균 타워 수):
+ *   w11 7.7 / **w12~19 = 정확히 8.0** / w20 8.7 / w25 10.2 / w30 11.6 / w40 15.4 /
+ *   w46 **18.9(피크)** / w50 16.1
+ * 곧 이 상수가 실제로 상한인 구간은 w12~19뿐이다. 게임 규칙 쪽에는 상한이 아예 없다 —
+ * 스테이지1의 배치 가능 칸은 **84칸**(슬롯 12 + 평지 72)이고 소품까지 치우면 **124칸**이라
+ * 골드만 있으면 얼마든지 더 지을 수 있다. "8기"는 봇의 절약 정책이지 규칙이 아니다.
+ */
 export const PLACEMENT_CAP = 8;
 
 /**
@@ -176,7 +197,48 @@ const ALLY_TRIGGER_REF = ALLY_SORTIE_RANGE + ALLY_TRIGGER_MARGIN;
 /** 아군 출동 정책 — 어떤 종을 어떤 순서로 뽑는가 */
 export type AllyPick = AllyId | 'rotate';
 
+/**
+ * 배치 정책 — **0등급(안전 + 커버) 안쪽의 순위만** 바꾼다.
+ * 1·2등급(`1000+d` / `2000+d`)과 SAFE_DIST·COVER_MARGIN 규칙은 어느 값에서도 동일하다.
+ * 곧 이 손잡이는 "어디에 지어도 되는 자리들 중 무엇을 먼저 고르는가"만 다루고,
+ * "안전한가 / 경로를 덮는가"라는 판정 자체는 건드리지 않는다.
+ *
+ *  · `'near'` — 기본. 0등급 안에서 **경로에 가까울수록** 낫다 (지금까지의 봇 그대로).
+ *  · `'cover'` — 그 칸이 **경로를 덮는 길이**가 길수록 낫다. near가 쓰는 이격 d는
+ *    커버 길이의 대리 변수인데, 코너에서는 대리가 깨진다(가까워도 짧게 스치는 칸이 있다).
+ *  · `'kill'` — 커버 길이에 **기존 커버와의 겹침**을 가중한다. 같은 구간을 여러 타워가
+ *    함께 덮으면 그 구간이 킬존이 된다. 8기를 36타일 경로에 고르게 흩으면 어디에서도
+ *    적이 죽지 않는다는 것이 이미 실측돼 있다(autoplay 4번 항목 주석의 '펴기' 실패).
+ */
+export type PlacementMode = 'near' | 'cover' | 'kill';
+
+/** 한 번의 배치 판정에서 허용하는 최대 새로고침 횟수 */
+const REFRESH_MAX_PER_DECISION = 6;
+
 export interface BotOptions {
+  /**
+   * 배치 정책 (기본 `'near'` = 지금까지의 placementKey 그대로).
+   * 기본값에서는 키 계산이 한 자리도 바뀌지 않는다.
+   */
+  placement?: PlacementMode;
+  /**
+   * **목표 구성** — 타워 종류별 목표 보유 수. 지정하면 배치 시 핸드에서
+   * "할당량에 가장 모자란 카드"를 고른다(동점이면 낮은 핸드 인덱스).
+   * 할당량을 모두 채운 뒤에는 기본 봇과 똑같이 **핸드 순서**로 되돌아간다 —
+   * 그래야 상한을 넘어 짓는 후반 루프(`tryPlace(1.5)`)의 행동이 안 바뀐다.
+   *
+   * 지정하지 않으면 기본 봇 그대로: **핸드에 먼저 들어온 카드를 그냥 쓴다.**
+   * 그게 봉투 헤더가 "핸드 드로우 운"이라 부른 25%의 패배가 나오는 자리다.
+   */
+  comp?: Partial<Record<TowerId, number>>;
+  /**
+   * **핸드 새로고침**. 지정하지 않으면 봇은 한 번도 새로고침하지 않는다(기본 봇 그대로).
+   * 도는 조건은 넷을 전부 만족할 때뿐이다:
+   *   (1) 아직 방어선을 짓는 중(`towers.length < cap`)  (2) `comp` 할당량이 모자란 카드가
+   *   핸드에 하나도 없다  (3) 지금 새로고침 값이 `maxPaid` 이하  (4) 예비비를 깨지 않는다.
+   * 한 배치 판정당 최대 REFRESH_MAX_PER_DECISION회.
+   */
+  refresh?: { maxPaid?: number };
   /** 골드로 소품을 치워 더 좋은 자리를 사는 '불도저' 봇 */
   bulldoze?: boolean;
   /** 경로 밀착 배치 — 습격대 이전 시대의 봇 (안전거리를 모른다) */
@@ -359,6 +421,12 @@ export interface BotResult {
  * 웨이브 15면 배치 상한 8기가 다 서 있어(전 시드 실측 8) 그 뒤의 하락은 전부
  * **파괴를 못 메운 몫**이다. 판별력 실측(습격대 towerAttack.dmg 배율 A/B, 시드 12):
  *   ×1 → 전 시드 8, ×3 → 5~7, ×6 → 0~4. 하한 7이면 ×1은 통과, ×3부터 걸린다.
+ *
+ * ⚠ **"웨이브 15면 8기가 다 서 있다"는 w12~19에서만 참이다.** PLACEMENT_CAP이 새는 문이라
+ * (그 주석의 궤적 참조) w20부터 타워 수가 8을 넘어가고 w46에는 평균 19.1기가 된다.
+ * 곧 이 가드의 판별력은 "창이 상한에 붙어 있는 구간"에서 나오는 것이므로, 창을 뒤로
+ * 옮기면(예: 25) **하한 7이 조용히 무력해진다** — 그때는 이미 12~13기가 서 있어서
+ * 파괴 대여섯 기를 먹어도 7 아래로 안 내려간다. 창을 옮길 거면 하한도 같이 다시 유도하라.
  */
 export const MIN_TOWERS_FROM_WAVE = 15;
 
@@ -407,12 +475,13 @@ export function makeBotSimFor(
 }
 
 /**
- * 셀 중심 → 지상 경로까지의 최단 거리.
- * 래스터 셀이 아니라 **실제 주행 폴리라인**(buildPath, 코너 라운딩 포함)을 촘촘히
- * 샘플링한다 — 안전거리 판정이 1.95 대 2.0 의 0.05 차이를 다투기 때문에
- * 코너에서 안쪽으로 잘리는 실제 경로를 그대로 재야 한다.
+ * 지상 경로 폴리라인의 등간격 샘플 (간격 PATH_SAMPLE_STEP).
+ * 래스터 셀이 아니라 **실제 주행 폴리라인**(buildPath, 코너 라운딩 포함)이다 —
+ * 안전거리 판정이 1.95 대 2.0 의 0.05 차이를 다투기 때문에 코너에서 안쪽으로 잘리는
+ * 실제 경로를 그대로 재야 한다. 거리장(pathDistances)과 커버 길이 계산이 **같은 배열**을
+ * 쓴다 — 둘이 다른 샘플을 보면 "가깝다"와 "덮는다"가 서로 어긋난다.
  */
-function pathDistances(stage: StageDef): Float64Array {
+function pathSamples(stage: StageDef): { xs: Float64Array; zs: Float64Array } {
   const xs: number[] = [];
   const zs: number[] = [];
   const p = { x: 0, z: 0, heading: 0 };
@@ -427,13 +496,18 @@ function pathDistances(stage: StageDef): Float64Array {
     xs.push(p.x);
     zs.push(p.z);
   }
+  return { xs: Float64Array.from(xs), zs: Float64Array.from(zs) };
+}
+
+/** 셀 중심 → 지상 경로까지의 최단 거리 */
+function pathDistances(stage: StageDef, s: { xs: Float64Array; zs: Float64Array }): Float64Array {
   const out = new Float64Array(stage.gridW * stage.gridH);
   for (let z = 0; z < stage.gridH; z++) {
     for (let x = 0; x < stage.gridW; x++) {
       let best = Infinity;
-      for (let i = 0; i < xs.length; i++) {
-        const dx = (xs[i] as number) - x;
-        const dz = (zs[i] as number) - z;
+      for (let i = 0; i < s.xs.length; i++) {
+        const dx = (s.xs[i] as number) - x;
+        const dz = (s.zs[i] as number) - z;
         const d2 = dx * dx + dz * dz;
         if (d2 < best) best = d2;
       }
@@ -452,8 +526,13 @@ function needsPathCoverage(def: TowerDef): boolean {
  * 배치 후보의 순위 키 (작을수록 좋다).
  * 0번대 = 경로를 덮으면서 근접 사거리 밖 / 1번대 = 덮지만 노출 / 2번대 = 못 덮음.
  * 같은 등급 안에서는 경로에 가까울수록(=커버 길이가 길수록) 낫다.
+ *
+ * `grade0`은 **0등급 안쪽의 순위만** 갈아 끼운다(BotOptions.placement). 넘기지 않으면
+ * 예전과 완전히 같은 `d`다. 등급 경계(SAFE_DIST·COVER_MARGIN)와 1·2등급 키는 어느
+ * 정책에서도 손대지 않는다 — 그쪽을 건드리면 봉투 4번(밀착 배치)이 재는 축이 달라진다.
+ * 0등급 키는 음수가 되지만 1등급(1000+d)과 겹치지 않으므로 등급 순서는 그대로다.
  */
-function placementKey(def: TowerDef, d: number, hugPath: boolean): number {
+function placementKey(def: TowerDef, d: number, hugPath: boolean, grade0?: number): number {
   if (hugPath) return d; // 예전 봇 — 안전 개념 없음, 무조건 최근접
   if (!needsPathCoverage(def)) {
     // drum: 경로 커버가 무의미하다. 안전한 칸을 고르되 타워 무리와 떨어지지 않게
@@ -462,10 +541,32 @@ function placementKey(def: TowerDef, d: number, hugPath: boolean): number {
   }
   const r = def.tiers[0]?.range ?? 2.5;
   const covers = d <= r - COVER_MARGIN;
-  if (covers && d >= SAFE_DIST) return d;
+  if (covers && d >= SAFE_DIST) return grade0 ?? d;
   if (covers) return 1000 + d;
   return 2000 + d;
 }
+
+/**
+ * 사람 실력의 **상한 대리**. 기준선 봇(runBot 기본값)이 "대충 두는 사람"이라면 이쪽은
+ * "잘 두는 사람"이고, 봉투는 이제 둘 사이를 잠근다.
+ *
+ * 왜 이 셋인가 — 기준선 160시드 121/160(75.6%) · 여유 24.6~27.6%를 100% 완주로 올린
+ * 것은 정확히 이 셋뿐이다(각각 단독 40시드): 킬존 배치 33/40 → 39/40(여유 27.6 → 66.9%),
+ * 목표 구성 + 새로고침 33/40 → 40/40(판당 새로고침 0.8회 · 4골드). 둘을 겹치면 40/40.
+ * 봇이 이미 알던 손잡이는 상한을 못 올린다 — cap 4~12 전 구간 무변(33~35/40),
+ * 조기호출 −1승, 불도저 +2승, **아군 −11승 · 마을 −3승**(잘 두는 사람에게는 순손해다).
+ *
+ * `cap`·`allies`·`base`·`alwaysRush`·`bulldoze`를 일부러 넣지 않은 이유가 그것이다 —
+ * 상한을 만들지 못하는 손잡이를 기준점에 섞으면 기준점이 흐려지기만 한다.
+ *
+ * 구성이 `{catapult: 8}`(몰빵)이 아닌 이유: 스테이지1에 비행 적이 하나도 없어서 성립하는
+ * 값이라 기준점으로 부적절하다. 2/5/1은 대공 2기(spear)를 남긴다.
+ */
+export const STRONG_BOT: BotOptions = {
+  placement: 'kill',
+  comp: { spear: 2, catapult: 5, frost: 1 },
+  refresh: { maxPaid: 80 },
+};
 
 /**
  * 봇 1판 실행. 외곽 루프 1회 = 커맨드 한 묶음 + 120틱.
@@ -476,7 +577,8 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
   const hugPath = opts.hugPath === true;
   const maxIters = opts.maxIters ?? 900;
   const cap = opts.cap ?? PLACEMENT_CAP;
-  const dist = pathDistances(stage);
+  const samples = pathSamples(stage);
+  const dist = pathDistances(stage, samples);
   const cells: [number, number][] = [];
   for (let z = 0; z < stage.gridH; z++) {
     for (let x = 0; x < stage.gridW; x++) {
@@ -484,6 +586,52 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     }
   }
   const distOf = ([x, z]: [number, number]): number => dist[z * stage.gridW + x] as number;
+
+  // ── 커버 계산 (placement 'cover'/'kill' 전용, 'near'에서는 한 번도 호출되지 않는다) ──
+  const placeMode: PlacementMode = opts.placement ?? 'near';
+  const nSamples = samples.xs.length;
+  /** (셀, 사거리) → 그 원 안에 든 경로 샘플 인덱스. 셀×사거리 조합이 유한해 캐시 하나면 끝난다 */
+  const coverCache = new Map<string, Int32Array>();
+  const coveredBy = (cx: number, cz: number, r: number): Int32Array => {
+    const key = `${cx},${cz},${r}`;
+    const hit = coverCache.get(key);
+    if (hit) return hit;
+    const idx: number[] = [];
+    const r2 = r * r;
+    for (let i = 0; i < nSamples; i++) {
+      const dx = (samples.xs[i] as number) - cx;
+      const dz = (samples.zs[i] as number) - cz;
+      if (dx * dx + dz * dz <= r2) idx.push(i);
+    }
+    const out = Int32Array.from(idx);
+    coverCache.set(key, out);
+    return out;
+  };
+  const rangeOf = (def: TowerDef): number => def.tiers[0]?.range ?? 2.5;
+  /** 지금 서 있는 타워들이 각 경로 샘플을 몇 겹으로 덮고 있는가 (배치 판정 직전에 갱신) */
+  const coverCount = new Int32Array(nSamples);
+  const recountCover = (): void => {
+    coverCount.fill(0);
+    for (const t of sim.state.towers) {
+      const d = TOWER_DEFS[t.defId];
+      if (!needsPathCoverage(d)) continue;
+      for (const i of coveredBy(t.cellX, t.cellZ, rangeOf(d))) coverCount[i] = (coverCount[i] as number) + 1;
+    }
+  };
+  /**
+   * 0등급 안쪽 순위. 'cover'는 커버 길이, 'kill'은 **겹침을 가중한** 커버 길이다
+   * (그 샘플을 이미 덮는 타워 한 기당 +0.5배). 둘 다 클수록 좋으므로 부호를 뒤집는다.
+   */
+  const grade0Of = (def: TowerDef, cx: number, cz: number): number | undefined => {
+    if (placeMode === 'near') return undefined;
+    const idx = coveredBy(cx, cz, rangeOf(def));
+    if (placeMode === 'cover') return -idx.length * PATH_SAMPLE_STEP;
+    let w = 0;
+    for (const i of idx) w += 1 + 0.5 * (coverCount[i] as number);
+    return -w * PATH_SAMPLE_STEP;
+  };
+  const keyOf = (def: TowerDef, c: [number, number]): number =>
+    placementKey(def, distOf(c), hugPath, grade0Of(def, c[0], c[1]));
 
   let clears = 0;
   let clearGold = 0;
@@ -586,8 +734,9 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     let bestFreeKey = Infinity;
     let bestBuy: [number, number] | undefined;
     let bestBuyKey = Infinity;
+    if (placeMode === 'kill') recountCover(); // 겹침 가중이 있는 정책에서만 필요하다
     for (const c of cells) {
-      const key = placementKey(def, distOf(c), hugPath);
+      const key = keyOf(def, c);
       if (sim.canPlaceAt(c[0], c[1])) {
         if (key < bestFreeKey) {
           bestFreeKey = key;
@@ -628,9 +777,52 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     return r;
   };
 
+  // ── 목표 구성 / 핸드 새로고침 (둘 다 지정하지 않으면 기본 봇과 한 틱도 다르지 않다) ──
+  const comp = opts.comp;
+  const refreshMaxPaid = opts.refresh?.maxPaid;
+  /** 이 종의 할당량에서 몇 기가 모자란가 (할당량이 없으면 0 이하) */
+  const deficitOf = (id: TowerId): number => {
+    const want = comp?.[id] ?? 0;
+    let have = 0;
+    for (const t of sim.state.towers) if (t.defId === id) have++;
+    return want - have;
+  };
+  /**
+   * 이번 배치 판정에서 카드를 볼 순서.
+   * comp가 있고 모자란 카드가 있으면 **부족분이 큰 순서**(동점이면 핸드 인덱스 순),
+   * 아니면 기본 봇 그대로 **핸드 인덱스 순**이다.
+   */
+  const handOrder = (): number[] => {
+    const st = sim.state;
+    const plain = st.hand.map((_, i) => i).filter((i) => st.hand[i]);
+    if (!comp) return plain;
+    const want = plain
+      .map((i) => ({ i, d: deficitOf((st.hand[i] as { towerId: TowerId }).towerId) }))
+      .filter((e) => e.d > 0)
+      .sort((a, b) => b.d - a.d || a.i - b.i);
+    return want.length > 0 ? want.map((e) => e.i) : plain;
+  };
+  /** 핸드에 '할당량이 모자란 카드'가 하나라도 있는가 (새로고침을 도는 유일한 반대 조건) */
+  const handHasWanted = (): boolean => {
+    const st = sim.state;
+    if (!comp) return true;
+    return st.hand.some((c) => c && deficitOf(c.towerId) > 0);
+  };
+
   const tryPlace = (goldFactor: number): void => {
     const st = sim.state;
-    for (let h = 0; h < st.hand.length; h++) {
+    // 새로고침 — 방어선을 짓는 중이고, 원하는 카드가 하나도 없고, 값이 싸고, 예비비를 안 깰 때만.
+    // 판당 실측 0.8회 · 4골드짜리 행동인데 봉투 헤더가 "핸드 드로우 운"이라 부른 패배를 지운다.
+    if (refreshMaxPaid !== undefined && st.towers.length < cap) {
+      for (let n = 0; n < REFRESH_MAX_PER_DECISION && !handHasWanted(); n++) {
+        const cost = st.refreshCost;
+        if (cost > refreshMaxPaid) break;
+        if (st.gold - cost < reserveNow()) break;
+        if (!sim.applyCommand({ type: 'refreshHand' })) break;
+        goldTowers += cost;
+      }
+    }
+    for (const h of handOrder()) {
       const card = st.hand[h];
       if (!card) continue;
       if (st.gold < card.cost * goldFactor) continue;

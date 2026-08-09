@@ -13,8 +13,19 @@
  * 값을 고를 여지가 없는 수열이라 "통과하는 시드를 골랐다"가 불가능하고, 20개면
  * 승수 1 차이(=5%p)까지 잡힌다. 실행 시간은 스윕 1회 ≈ 2초다.
  *
+ * ── 11단계: 봉투가 **두 팔**이 됐다 (1번을 쪼갰다) ──────────────────────────
+ * 10단계까지의 봉투는 전부 **하한선**이었다 — "대충 두는 봇도 완주한다". 그 선언만으로
+ * 봉투를 닫아 두면 **잘 두는 사람 쪽에는 아무 선언도 없다**. 실측이 그 구멍을 그대로
+ * 보여줬다: 기준선 봇 160시드 75.6%인데 최강 정책은 **160/160 완주 · 여유 77.6%**였고,
+ * 50웨이브 중 **49웨이브가 그 정책의 기지 체력을 한 톨도 못 깎았다**.
+ * 그래서 1번에 **상한 팔**(1-b)을 얹었다. 하한 팔(1-a)의 문턱은 한 톨도 안 건드렸다.
+ * 잣대가 다른 이유는 최강 봇의 승수가 천장에 붙어 있어서다 — 난이도를 크게 바꿔도
+ * 40/40이 그대로이므로 **여유**(Σ잔여HP/Σ최대HP)로 잰다.
+ *
  * ── 항목별로 무엇을 잠그는가 ────────────────────────────────────────────────
- *  1) 완주 가능성 — 클리어 13/20 이상 + 전 시드 웨이브 40 이상 도달 (실측 15/20, 최소 42)
+ *  1-a) 완주 가능성(하한 팔) — 클리어 13/20 이상 + 전 시드 웨이브 40 이상 (실측 14/20, 최소 43)
+ *  1-b) **난이도 상한**(상한 팔, 11단계) — 최강 정책도 여유 ≤ 55%로 끝난다 (실측 52.0%)
+ *       + 그래도 완주는 한다(승수 ≥ 34/40, 실측 40/40)
  *  2) 습격대가 실제로 값을 청구한다 — 파괴 합계 하한 (실측 177기)
  *  3) 죽음의 나선 금지 — **웨이브 15 이후** 타워 수 하한 (실측 전 시드 8, 상한선=배치상한)
  *     웨이브 10부터 재던 예전 지표는 '건설 진도'를 재고 있어 구조적으로 무력했다
@@ -140,6 +151,7 @@ import { ALLY_SORTIE_PATH_LIMIT, ALLY_SORTIE_RANGE } from '@/data/balance';
 import { buildPath } from '@/sim/path';
 import {
   MIN_TOWERS_FROM_WAVE,
+  STRONG_BOT,
   makeBotSim,
   makeBotSimFor,
   runBot,
@@ -158,6 +170,14 @@ const SEEDS = Array.from({ length: 20 }, (_, i) => 1000 + 37 * i);
  * (8단계: 시작점을 옮긴 독립 표본 10벌로 재고, 그 근거를 쓰는 항목에 적었다).
  */
 const SEEDS80 = Array.from({ length: 80 }, (_, i) => 1000 + 37 * i);
+/**
+ * **상한 팔 전용 40개** (11단계). 상한 팔은 승수가 천장(100%)에 붙어 있어 승수로는 아무것도
+ * 못 재고 **여유**로 잰다. 여유는 승수보다 분산이 훨씬 작지만(같은 봇·같은 수치에서 20시드와
+ * 40시드의 여유가 소수점 한 자리까지 같게 나오는 일이 흔하다) 40개를 쓰는 이유는 따로 있다:
+ * 잔여 HP가 사실상 **두세 개의 값**(25 / 15 / 5)만 갖는 계단 분포라, 판 하나가 계단 한 칸을
+ * 옮기면 20시드에서는 2.5%p가 흔들린다. 40이면 그 최소 눈금이 1.25%p가 된다.
+ */
+const SEEDS40 = Array.from({ length: 40 }, (_, i) => 1000 + 37 * i);
 const STAGE1_DECK: TowerId[] = ['spear', 'catapult', 'frost'];
 const ALL_DECK: TowerId[] = [
   'spear', 'catapult', 'frost', 'lightning', 'poison', 'ballista', 'brazier', 'drum',
@@ -179,6 +199,22 @@ function playAll(stageId: number, deck: TowerId[], opts: BotOptions = {}): BotRe
 
 const wins = (rs: BotResult[]): number => rs.filter((r) => r.won).length;
 const sum = (rs: BotResult[], f: (r: BotResult) => number): number => rs.reduce((a, r) => a + f(r), 0);
+
+/** 상한 팔의 잣대 — 남긴 기지 체력의 비율. 승수가 천장에 붙은 뒤에도 계속 움직인다 */
+const slack = (rs: BotResult[]): number =>
+  sum(rs, (r) => r.baseHpLeft) / sum(rs, (r) => r.baseHpMax);
+
+/** 상한 팔 스윕 (여러 항목이 재사용하므로 캐시) */
+function playStrong(opts: BotOptions = STRONG_BOT): BotResult[] {
+  const key = `strong|${JSON.stringify(opts)}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const stage = stageById(1);
+  if (!stage) throw new Error('no stage 1');
+  const rs = SEEDS40.map((seed) => runBot(makeBotSimFor(stage, seed, STAGE1_DECK), stage, opts));
+  cache.set(key, rs);
+  return rs;
+}
 
 /**
  * **위약 아군** — 가격·수명·속도·hp는 그대로라 골드 흐름이 정확히 같고 전투 능력만 0이다.
@@ -231,15 +267,62 @@ function playAllWithAllies(
 }
 
 describe('autoplay 난이도 봉투', () => {
-  it('스테이지1: 넓은 시드 20개에서 과반이 완주하고, 전부 웨이브 40을 넘긴다', () => {
+  it('스테이지1 하한 팔: 넓은 시드 20개에서 과반이 완주하고, 전부 웨이브 40을 넘긴다', () => {
     const rs = playAll(1, STAGE1_DECK);
     const msg = JSON.stringify(rs);
-    // 실측 15/20. 하한 13은 "핸드 드로우 운으로 지는 판이 절반을 넘지 않는다"이고,
-    // 5시드 표본이 주장하던 '전부 클리어'가 사실이 아님을 문서화한 값이다.
+    // 실측 14/20 (11단계 이전 15/20). 하한 13은 "핸드 드로우 운으로 지는 판이 절반을
+    // 넘지 않는다"이고, 5시드 표본이 주장하던 '전부 클리어'가 사실이 아님을 문서화한 값이다.
+    // ⚠ 지금 여유가 **한 판뿐**이다. 11단계가 클라이맥스를 복원하면서 판당 −2HP를
+    //   더했고(trex baseDamage 10 → 12) 그게 딱 한 판을 가져갔다. 이 하한을 건드리는
+    //   변경을 할 때는 반드시 이 팔부터 다시 재라.
     expect(wins(rs), `클리어 ${wins(rs)}/20, 결과: ${msg}`).toBeGreaterThanOrEqual(13);
-    // 지더라도 후반까지는 간다 — 초반에 무너지면 여기서 걸린다 (실측 최소 42)
+    // 지더라도 후반까지는 간다 — 초반에 무너지면 여기서 걸린다 (실측 최소 43)
     expect(Math.min(...rs.map((r) => r.wave)), `최소 도달 웨이브: ${msg}`).toBeGreaterThanOrEqual(40);
   }, 120_000);
+
+  /**
+   * ── 11단계: 봉투 1번의 **상한 팔** ─────────────────────────────────────────
+   *
+   * 왜 팔이 둘이어야 하는가: 위 하한 팔은 "대충 두는 사람도 완주할 수 있다"만 잠근다.
+   * 그 선언 하나로 봉투를 닫아 두면 **잘 두는 사람 쪽이 통째로 무주공산**이 되고, 실제로
+   * 그랬다 — 사용자의 "스테이지1이 wave 50까지 가는데 쉬웠다"가 정확히 그 자리다.
+   * 실측(11단계 착수 시점): 기준선 봇 160시드 121/160(75.6%)인데 **최강 정책은 160/160
+   * 완주 · 여유 77.6%**였다. 곧 상한 쪽에는 아무 선언도 없었다.
+   *
+   * 상한 팔의 잣대는 **승수가 아니라 여유**다. 최강 봇은 어떤 수치에서도 40/40에 붙어 있어
+   * 승수로는 난이도 변화를 한 자리도 못 재기 때문이다(실측: 여유 84% → 52%로 내려가는
+   * 동안 승수는 40/40 그대로). 승수 하한은 "그래도 완주는 한다"를 잠그는 안전장치로만 둔다.
+   *
+   * ── 문턱 두 개의 유도 ──────────────────────────────────────────────────────
+   *  · `승수 ≥ 34/40` — 사전 조사에서 hpGrowth 1.030이 최강 봇을 32/40으로 떨어뜨렸고
+   *    1.035는 19/40이었다. 잘 두는 사람이 절반을 지는 초심자 스테이지는 서열 위반이다.
+   *  · `여유 ≤ 0.55` — **이 항목의 본체다.** 착수 시점 실측 0.84였고, 지금 0.52다.
+   *    0.55라는 숫자의 뜻: 기지 HP 25에서 trex 한 마리의 누수(12)가 곧 48%이므로,
+   *    이 문턱은 "**끝까지 잘 둬도 마지막 한 마리는 반드시 아프다**"의 최소 형태다.
+   *    여유가 0.55를 넘는 순간 그 스테이지에는 잘 두는 사람을 건드리는 웨이브가
+   *    하나도 없다는 뜻이 된다 — 착수 전 상태가 정확히 그랬다(w1~49 누수 피해 0.0).
+   *
+   * ── 이 팔이 왜 시드 운으로 통과할 수 없는가 ────────────────────────────────
+   * 최강 봇의 종료 HP는 전 시드에서 **정확히 같은 값**이다(40시드 전부 13). 스테이지1의
+   * 웨이브 편성이 시드와 무관하게 고정이고(makeWaveFor는 wavePlan.seed만 쓴다) 목표 구성 +
+   * 새로고침이 핸드 드로우 운을 지우기 때문이다. 곧 이 팔의 여유는 표본이 아니라
+   * **스테이지 데이터의 함수**이고, 시드를 옮겨도 값이 바뀌지 않는다.
+   *
+   * ⚠ 3번(minTowers)을 이 팔로 옮기지 않은 이유: 최강 봇은 전 시드에서 minT가 상한(8)이라
+   *   판별력이 0이다. 그 항목은 하한 팔에 남아 있어야 무언가를 잡는다.
+   */
+  it('스테이지1 상한 팔: 잘 두는 사람에게도 마지막 한 마리는 아프다 (여유 상한)', () => {
+    const strong = playStrong();
+    const msg =
+      `최강 ${wins(strong)}/40 · 여유 ${(slack(strong) * 100).toFixed(1)}% · ` +
+      `종료HP ${strong.map((r) => r.baseHpLeft).join(',')}`;
+    expect(wins(strong), msg).toBeGreaterThanOrEqual(34);
+    expect(slack(strong), msg).toBeLessThanOrEqual(0.55);
+    // 검증이 공허하지 않은지 — 최강 봇이 실제로 목표 구성대로 짓고 새로고침을 썼어야 한다
+    expect(sum(strong, (r) => r.placed), msg).toBeGreaterThan(0);
+    // 그리고 여유가 "지는 판이 섞여서" 낮아진 것이 아니어야 한다 (승수 천장 확인)
+    expect(Math.min(...strong.map((r) => r.wave)), msg).toBeGreaterThanOrEqual(50);
+  }, 300_000);
 
   /**
    * 봉투가 "통과하지만 아무 일도 안 일어나는" 상태로 썩지 않게 한다.
@@ -298,7 +381,28 @@ describe('autoplay 난이도 봉투', () => {
     expect(wins(hug), msg).toBeLessThan(wins(safe));
     expect(wins(hug), msg).toBeLessThanOrEqual(2);
     expect(sum(hug, (r) => r.minTowers), msg).toBeLessThan(sum(safe, (r) => r.minTowers));
-  }, 240_000);
+
+    /*
+     * ── 11단계: **상한 팔에서도 같은 주장이 선다** (하한 팔 문턱은 위에 그대로 둔다) ──
+     * 기준선 봇에서만 재면 "밀착은 못 이긴다"가 약한 봇의 성질인지 게임의 성질인지
+     * 구분되지 않는다. 나머지를 전부 최강 정책으로 맞추고 **배치 거리만** 되돌리면
+     * 그 하나로 40/40이 2/40이 된다 — 목표 구성도, 새로고침도, 킬존도 그대로인데도.
+     * 실측(시드 40): 최강 40/40 · 여유 52.0% 대 최강+밀착 **18/40 · 여유 3.6%**,
+     * 첫 피격 웨이브 중앙값 50 대 **2**.
+     *
+     * 문턱을 승수(≤ 24)와 여유(≤ 0.10) 둘로 거는 이유: 승수는 20시드에서 ±1이 잡음이고
+     * 40시드에서도 ±2인데, **여유는 이 팔에서 자릿수가 다르다**(3.6% 대 52.0%). 곧
+     * "밀착해도 이기긴 한다"는 남을 수 있어도 "밀착해도 편하다"는 남을 수 없다.
+     * 승수 상한 24는 실측 18에서 6칸(=15%p) 위이고, 11단계 이전 값 23보다도 위다 —
+     * 곧 이 문턱은 **되돌리기를 잡는 것이 아니라 개선의 유지**를 잠근다.
+     */
+    const strong = playStrong();
+    const strongHug = playStrong({ ...STRONG_BOT, hugPath: true });
+    const smsg = `최강 ${wins(strong)}/40 (여유 ${(slack(strong) * 100).toFixed(1)}%) / 최강+밀착 ${wins(strongHug)}/40 (여유 ${(slack(strongHug) * 100).toFixed(1)}%)`;
+    expect(wins(strongHug), smsg).toBeLessThan(wins(strong));
+    expect(wins(strongHug), smsg).toBeLessThanOrEqual(24);
+    expect(slack(strongHug), smsg).toBeLessThanOrEqual(0.1);
+  }, 480_000);
 
   it('스테이지1: 방치(타워 0)면 웨이브 10 안에 패배', () => {
     const { sim } = makeBotSim(1, 7, STAGE1_DECK);
