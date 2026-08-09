@@ -68,7 +68,8 @@ export class WaveSpawner {
     // 보상 배율 — 예산을 넘겨 부푼 편성(습격대 최소 인원)에서만 1 미만이다.
     // 정수로 굳혀 두면 처치 시점 계산이 없고 해시가 부동소수에 흔들리지 않는다.
     e.bounty = Math.max(1, Math.round(def.bounty * (g.bountyMul ?? 1)));
-    e.baseDamage = def.baseDamage;
+    // 스테이지별 누수 피해 덮어쓰기 — 없으면 종의 기본값 그대로 (StageDef.leakDamage 주석)
+    e.baseDamage = ctx.opts.stage.leakDamage?.[def.id] ?? def.baseDamage;
     e.radius = def.radius;
     pathFor(ctx, e).sample(0, e);
     e.prevX = e.x;
