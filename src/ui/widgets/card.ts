@@ -3,7 +3,7 @@
  * 타워 아이콘은 src/assets/towers 의 일러스트를 쓰고, 없으면 인라인 SVG로 폴백한다
  * (SVG 폴백은 8종이 형태/색으로 확실히 구분되도록 유지).
  */
-import type { AllyId, TowerId } from '@/data/types';
+import type { AllyId, EnemyId, TowerId, TraitTag } from '@/data/types';
 import { h, cls, fmt, setText } from '../dom';
 import { t } from '../i18n';
 
@@ -177,6 +177,226 @@ export const ALLY_ICON_SVG: Record<AllyId, string> = {
   guardian: allyGuardianSvg,
 };
 
+// ---------------------------------------------------------------------------
+// 적 아이콘 16종 — **전부 코드로 그린다** (웨이브 미리보기 띠·상세가 쓴다)
+//
+// 규약 셋:
+//  1. **28px에서 읽히는 실루엣.** 판별은 색이 아니라 형태가 한다 — 색각 이상에서도
+//     뿔(트리케)·엄니(멧돼지)·펼친 날개(프테라)·활(궁수)이 그대로 갈린다.
+//     그래서 어느 아이콘도 "같은 몸에 색만 다른" 형태를 쓰지 않는다.
+//  2. **색은 3D 모델에서 그대로 가져온다** (render/meshlib/enemies.ts의 body/dark).
+//     띠에서 본 것과 판 위에서 만나는 것이 같은 색이어야 두 화면이 이어진다.
+//  3. **옆모습은 전부 오른쪽을 본다** (3D가 +x로 걷는 것과 같은 방향). 정면을 쓰는 것은
+//     프테라(펼친 날개가 정면에서만 읽힌다) 하나뿐이다.
+// ---------------------------------------------------------------------------
+
+/**
+ * 습격대·부족 공용 몸 — 아군 아이콘(ALLY_BODY)과 **일부러 다른 실루엣**이다.
+ * 아군은 맨몸에 무기만 들지만, 적 부족은 **염색한 조끼**를 입는다(3D의 raiderVest와 같다).
+ * 그 한 겹이 15px에서 아군/적을 가르는 유일한 형태 신호다.
+ */
+const FOE_BODY = (dye: string): string =>
+  `<path d="M18 21 L18 33 M18 24 L11 29 M18 33 L12 43 M18 33 L24 43"
+     fill="none" stroke="#e0a878" stroke-width="4.6" stroke-linecap="round"/>
+   <path d="M12 20 L24 20 L23 32 L13 32 Z" fill="${dye}" stroke="#3a2a1c" stroke-width="2.2" stroke-linejoin="round"/>
+   <circle cx="18" cy="12" r="6.4" fill="#e0a878" stroke="#7a4a28" stroke-width="2.4"/>
+   <path d="M11.6 10.5 C13 5 23 5 24.4 10.5" fill="#3a2a1c"/>`;
+
+const ENEMY_ICONS: Record<EnemyId, string> = {
+  // 랩터 — 낫발톱 옆모습. 꼬리가 뒤로 곧게 뻗어 '빠름'을 말한다
+  raptor: SVG(
+    `<path d="M3 13 L19 25" stroke="#b84a22" stroke-width="5" stroke-linecap="round"/>
+     <ellipse cx="24" cy="27" rx="11" ry="7.5" fill="#e8763a" stroke="#8f3a18" stroke-width="2.5"/>
+     <path d="M20 33 L16 41 L23 43" fill="none" stroke="#b84a22" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+     <path d="M29 33 L31 41 L38 42" fill="none" stroke="#b84a22" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+     <path d="M30 24 L34 14" stroke="#e8763a" stroke-width="6" stroke-linecap="round"/>
+     <path d="M30 10 L46 13 L45 19 L32 18 Z" fill="#e8763a" stroke="#8f3a18" stroke-width="2.5" stroke-linejoin="round"/>
+     <circle cx="35" cy="13.6" r="1.7" fill="#2c1c0e"/>`,
+  ),
+  // 콤피 떼 — **두 마리**를 겹쳐 그린다. 한 마리로는 '떼'가 아니다
+  compy: SVG(
+    `<path d="M3 30 L11 34" stroke="#4f9130" stroke-width="3.4" stroke-linecap="round"/>
+     <ellipse cx="15" cy="35" rx="6.5" ry="4.6" fill="#4f9130" stroke="#2f5c1c" stroke-width="2.2"/>
+     <path d="M18 31 L21 27 L28 29 L27 33 Z" fill="#4f9130" stroke="#2f5c1c" stroke-width="2.2" stroke-linejoin="round"/>
+     <path d="M13 39 L11 44 M18 39 L20 44" stroke="#2f5c1c" stroke-width="2.6" stroke-linecap="round"/>
+     <path d="M8 14 L18 21" stroke="#4f9130" stroke-width="3.8" stroke-linecap="round"/>
+     <ellipse cx="24" cy="23" rx="8.5" ry="6" fill="#7ac74a" stroke="#2f5c1c" stroke-width="2.4"/>
+     <path d="M29 18 L32 12 L44 15 L42 21 L31 22 Z" fill="#7ac74a" stroke="#2f5c1c" stroke-width="2.4" stroke-linejoin="round"/>
+     <circle cx="35" cy="16.5" r="1.7" fill="#2c1c0e"/>
+     <path d="M21 28 L19 35 M27 28 L29 35" stroke="#2f5c1c" stroke-width="3" stroke-linecap="round"/>`,
+  ),
+  // 원시 멧돼지 — 갈기(등의 톱니)와 위로 휜 엄니. 낮고 뭉툭하다
+  boar: SVG(
+    `<path d="M4 22 C6 18 8 20 8 24" fill="none" stroke="#4f3220" stroke-width="3" stroke-linecap="round"/>
+     <path d="M10 20 l3 -6 l3 6 l3 -7 l3 7 l3 -6 l3 6" fill="none" stroke="#4f3220" stroke-width="3" stroke-linejoin="round"/>
+     <ellipse cx="21" cy="27" rx="13" ry="9" fill="#8a5a3a" stroke="#4f3220" stroke-width="2.6"/>
+     <path d="M32 22 C40 22 43 26 43 29 C43 32 39 34 34 33" fill="#a8734a" stroke="#4f3220" stroke-width="2.6" stroke-linejoin="round"/>
+     <circle cx="35" cy="26" r="1.8" fill="#2c1c0e"/>
+     <path d="M41 31 C44 30 45 26 43 23" fill="none" stroke="#f2e6c9" stroke-width="3.2" stroke-linecap="round"/>
+     <path d="M14 35 L13 43 M20 36 L20 44 M27 35 L28 43" stroke="#5f3d24" stroke-width="3.4" stroke-linecap="round"/>`,
+  ),
+  // 트리케라톱스 — **프릴 + 세 뿔**. 이 종의 전부가 머리에 있어 머리를 크게 잡는다
+  trike: SVG(
+    `<path d="M3 26 L14 29" stroke="#6f7a38" stroke-width="4.4" stroke-linecap="round"/>
+     <ellipse cx="20" cy="30" rx="12" ry="8.5" fill="#92a04c" stroke="#59632a" stroke-width="2.6"/>
+     <path d="M13 37 L12 44 M20 38 L20 44 M27 37 L28 44" stroke="#6f7a38" stroke-width="3.6" stroke-linecap="round"/>
+     <path d="M30 30 C30 18 36 12 40 12 C45 12 47 20 46 28 C45 34 38 37 32 35 Z"
+       fill="#d9873a" stroke="#8f4f18" stroke-width="2.6" stroke-linejoin="round"/>
+     <path d="M40 30 C44 30 46 27 46 24" fill="none" stroke="#92a04c" stroke-width="6" stroke-linecap="round"/>
+     <path d="M36 12 L33 3 M44 14 L45 4" stroke="#f2e6c9" stroke-width="3.4" stroke-linecap="round"/>
+     <path d="M45 26 L47 21" stroke="#f2e6c9" stroke-width="3" stroke-linecap="round"/>
+     <circle cx="41" cy="24" r="1.7" fill="#2c1c0e"/>`,
+  ),
+  // 프테라노돈 — **유일한 정면**. 펼친 날개는 정면에서만 읽힌다 (하늘 = 형태로 구분)
+  ptera: SVG(
+    `<path d="M2 16 C12 12 18 16 22 24 C18 22 10 22 4 26 Z" fill="#c06a3e" stroke="#7e401f" stroke-width="2.5" stroke-linejoin="round"/>
+     <path d="M46 16 C36 12 30 16 26 24 C30 22 38 22 44 26 Z" fill="#c06a3e" stroke="#7e401f" stroke-width="2.5" stroke-linejoin="round"/>
+     <ellipse cx="24" cy="27" rx="5" ry="8" fill="#d98a5a" stroke="#7e401f" stroke-width="2.5"/>
+     <path d="M20 12 L28 12 L26 19 L22 19 Z" fill="#d98a5a" stroke="#7e401f" stroke-width="2.4" stroke-linejoin="round"/>
+     <path d="M20 12 L11 6 L22 8 Z" fill="#e8c060" stroke="#8f6a10" stroke-width="2.2" stroke-linejoin="round"/>
+     <path d="M24 19 L24 26" stroke="#7e401f" stroke-width="2.2"/>
+     <circle cx="26" cy="12.5" r="1.5" fill="#2c1c0e"/>`,
+  ),
+  // 안킬로사우루스 — 등딱지 판 + 꼬리 곤봉. 가장 낮고 넓은 실루엣
+  ankylo: SVG(
+    `<path d="M8 30 C8 20 16 16 25 16 C34 16 41 21 41 30 Z" fill="#6a5a38" stroke="#41371f" stroke-width="2.6" stroke-linejoin="round"/>
+     <path d="M13 24 l4 -4 M22 19 l4 -4 M31 21 l4 -4" stroke="#7d6c44" stroke-width="3.4" stroke-linecap="round"/>
+     <path d="M6 30 L42 30 C42 35 38 37 30 37 L16 37 C10 37 6 35 6 30 Z" fill="#9a824a" stroke="#41371f" stroke-width="2.6" stroke-linejoin="round"/>
+     <path d="M41 31 C46 30 47 27 45 25" fill="none" stroke="#9a824a" stroke-width="5" stroke-linecap="round"/>
+     <circle cx="8" cy="34" r="6" fill="#6a5a38" stroke="#41371f" stroke-width="2.6"/>
+     <path d="M14 38 L13 44 M24 38 L24 44 M34 37 L35 43" stroke="#5f5232" stroke-width="3.4" stroke-linecap="round"/>
+     <circle cx="41" cy="28" r="1.6" fill="#2c1c0e"/>`,
+  ),
+  // 부족 전사 — **둥근 방패**가 정체성 (아군 파수꾼의 긴 널방패와 형태로 갈린다)
+  warrior: SVG(
+    `${FOE_BODY('#b85c2e')}
+     <path d="M28 18 L40 15 L44 25 L38 36 L28 32 Z" fill="#8a4a2e" stroke="#4a2c14" stroke-width="2.6" stroke-linejoin="round"/>
+     <circle cx="36" cy="25.5" r="4" fill="#e8d9b8" stroke="#4a2c14" stroke-width="2.2"/>`,
+  ),
+  // 부족 주술사 — 깃털 관 + 치유의 그릇 (같은 사람 몸이라도 머리 장식이 갈라 준다)
+  shaman: SVG(
+    `${FOE_BODY('#8a4a9e')}
+     <path d="M12 7 L9 2 M18 5 L18 1 M24 7 L27 2" stroke="#e8d2a0" stroke-width="2.6" stroke-linecap="round"/>
+     <path d="M26 26 C26 21 32 18 36 18 C41 18 44 22 44 26" fill="none" stroke="#6ff2c8" stroke-width="3" stroke-linecap="round"/>
+     <ellipse cx="35" cy="30" rx="9" ry="4.5" fill="#e8d2a0" stroke="#4a2c14" stroke-width="2.4"/>`,
+  ),
+  // 부족 투창병 — 짧은 창을 **머리 위로** 치켜든 던지기 자세 (가장 자주 던지는 종)
+  blade: SVG(
+    `${FOE_BODY('#d2492f')}
+     <path d="M24 24 L33 15" stroke="#e0a878" stroke-width="4.6" stroke-linecap="round"/>
+     <path d="M27 21 L43 10" stroke="#a8703f" stroke-width="3.4" stroke-linecap="round"/>
+     <path d="M43 10 L47 4 L43 15 Z" fill="#e8d9b8" stroke="#4a2c14" stroke-width="1.8" stroke-linejoin="round"/>`,
+  ),
+  // 부족 큰창잡이 — **길고 낮게 겨눈** 장창 + 가죽 어깨판(장갑 3)
+  lancer: SVG(
+    `${FOE_BODY('#2f8a94')}
+     <path d="M10 19 L26 19" stroke="#7d5230" stroke-width="3" stroke-linecap="round"/>
+     <path d="M24 25 L32 25" stroke="#e0a878" stroke-width="4.6" stroke-linecap="round"/>
+     <path d="M6 30 L44 22" stroke="#a8703f" stroke-width="3.4" stroke-linecap="round"/>
+     <path d="M44 22 L48 21 L43 27 Z" fill="#e8d9b8" stroke="#4a2c14" stroke-width="1.8" stroke-linejoin="round"/>`,
+  ),
+  // 부족 궁수 — **당긴 활**. 곡선 하나로 전 종과 갈린다
+  archer: SVG(
+    `${FOE_BODY('#5f8f3a')}
+     <path d="M34 8 C44 16 44 30 34 38" fill="none" stroke="#a8703f" stroke-width="3.4" stroke-linecap="round"/>
+     <path d="M34 8 L34 38" stroke="#e8d9b8" stroke-width="1.8"/>
+     <path d="M22 23 L42 23" stroke="#e8d9b8" stroke-width="2.4" stroke-linecap="round"/>
+     <path d="M42 23 L46 23" stroke="#e8d9b8" stroke-width="2.4" stroke-linecap="round"/>`,
+  ),
+  // 부족 저주사 — 지팡이 끝의 룬 (침묵). 위로 솟은 한 점이 실루엣의 전부다
+  hexer: SVG(
+    `${FOE_BODY('#a8228c')}
+     <path d="M24 24 L31 20" stroke="#e0a878" stroke-width="4.6" stroke-linecap="round"/>
+     <path d="M33 40 L37 12" stroke="#7d5230" stroke-width="3.4" stroke-linecap="round"/>
+     <path d="M37 12 L33 6 L38 2 L43 6 L40 12 Z" fill="#c86ae0" stroke="#5b2a6e" stroke-width="2.2" stroke-linejoin="round"/>
+     <path d="M36.5 7.5 L39.5 7.5 M38 5 L38 10" stroke="#f2d9ff" stroke-width="1.8" stroke-linecap="round"/>`,
+  ),
+  // 매머드 — 늘어진 코 + 큰 엄니. 털이 실루엣 아래로 흘러내린다
+  mammoth: SVG(
+    `<path d="M6 20 C6 13 12 9 20 9 C29 9 35 14 35 22 L35 34 L8 34 Z"
+       fill="#a06a3a" stroke="#5f3d20" stroke-width="2.6" stroke-linejoin="round"/>
+     <path d="M8 34 l4 8 M17 34 l-1 9 M26 34 l2 9" stroke="#7a4c28" stroke-width="3.6" stroke-linecap="round"/>
+     <path d="M33 14 C41 14 44 19 44 24 C44 28 41 31 38 31" fill="#b8804a" stroke="#5f3d20" stroke-width="2.6" stroke-linejoin="round"/>
+     <path d="M40 30 C42 36 40 41 36 43" fill="none" stroke="#b8804a" stroke-width="4.4" stroke-linecap="round"/>
+     <path d="M36 28 C42 30 46 36 45 42" fill="none" stroke="#f2e6c9" stroke-width="3.4" stroke-linecap="round"/>
+     <circle cx="38" cy="20" r="1.7" fill="#2c1c0e"/>`,
+  ),
+  // 스피노사우루스 — **등돛**. 미니보스는 실루엣 위쪽이 크다
+  spino: SVG(
+    `<path d="M8 26 C10 10 22 6 30 10 C26 14 24 20 24 26 Z" fill="#2f6a7a" stroke="#1b4653" stroke-width="2.5" stroke-linejoin="round"/>
+     <path d="M3 30 L12 28" stroke="#2f6a7a" stroke-width="4.4" stroke-linecap="round"/>
+     <ellipse cx="20" cy="30" rx="12" ry="7.5" fill="#4a8a9a" stroke="#1b4653" stroke-width="2.5"/>
+     <path d="M15 36 L13 44 M25 36 L27 44" stroke="#2f6a7a" stroke-width="3.8" stroke-linecap="round"/>
+     <path d="M29 26 L34 20" stroke="#4a8a9a" stroke-width="6" stroke-linecap="round"/>
+     <path d="M30 16 L47 20 L46 25 L32 24 Z" fill="#4a8a9a" stroke="#1b4653" stroke-width="2.5" stroke-linejoin="round"/>
+     <circle cx="35" cy="19.5" r="1.6" fill="#2c1c0e"/>`,
+  ),
+  // 티라노사우루스 — 거대한 턱과 짧은 앞발. 머리 하나가 몸의 절반이다
+  trex: SVG(
+    `<path d="M2 16 L16 26" stroke="#4f2c20" stroke-width="5.4" stroke-linecap="round"/>
+     <ellipse cx="20" cy="29" rx="11" ry="8" fill="#7a4636" stroke="#3d2118" stroke-width="2.6"/>
+     <path d="M15 36 L12 44 L20 45" fill="none" stroke="#4f2c20" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+     <path d="M26 34 L30 42" stroke="#4f2c20" stroke-width="4" stroke-linecap="round"/>
+     <path d="M27 24 L30 9 L46 8 L46 16 L34 18 Z" fill="#7a4636" stroke="#3d2118" stroke-width="2.6" stroke-linejoin="round"/>
+     <path d="M34 18 L46 17 L45 23 L33 21 Z" fill="#d9b382" stroke="#3d2118" stroke-width="2.2" stroke-linejoin="round"/>
+     <path d="M36 18 L37 21 M40 18 L41 21 M44 18 L44.5 21" stroke="#3d2118" stroke-width="1.6"/>
+     <path d="M28 26 L33 30" stroke="#7a4636" stroke-width="3.4" stroke-linecap="round"/>
+     <circle cx="34" cy="12.5" r="1.9" fill="#2c1c0e"/>`,
+  ),
+  // 화산 골렘 — 각진 바위 덩어리 + 용암 균열. 곡선이 하나도 없는 유일한 종
+  golem: SVG(
+    `<path d="M14 8 L34 8 L38 20 L34 24 L36 42 L12 42 L14 24 L10 20 Z"
+       fill="#584641" stroke="#2b201d" stroke-width="2.8" stroke-linejoin="round"/>
+     <path d="M6 18 L12 14 L14 30 L7 32 Z" fill="#43332f" stroke="#2b201d" stroke-width="2.6" stroke-linejoin="round"/>
+     <path d="M42 18 L36 14 L34 30 L41 32 Z" fill="#43332f" stroke="#2b201d" stroke-width="2.6" stroke-linejoin="round"/>
+     <path d="M20 10 L18 20 L26 22 L22 34 L30 26 L23 24 L28 14 Z" fill="#ff7a2f" stroke="#a53d00" stroke-width="1.8" stroke-linejoin="round"/>
+     <path d="M17 13 h5 M28 13 h5" stroke="#ffd94a" stroke-width="3" stroke-linecap="round"/>`,
+  ),
+};
+
+/** 적 상징 아이콘 (viewBox 48×48 인라인 SVG) — 16종 전부 있다 */
+export function enemyIconSvg(id: EnemyId): string {
+  return ENEMY_ICONS[id];
+}
+
+// ---------------------------------------------------------------------------
+// 특성 배지 아이콘 6종 — **단색**(currentColor)이라 CSS가 색을 정한다.
+// 배지는 색만으로 구분되지 않는다: 형태 + 옆의 한 단어(i18n)가 항상 함께 간다.
+// ---------------------------------------------------------------------------
+const BADGE = (body: string): string =>
+  `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${body}</svg>`;
+
+const TRAIT_ICONS: Record<TraitTag, string> = {
+  // 하늘 — 위로 뻗은 두 날개
+  air: BADGE(
+    `<path d="M2 14 C7 7 11 8 12 13 C13 8 17 7 22 14 C17 12 13 13 12 17 C11 13 7 12 2 14 Z" fill="currentColor"/>`,
+  ),
+  // 방패 — 겹 방패(피해를 통째로 버린다)
+  shield: BADGE(
+    `<path d="M12 2 L21 5 V12 C21 17 17 21 12 22 C7 21 3 17 3 12 V5 Z" fill="currentColor"/>
+     <path d="M12 6 L17 7.6 V12 C17 15 15 17.5 12 18.4 Z" fill="rgba(0,0,0,0.35)"/>`,
+  ),
+  // 장갑 — 비늘판 세 겹(타격을 깎는다)
+  armor: BADGE(
+    `<path d="M4 6 h16 v4 H4 Z M6 11 h12 v4 H6 Z M8 16 h8 v4 H8 Z" fill="currentColor"/>`,
+  ),
+  // 치유 — 십자
+  heal: BADGE(`<path d="M10 3 h4 v7 h7 v4 h-7 v7 h-4 v-7 H3 v-4 h7 Z" fill="currentColor"/>`),
+  // 습격 — 부러진 기둥(내 타워를 부순다)
+  raid: BADGE(
+    `<path d="M5 21 L8 9 L13 10 L11 21 Z" fill="currentColor"/>
+     <path d="M9 7 L20 2 L21 6 L11 10 Z" fill="currentColor"/>
+     <path d="M15 14 l3 3 l-3 3 l6 0 l0 -6 Z" fill="currentColor"/>`,
+  ),
+  // 격노 — 위로 튀는 쐐기(저체력에서 빨라진다)
+  enrage: BADGE(`<path d="M13 2 L4 13 h6 l-2 9 l11 -13 h-7 Z" fill="currentColor"/>`),
+};
+
+/** 특성 배지 아이콘 (viewBox 24×24, 단색) */
+export function traitIconSvg(tag: TraitTag): string {
+  return TRAIT_ICONS[tag];
+}
+
 /** 기지 HP 하트 */
 export const heartSvg = SVG(
   `<path d="M24 42 C10 32 4 24 4 15 A10 10 0 0 1 24 11 A10 10 0 0 1 44 15 C44 24 38 32 24 42 Z"
@@ -215,18 +435,32 @@ export interface TowerCard {
   setSelected(on: boolean): void;
   setDisabled(on: boolean): void;
   setCost(cost: number): void;
+  /**
+   * 이번 웨이브의 상성 표시.
+   *  · `counter` = 이 카드를 무력하게 만드는 특성(없으면 null) → 회색 오버레이 + 배지
+   *  · `favored` = 이 카드가 잘 듣는다 → 옅은 테두리
+   * **둘 다 판정은 data/balance.counteredBy·favoredAgainst가 한다** — 화면은 그리기만 하고
+   * 판정을 흉내 내지 않는다(테스트가 같은 함수를 잠근다).
+   */
+  setCounter(counter: TraitTag | null, favored: boolean): void;
 }
 
 /** 전투 HUD 하단의 타워 카드. 선택/골드 부족 상태는 매 프레임 diff 갱신된다. */
 export function createTowerCard(opts: TowerCardOpts): TowerCard {
   const costEl = h('span', { class: 'tcard-cost-num', text: fmt(opts.cost) });
+  // 상성 배지 — 회색 오버레이만으로는 "왜 약한가"를 말하지 못한다.
+  // 색(회색)과 형태(특성 아이콘)를 함께 주는 것이 색각 대응의 최소 형태다.
+  const warn = h('span', { class: 'tcard-warn', attrs: { style: 'display:none' } });
   const el = h(
     'button',
     { class: 'tcard', attrs: { type: 'button' }, onClick: opts.onTap },
     h('span', { class: 'tcard-icon', html: towerIconSvg(opts.towerId) }),
     h('span', { class: 'tcard-name', text: t(`tower.${opts.towerId}.name`) }),
     h('span', { class: 'tcard-cost', html: goldSvg }, costEl),
+    warn,
   );
+  let lastCounter: TraitTag | null | undefined;
+  let lastFavored: boolean | undefined;
   return {
     el,
     towerId: opts.towerId,
@@ -238,6 +472,24 @@ export function createTowerCard(opts: TowerCardOpts): TowerCard {
     },
     setCost(cost) {
       setText(costEl, fmt(cost));
+    },
+    setCounter(counter, favored) {
+      if (counter !== lastCounter) {
+        lastCounter = counter;
+        cls(el, 'is-countered', counter !== null);
+        warn.style.display = counter ? '' : 'none';
+        if (counter) {
+          warn.innerHTML = traitIconSvg(counter);
+          warn.className = `tcard-warn tcard-warn--${counter}`;
+          const label = t('battle.preview.weakVs', { n: t(`trait.${counter}.name`) });
+          warn.setAttribute('title', label);
+          warn.setAttribute('aria-label', label);
+        }
+      }
+      if (favored !== lastFavored) {
+        lastFavored = favored;
+        cls(el, 'is-favored', favored);
+      }
     },
   };
 }

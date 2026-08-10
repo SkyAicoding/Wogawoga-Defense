@@ -9,7 +9,7 @@
  * 파티클 개수·크기·수명·쇼크웨이브 반경·카메라 셰이크·데미지 숫자 크기가 전부 s에 비례한다.
  */
 import * as THREE from 'three';
-import type { AllyId, HometownSourceId, SimEvent, StatusKind, TowerId } from '@/data/types';
+import type { AllyId, EnemyId, HometownSourceId, SimEvent, StatusKind, TowerId } from '@/data/types';
 import { TICK_DT } from '@/data/types';
 import { ENEMY_DEFS } from '@/data';
 import { clamp } from '@/core/mathx';
@@ -22,7 +22,7 @@ import { ATK_LAUNCH } from '@/render/meshlib/gait';
 import type { RaidShotOpts } from '@/render/views/projectileview';
 import type { DioramaCamera } from '@/render/camera';
 import { showBossBanner, showWaveBanner } from '@/ui/screens/battlehud';
-import { spawnDamageNumber } from '@/ui/widgets/damagenumbers';
+import { damageText, spawnDamageNumber } from '@/ui/widgets/damagenumbers';
 import type { DamageKind } from '@/ui/widgets/damagenumbers';
 
 // --- 강도 곡선 상수 --------------------------------------------------------
@@ -346,6 +346,12 @@ export class FxRouter {
   private towerHits = 0;
   private allyShots = 0;
   private raidShots = 0;
+  /**
+   * 살아 있는 적의 종 — 데미지 숫자 표기 규약이 armor를 알아야 해서 스폰 때 기억한다.
+   * **연출 전용 표다.** 시뮬레이션은 이 표를 모르고, 여기 값이 틀려도 판정은 안 바뀐다.
+   * 스폰에서 넣고 사망/누수에서 지우므로 크기는 항상 '지금 살아 있는 마릿수'다.
+   */
+  private readonly foeDef = new Map<number, EnemyId>();
 
   constructor(
     private stage3d: Stage3D,
@@ -409,20 +415,35 @@ export class FxRouter {
           this.shake(0.4);
           this.buzz(60);
           break;
+        case 'enemySpawned':
+          // 표기 규약(괄호/느낌표)이 이 적의 armor를 알아야 한다. enemyDamaged는 종을
+          // 싣고 다니지 않고, 맞는 순간에는 이미 죽어 상태 목록에서 빠졌을 수 있다 —
+          // 그래서 스폰에서 종을 기억해 둔다 (연출 전용 표. sim은 이 표를 모른다).
+          this.foeDef.set(ev.enemyId, ev.defId);
+          break;
         case 'enemyDamaged': {
           s3.enemies.setHitFlash(ev.enemyId);
           const p = this.worldToScreen(ev.x, 1.1, ev.z);
           if (p) {
-            const kind: DamageKind =
-              ev.source in STATUS_KIND
-                ? (STATUS_KIND[ev.source as StatusKind] ?? 'normal')
-                : 'normal';
+            const isDot = ev.source in STATUS_KIND;
+            const kind: DamageKind = isDot
+              ? (STATUS_KIND[ev.source as StatusKind] ?? 'normal')
+              : 'normal';
+            /*
+             * armor 감산이 실제로 적용된 경로에서만 부호를 붙인다.
+             * 지속 피해(burn/poison)는 뺀다 — 독은 armor를 무시하고(combat.damageEnemy
+             * ignoreArmor), 화상은 틱이 작아 **언제나** 괄호가 된다. 매 틱 켜져 있는
+             * 부호는 정보가 아니라 배경이다.
+             * ⚠ 'poison'은 TowerId이면서 StatusKind라(계약의 I-5 위반이 이미 있다)
+             *   직격과 DoT를 이 자리에서 구분할 수 없다 — 그래서 통째로 뺀다.
+             */
+            const armor = isDot ? 0 : (ENEMY_DEFS[this.foeDef.get(ev.enemyId) ?? 'raptor']?.armor ?? 0);
             // 큰 피해일수록 숫자도 커진다 (0.85~1.7배)
             const ds = ev.shielded ? 1 : clamp(0.7 + fxStrength(ev.amount, 0) * 0.32, 0.85, 1.7);
             spawnDamageNumber(
               p.sx,
               p.sy,
-              ev.shielded ? '⛨' : String(Math.max(1, Math.round(ev.amount))),
+              ev.shielded ? '⛨' : damageText(ev.amount, armor),
               kind,
               ds,
             );
@@ -435,6 +456,7 @@ export class FxRouter {
         }
         case 'enemyDied': {
           this.kills++;
+          this.foeDef.delete(ev.enemyId);
           const def = ENEMY_DEFS[ev.defId];
           // 최대 체력(웨이브 스케일 포함) 기반 — 대형/후반 적일수록 크게 터진다
           const s = clamp(
@@ -769,6 +791,11 @@ export class FxRouter {
           void STATUS_COLOR[ev.kind];
           break;
         }
+        case 'enemyLeaked':
+          // 기지에 닿아 사라진 적 — 사망(enemyDied)을 거치지 않으므로 여기서 지운다.
+          // 안 지우면 표가 판 전체의 누적 스폰 수만큼 자란다.
+          this.foeDef.delete(ev.enemyId);
+          break;
         case 'baseDamaged': {
           this.shake(0.35);
           audio.play('baseHit');

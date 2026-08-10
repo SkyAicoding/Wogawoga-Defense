@@ -5,11 +5,13 @@
  * Playwright 자동화용 훅: window.__uilab
  */
 import type {
-  BattleSim, BattleStateView, BattleUiApi, CardState, GameFacade, ProfileApi,
+  BattleSim, BattleStateView, BattleUiApi, CardState, EnemyId, GameFacade, ProfileApi,
   ProfileData, ResultSummary, ScreenId, StageProgress, TargetingMode, TowerId,
-  TowerProgress, TowerState, Vec2,
+  TowerProgress, TowerState, Vec2, WavePreview, WavePreviewEntry,
 } from '@/data/types';
 import { TICK_RATE } from '@/data/types';
+import { ENEMY_DEFS } from '@/data/enemies';
+import { enemyTraitsOf } from '@/data/balance';
 import { ScreenFsm } from '@/core/fsm';
 import { Rng } from '@/core/rng';
 import { STAGES } from '@/data/stages';
@@ -119,12 +121,54 @@ export function run(): void {
     tick: 0, phase: 'prep', waveIndex: 1, waveCount: 50, gold: 120,
     baseHp: 100, baseHpMax: 100, baseLevel: 1, baseLevelMax: 5, prepTicksLeft: 6 * TICK_RATE,
     earlyCallBonusGold: Math.floor(6 * TICK_RATE * 0.15),
-    hand: drawHand(), refreshCost: 0, enemies: [], towers: [mockTower],
+    // 첫 손패는 **고정**이다 — 스테이지1 시작 덱 그대로라 미리보기의 상성 표시
+    // (투석기 = 대공 없음 → 회색, 창·얼음 = 유리 → 옅은 테두리)가 랩에서 항상 재현된다.
+    // 새로고침 버튼을 누르면 그때부터는 무작위(drawHand)다.
+    hand: [
+      { towerId: 'catapult', cost: 130 },
+      { towerId: 'spear', cost: 110 },
+      { towerId: 'frost', cost: 99 },
+    ],
+    deck: ['spear', 'catapult', 'frost'], refreshCost: 0, enemies: [], towers: [mockTower],
     projectiles: [], allies: [], allyCap: 6, amberEarned: 0, endless: false,
+  };
+
+  /**
+   * 목 미리보기 — 띠의 레이아웃을 랩에서 그대로 보기 위한 고정 편성이다.
+   * 칩 상한(6개)과 `+N` 접힘까지 확인되도록 7종을 넣었고, 공중·장갑·방패·힐이
+   * 전부 한 번씩 나와 배지 네 종류가 동시에 그려진다.
+   */
+  const mockPreviewEntry = (defId: EnemyId, count: number, hpMul: number): WavePreviewEntry => {
+    const d = ENEMY_DEFS[defId];
+    const maxHp = Math.max(1, Math.round(d.hp * hpMul));
+    return {
+      defId, count, maxHp, totalHp: maxHp * count,
+      armor: d.armor, flying: d.flying, boss: d.boss ?? false, traits: enemyTraitsOf(d),
+    };
+  };
+  const mockPreview = (wave: number): WavePreview => {
+    const entries = [
+      mockPreviewEntry('raptor', 12, 1.8), mockPreviewEntry('compy', 20, 1.8),
+      mockPreviewEntry('boar', 6, 1.8), mockPreviewEntry('trike', 3, 1.8),
+      // 프테라 12마리 = 공중 HP 비중 21% — AIR_BLIND_SHARE(10%)를 넘겨 **손패 경고가
+      // 실제로 켜지는** 편성이다. 랩은 상태를 전시하는 곳이라 켜진 것을 보여줘야 한다.
+      mockPreviewEntry('blade', 5, 1.8), mockPreviewEntry('ptera', 12, 1.8),
+      mockPreviewEntry('archer', 3, 1.8),
+    ].sort((a, b) => b.totalHp - a.totalHp);
+    return {
+      wave,
+      entries,
+      totalHp: entries.reduce((a, e) => a + e.totalHp, 0),
+      totalCount: entries.reduce((a, e) => a + e.count, 0),
+      goldReward: 30 + wave * 6,
+      hasAir: true,
+      boss: false,
+    };
   };
 
   const sim: BattleSim = {
     state: st,
+    previewWave: (wave) => mockPreview(wave ?? st.waveIndex),
     applyCommand: () => true,
     tick: () => undefined,
     drainEvents: () => [],

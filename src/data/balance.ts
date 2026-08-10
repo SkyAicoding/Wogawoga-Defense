@@ -12,6 +12,8 @@
  *  - ENDLESS_HP_GROWTH      ↔ src/sim/battle.ts                 = 1.06
  */
 
+import type { EnemyDef, TowerDef, TraitTag, WavePreviewEntry } from './types';
+
 /** 판매 환급률 (invested × 0.6 내림) */
 export const SELL_REFUND_RATE = 0.6;
 /**
@@ -430,3 +432,195 @@ export const HP_CORR_MAX = 40;
 export const SHARDS_PER_BOSS_KILL = 2;
 /** 무한 모드 해금 조건: 스테이지 3 클리어 */
 export const ENDLESS_UNLOCK_STAGE = 3;
+
+// ---------------------------------------------------------------------------
+// 상성 계량 — 특성 태그 · 유효 배율 · 수요 막대 (docs/counter-plan.md 1단계)
+//
+// **여기는 밸런스를 정하지 않는다. 이미 있는 수치를 읽어 화면이 읽을 수 있는 모양으로
+// 바꿀 뿐이다.** 이 절의 어떤 함수도 시뮬레이션에서 호출되지 않는다 —
+// sim은 여전히 combat.damageEnemy 한 곳에서만 피해를 계산하고, 아래 식은 그 계산의
+// **거울**일 뿐이다. 둘이 어긋나면 화면이 거짓말을 하는 것이므로,
+// tests/data/preview.test.ts가 두 식이 같은 답을 내는지 잠근다.
+// ---------------------------------------------------------------------------
+
+/**
+ * 배지 우선순위 — 칩에는 **하나만** 그린다(390px에서 둘은 안 읽힌다).
+ * 순서의 근거는 "무엇이 내 답을 가장 크게 바꾸는가"다:
+ *  air    하드 게이트. 대공이 없으면 배율이 0이라 다른 무엇도 의미가 없다.
+ *  shield 앞의 N타를 통째로 버린다 — 타워 선택이 아니라 발사 횟수를 바꾼다.
+ *  armor  타격 크기를 벌한다 — 연사/한 방의 서열을 뒤집는다.
+ *  heal   처치 순서를 바꾼다(먼저 잡을 것).
+ *  raid   내 타워가 표적이 된다 — 배치 거리를 바꾼다.
+ *  enrage 마지막 40%만 빨라진다 — 답을 바꾸지는 않는다.
+ */
+export const TRAIT_PRIORITY: readonly TraitTag[] = ['air', 'shield', 'armor', 'heal', 'raid', 'enrage'];
+
+/**
+ * 적의 특성 태그 — **기존 필드만** 읽는다. 새 필드를 만들지 않는다(1단계의 계약).
+ * 신설 축(가죽🟫·흩어짐〽·정화✧)은 여기에 분기를 더하는 것으로 들어온다.
+ */
+export function enemyTraitsOf(def: EnemyDef): TraitTag[] {
+  const out: TraitTag[] = [];
+  if (def.flying) out.push('air');
+  if ((def.shieldHits ?? 0) > 0) out.push('shield');
+  if (def.armor > 0) out.push('armor');
+  if (def.healAura) out.push('heal');
+  if (def.towerAttack) out.push('raid');
+  if (def.enrage) out.push('enrage');
+  // 우선순위 정렬 — [0]이 칩에 그릴 배지 하나다
+  out.sort((a, b) => TRAIT_PRIORITY.indexOf(a) - TRAIT_PRIORITY.indexOf(b));
+  return out;
+}
+
+/**
+ * 이 타워가 **때릴 수 있는 무언가**를 가졌는가. 전쟁북(drum)은 dmg 0에 지상·공중
+ * 둘 다 false라 수요 막대의 분모가 정의되지 않는다 — 0으로 그리면 "쓸모없다"는
+ * 거짓말이 되므로 아예 그리지 않는다.
+ */
+export function isAttackTower(def: TowerDef): boolean {
+  if (!def.canTargetGround && !def.canTargetAir) return false;
+  return def.tiers.some((t) => t.dmg > 0);
+}
+
+/**
+ * 타워 한 종이 적 한 종에게 내는 **유효 배율** (0~1).
+ *   못 때린다(대공 없음 등)            → 0
+ *   때린다                             → max(1, dmg − armor) / dmg
+ *
+ * ⚠ 1단계는 `armor` 감산과 `canTargetAir`만 본다. 이유는 계약이다 —
+ * 이 단계는 밸런스를 한 자리도 바꾸지 않으므로, 아직 데이터에 없는 축을
+ * 화면에만 그리면 그것이야말로 거짓 정보다. 근사가 아니라 **지금 참인 전부**다.
+ *
+ * 남은 오차를 정직하게 적는다: 독가시의 DoT는 armor를 무시하고(combat.damageEnemy
+ * ignoreArmor), 번개의 체인·투석기의 스플래시는 여러 마리를 한 번에 친다.
+ * 곧 이 값은 **직격 한 방의 비율**이지 DPS 비율이 아니다.
+ */
+export function towerEffVs(def: TowerDef, tier: number, e: WavePreviewEntry): number {
+  const canHit = e.flying ? def.canTargetAir : def.canTargetGround;
+  if (!canHit) return 0;
+  const t = def.tiers[Math.max(0, Math.min(def.tiers.length - 1, Math.floor(tier)))];
+  const dmg = t ? t.dmg : 0;
+  if (dmg <= 0) return 0;
+  return Math.max(1, dmg - e.armor) / dmg;
+}
+
+/**
+ * **수요 막대** — demand[t] = Σ(hp_i × eff(t,i)) / Σ hp_i.
+ * 못 때리는 것은 0으로 세므로 막대 하나가 상성과 대공을 **함께** 말한다.
+ * 총 HP가 0이면(빈 웨이브) 0을 낸다.
+ */
+export function demandFor(def: TowerDef, tier: number, entries: readonly WavePreviewEntry[]): number {
+  let num = 0;
+  let den = 0;
+  for (const e of entries) {
+    den += e.totalHp;
+    num += e.totalHp * towerEffVs(def, tier, e);
+  }
+  return den > 0 ? num / den : 0;
+}
+
+/**
+ * 무력 판정선 — 이 아래면 손패 카드에 회색 오버레이가 붙는다.
+ * **장갑 축 전용이다** (공중은 아래 AIR_BLIND_SHARE가 따로 맡는다).
+ *
+ * 0.72의 유도 — 스테이지1 계량기 실측(previewWave(1..50), 덱 spear/catapult/frost, T1):
+ *   장갑이 두꺼운 웨이브 11개(w10·20·28·30·32·33·37·39·40·44·45, armor 비중 53~82%)
+ *     얼음 T1(dmg 7)  0.53~0.70  ← **전부 잡힌다**
+ *     창   T1(dmg 12) 0.73~0.82  ← 안 잡힌다 (아프지만 무력하지는 않다)
+ *     투석기 T1(dmg 30) 0.89~0.93 ← 안 잡힌다
+ *   w50(trex armor 8이 85%): 창 T1 **0.43** · 얼음 0.27 → 둘 다 잡힌다
+ *   장갑이 없는 웨이브 30개: 전 카드 1.00 → **한 장도 회색이 되지 않는다**
+ * 곧 이 선은 "장갑 앞의 저티어 얼음"과 "보스 앞의 저티어 창"만 고른다.
+ * 그리고 **티어를 올리면 경고가 사라진다** — 얼음 T3(dmg 18)은 같은 웨이브에서 0.78이다.
+ * (채널이 매 웨이브 켜져 있으면 그건 정보가 아니라 배경이다)
+ */
+export const DEMAND_WEAK = 0.72;
+/**
+ * **대공 맹점** — 공중을 못 때리는 타워는, 이번 웨이브의 공중 HP 비중이 이 값 이상이면
+ * 수요 막대와 **무관하게** 회색이 된다.
+ *
+ * 왜 판정선을 따로 두는가: 대공은 연속 감산이 아니라 **하드 게이트**다. 한 대도 못 댄다.
+ * 그런데 스테이지1의 하늘길은 공중 비중이 크지 않아(w22 23% · w26 16% · w34 11% ·
+ * w38 22% · w42 11% · w46 5%) 투석기의 수요 막대가 0.77~0.95에 머문다 — 곧 위 선
+ * 하나로는 **첫 하늘길에서 대공이 없는 손이 경고를 못 받는다.** 게이트에는 게이트의 자가
+ * 있어야 한다. 0.10은 w46(5%, 27마리 중 프테라 둘)만 빼고 다섯 하늘길을 전부 잡는다 —
+ * "스무 마리 중 두 마리를 못 때린다"는 카드를 죽이지 않지만 "넷 중 하나"는 죽인다.
+ */
+export const AIR_BLIND_SHARE = 0.1;
+/**
+ * 유리 판정선 — 이 위면 옅은 테두리. 단, **이번 웨이브에 벌하는 축이 실제로 있을 때만**
+ * (아래 hasCounterAxis). 아무 축도 없는 웨이브에서는 전 카드가 1.00이라
+ * 테두리가 전부 켜지고, 그러면 테두리는 아무 말도 하지 않는다.
+ *
+ * ⚠ 정직하게: 이 선은 **절대값**이라, 장갑 웨이브에서는 아무도 테두리를 못 받는다
+ * (T1 최고가 투석기 0.93이다). 그건 사실 그대로다 — 장갑 앞에서 "유리한" 카드는 없고
+ * **덜 나쁜** 카드가 있을 뿐이며, 그 서열은 수요 막대가 이미 길이로 말한다.
+ * 상대 순위로 테두리를 켜면 "이 셋 중 제일 낫다"가 "이건 잘 듣는다"로 읽혀,
+ * 세 장 다 나쁜 손에서 플레이어를 오도한다.
+ */
+export const DEMAND_STRONG = 0.97;
+/**
+ * 이번 웨이브에 **상성 축이 있는가** — 장갑이 있거나 공중이 섞였고, 그 몫이
+ * 총 HP의 이 비율 이상인가. 미만이면 "그냥 평범한 웨이브"라 유리 표시를 켜지 않는다.
+ */
+export const COUNTER_AXIS_SHARE = 0.15;
+
+export function hasCounterAxis(entries: readonly WavePreviewEntry[]): boolean {
+  let axis = 0;
+  let total = 0;
+  for (const e of entries) {
+    total += e.totalHp;
+    if (e.flying || e.armor > 0 || e.traits.includes('shield')) axis += e.totalHp;
+  }
+  return total > 0 && axis / total >= COUNTER_AXIS_SHARE;
+}
+
+/** 이번 웨이브의 **공중 HP 비중** (0~1) */
+export function airShareOf(entries: readonly WavePreviewEntry[]): number {
+  let air = 0;
+  let total = 0;
+  for (const e of entries) {
+    total += e.totalHp;
+    if (e.flying) air += e.totalHp;
+  }
+  return total > 0 ? air / total : 0;
+}
+
+/**
+ * **이 카드가 이번 웨이브에서 무엇에 막히는가** — 막히지 않으면 null.
+ * UI(회색 오버레이 + 특성 아이콘)와 테스트가 같은 함수를 쓴다.
+ *
+ * 두 축을 **다른 자로** 잰다 (위 두 상수의 주석 참조):
+ *  1. 공중 — 못 때리는데 공중 비중이 AIR_BLIND_SHARE 이상이면 즉시 'air'.
+ *     하드 게이트라 평균으로 희석되면 안 된다.
+ *  2. 장갑 — 수요 막대가 DEMAND_WEAK 아래면 'armor'.
+ * 둘 다 걸리면 공중이 이긴다. 한 대도 못 대는 쪽이 언제나 더 큰 문제다.
+ */
+export function counteredBy(
+  def: TowerDef,
+  tier: number,
+  entries: readonly WavePreviewEntry[],
+): TraitTag | null {
+  if (!isAttackTower(def)) return null;
+  if (!def.canTargetAir && airShareOf(entries) >= AIR_BLIND_SHARE) return 'air';
+  if (demandFor(def, tier, entries) >= DEMAND_WEAK) return null;
+  // 감산으로 잃은 체력이 실제로 있어야 '장갑 탓'이라고 말할 수 있다
+  let armorLoss = 0;
+  for (const e of entries) {
+    const canHit = e.flying ? def.canTargetAir : def.canTargetGround;
+    if (!canHit) continue;
+    armorLoss += e.totalHp * (1 - towerEffVs(def, tier, e));
+  }
+  return armorLoss > 0 ? 'armor' : null;
+}
+
+/** 이 카드가 이번 웨이브에 **유리한가** (옅은 테두리) */
+export function favoredAgainst(
+  def: TowerDef,
+  tier: number,
+  entries: readonly WavePreviewEntry[],
+): boolean {
+  if (!isAttackTower(def)) return false;
+  if (!hasCounterAxis(entries)) return false;
+  return demandFor(def, tier, entries) >= DEMAND_STRONG;
+}

@@ -28,13 +28,16 @@ import type {
   BattleSim,
   BattleStateView,
   CardState,
+  EnemyId,
   SimEvent,
   TowerState,
   Vec2,
   WaveDef,
+  WavePreview,
+  WavePreviewEntry,
 } from '@/data/types';
 import { Rng } from '@/core/rng';
-import { ALLY_MAX_ACTIVE } from '@/data/balance';
+import { ALLY_MAX_ACTIVE, enemyTraitsOf } from '@/data/balance';
 import { isBuildableCell, rasterizePathCells, sceneryCells } from '@/data/grid';
 import {
   allySortiePoints,
@@ -131,6 +134,8 @@ class Battle implements BattleSim {
       prepTicksLeft: PREP_TICKS_FIRST,
       earlyCallBonusGold: Math.floor(PREP_TICKS_FIRST * EARLY_CALL_RATE),
       hand,
+      // 읽기 전용 사본 — UI(미리보기 수요 막대)가 "내 덱"을 알아야 한다
+      deck: [...opts.deck],
       refreshCost: 0,
       enemies: world.enemies.items,
       towers: world.towers.items,
@@ -485,6 +490,70 @@ class Battle implements BattleSim {
     h = mix(h, this.clearedScenery.length);
     for (const key of this.clearedScenery) h = mix(h, key);
     return h;
+  }
+
+  /**
+   * 웨이브 미리보기 — **순수 조회**. 상태를 안 건드리고, 이벤트를 안 내고,
+   * hash()에 안 들어간다(이 메서드는 어떤 필드에도 쓰지 않는다).
+   *
+   * 기본값이 "다음에 올 웨이브"인 이유: prep 중에는 view.waveIndex가 **이미**
+   * 다음 웨이브 번호이고(startWave가 그 값을 그대로 쓴다), 전투 중이면 지금 웨이브라
+   * 다음은 +1이다. 두 국면을 하나의 식으로 쓰면 prep에서 한 웨이브 건너뛴 것을 보여준다.
+   * (docs/counter-plan.md 1단계는 `waveIndex + 1`로 적혀 있는데, 그 식은 전투 중에만 맞다.)
+   *
+   * hpMul은 스폰과 **같은 식**을 쓴다 — sim/waves.ts spawn의
+   * `max(1, round(def.hp × g.hpMul × extraHpMul))` 그대로다. 무한 모드 초과분
+   * (ENDLESS_HP_GROWTH^(wave−waveCount))도 startWave와 같은 조건으로 곱한다.
+   * 이 두 식이 어긋나면 미리보기가 거짓말을 하므로 tests/sim/preview.test.ts가
+   * "미리보기의 종별 합계 == 실제로 돌렸을 때 스폰된 종별 합계"를 잠근다.
+   */
+  previewWave(wave?: number): WavePreview {
+    const ctx = this.ctx;
+    const v = ctx.view;
+    const next = v.phase === 'prep' ? v.waveIndex : v.waveIndex + 1;
+    const w = Math.max(1, Math.floor(wave ?? next));
+    const def = ctx.opts.waveFor(w);
+    const extra = w > v.waveCount ? ENDLESS_HP_GROWTH ** (w - v.waveCount) : 1;
+    const byId = new Map<EnemyId, WavePreviewEntry>();
+    for (const g of def.groups) {
+      if (g.count <= 0) continue;
+      const eDef = ctx.opts.enemyDefs[g.enemyId];
+      if (!eDef) continue;
+      const maxHp = Math.max(1, Math.round(eDef.hp * g.hpMul * extra));
+      const hit = byId.get(g.enemyId);
+      if (hit) {
+        hit.count += g.count;
+        hit.totalHp += maxHp * g.count;
+        // 같은 종이 여러 hpMul로 나뉘면 배지는 **가장 단단한 개체**를 말한다
+        if (maxHp > hit.maxHp) hit.maxHp = maxHp;
+      } else {
+        byId.set(g.enemyId, {
+          defId: g.enemyId,
+          count: g.count,
+          maxHp,
+          totalHp: maxHp * g.count,
+          armor: eDef.armor,
+          flying: eDef.flying,
+          boss: eDef.boss ?? false,
+          traits: enemyTraitsOf(eDef),
+        });
+      }
+    }
+    // 총 HP 내림차순, 동점은 종 id 사전순 (완전 결정론 — 칩 순서가 시드에 흔들리지 않는다)
+    const entries = [...byId.values()].sort(
+      (a, b) => b.totalHp - a.totalHp || (a.defId < b.defId ? -1 : a.defId > b.defId ? 1 : 0),
+    );
+    let totalHp = 0;
+    let totalCount = 0;
+    let hasAir = false;
+    let boss = false;
+    for (const e of entries) {
+      totalHp += e.totalHp;
+      totalCount += e.count;
+      if (e.flying) hasAir = true;
+      if (e.boss) boss = true;
+    }
+    return { wave: w, entries, totalHp, totalCount, goldReward: def.goldReward, hasAir, boss };
   }
 
   canPlaceAt(cellX: number, cellZ: number): boolean {

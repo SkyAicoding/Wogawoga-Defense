@@ -263,6 +263,74 @@ export function counteredBy(def: TowerDef, tier: number, entries: readonly WaveP
 **되돌리기** — UI 파일 되돌림 + `BattleSim.previewWave` 삭제. **sim 로직 0줄 변경**이라 되돌림이 완전하다.
 **깨질 봉투** — **없다.**
 
+### 계량기 — 봇을 한 판도 안 돌리고 종별 HP 비중을 뽑는 법 (단계 1의 부산물)
+
+`previewWave(n)`은 **임의 웨이브**를 조회할 수 있는 순수 함수라, 스테이지 하나의 편성 전체를
+합산하는 데 시뮬레이션이 필요 없다. 한 스테이지에 전투 인스턴스 **하나**를 만들고
+`waveCount`만큼 조회해 더하면 끝이다 — 40시드 스윕이 900초 걸리던 자리에서 **밀리초**가 든다.
+
+```ts
+// 스테이지 하나의 종별 HP 비중 (tests/data/counter.test.ts 와 같은 임포트면 어디서든 돈다)
+const stage = STAGES[0]!;
+const sim = createBattle({
+  stage, stars: {}, deck: ['spear'], endless: false, seed: 1,
+  towerDefs: TOWER_DEFS, enemyDefs: ENEMY_DEFS, allyDefs: ALLY_DEFS,
+  baseLevels: BASE_LEVELS, waveFor: makeWaveFor(stage),
+});
+const hp = new Map<EnemyId, number>();
+let total = 0;
+for (let w = 1; w <= stage.waveCount; w++) {
+  for (const e of sim.previewWave(w).entries) {   // ← 상태를 안 건드린다. 순서 무관
+    hp.set(e.defId, (hp.get(e.defId) ?? 0) + e.totalHp);
+    total += e.totalHp;
+  }
+}
+// 비중 = hp.get(id)! / total
+```
+
+같은 조회로 **웨이브별** 축 비중도 바로 나온다(공중 = `airShareOf(entries)`, 장갑 =
+`armor > 0`인 항목의 `totalHp` 합). 곧 이 한 함수가 §I-4의 측정 도구이자 §단계 2·4의
+투여량 근거이고, `demandFor(towerDef, tier, entries)`를 얹으면 "그 편성 앞에서 각 타워가
+몇 배로 듣는가"까지 봇 없이 나온다.
+
+**스테이지1 실측 (w1~50 합산, 총 HP 345,232)**
+
+| 종 | HP 비중 | HP | 마릿수 | 지금 가진 축 |
+|---|---:|---:|---:|---|
+| blade | 26.3% | 90,941 | 267 | 습격 |
+| trike | 14.8% | 51,174 | 51 | 🛡 armor 4 |
+| raptor | 14.6% | 50,334 | 262 | — |
+| trex | 11.0% | 37,998 | 1 | 🛡 armor 8 (보스) |
+| boar | 10.6% | 36,469 | 73 | 격노 |
+| archer | 9.1% | 31,368 | 115 | 습격 |
+| spino | 6.9% | 23,671 | 5 | 🛡 armor 4 (보스) |
+| compy | 5.0% | 17,145 | 196 | — |
+| ptera | 1.8% | 6,132 | 12 | ☁ 하늘 |
+
+**이 표가 단계 2에 즉시 말해 주는 것 셋:**
+
+1. **§I-4 안전선이 이미 아슬아슬하다.** 단계 2가 축을 붙이려는 두 종(raptor 〽 · boar 🟫)의
+   합이 **25.1%** (86,803 / 345,232)로 "≤ 25%"를 **0.1%p 넘는다**. 착수 전에 재라고 했던
+   그 값이고, 실제로 넘었다. 선택지는 셋이다 — ⓐ 문턱을 25 → 30%로 고쳐 적고 근거를 남긴다,
+   ⓑ raptor 대신 compy(5.0%)에 〽를 준다(다만 콤피는 투석기의 정당한 밥이라 §C가 일부러 비워
+   둔 자리다), ⓒ 두 축을 한 웨이브에 겹치지 않게 편성 쪽에서 가른다. **이건 취향 판단이라
+   단계 2 착수 시 사용자에게 묻는다.**
+2. **공중은 1.8%뿐이다.** 하늘길 6회(w22·26·34·38·42·46)의 웨이브별 공중 비중은
+   23% / 16% / 11% / 22% / 11% / 5%인데 50웨이브 전체로는 1.8%다. 곧 **대공은 국지적으로만
+   치명적**이고, 그래서 손패 경고의 공중 판정은 총합이 아니라 **그 웨이브의 비중**으로 재야
+   한다(`AIR_BLIND_SHARE = 0.10`, `data/balance.ts` 주석에 유도 있음).
+3. **습격대가 35.4%다** (blade 26.3 + archer 9.1). 스테이지1의 총 HP 3분의 1이 "기지가 아니라
+   타워를 부수러 오는" 종이고, 이 둘은 지금 방어 특성이 하나도 없다. 단계 4가 blade에
+   `armor 2`를 검토하는 자리의 크기가 이 숫자다 — 26.3%에 armor를 주는 것은 §Q1 표의
+   "blade 0.12"가 가정한 것보다 **두 배 이상** 크다.
+
+**스테이지2~6 총 HP** (같은 조회, 참고용): s2 1,476,803 · s3 2,065,178 · s4 3,463,986 ·
+s5 4,657,920 · s6 7,991,326. 상위 3종은 s2 raptor 17.3 / trike 15.4 / lancer 14.0,
+s3 raptor 18.5 / lancer 12.1 / blade 11.8, s4 compy 20.3 / raptor 12.8 / blade 10.2,
+s5 raptor 15.9 / compy 13.3 / ptera 10.0, s6 blade 19.6 / raptor 17.5 / trex 10.2 (%).
+**mammoth는 s4 5.3% · s5 8.5% · s6 6.8%**이므로 단계 6의 `mammoth armor→hide` 교체는
+세 스테이지에 동시에 걸린다 — 봉투가 s1·s6만 재는 것을 감안해 읽어야 한다.
+
 ---
 
 ## 단계 2 — 가죽 🟫 + 흩어짐 〽 (반투석기 축)

@@ -126,6 +126,36 @@ export const ko: Record<string, string> = {
   'ally.slinger.desc': '뒤에서 던져요. 공중도 맞히지만 아무도 막지 못해요',
   'ally.guardian.name': '파수꾼',
   'ally.guardian.desc': '방패와 갑옷. {n}마리에게 둘러싸여도 수명을 채워요',
+  // --- 웨이브 미리보기 띠 (prep 전용) --------------------------------------
+  // 칩에는 **적 이름을 쓰지 않는다** — '안킬로사우루스'가 390px에서 깨진다.
+  // 이름은 탭 후 상세에만 나오고, 칩은 아이콘 + 마릿수 + 특성 배지로만 말한다.
+  'battle.preview.title': '다음 웨이브',
+  'battle.preview.expand': '자세히 보기',
+  'battle.preview.collapse': '접기',
+  'battle.preview.demand': '내 타워가 얼마나 듣나',
+  'battle.preview.more': '+{n}종',
+  'battle.preview.hp': '체력 {n} × {c}마리',
+  'battle.preview.good': '잘 들어요',
+  'battle.preview.bad': '안 들어요',
+  // 없는 답을 알려주는 것은 정보가 아니라 좌절이다 — 그래서 **내 덱 안**에서만 찾는다
+  'battle.preview.noAnswer': '지금 덱에는 잘 듣는 카드가 없어요',
+  'battle.preview.plain': '특별한 방어는 없어요',
+  'battle.preview.weakVs': '{n} 상대로 약해요',
+
+  // 특성 — 이름은 배지에, 설명은 상세 한 줄에 쓴다
+  'trait.air.name': '하늘',
+  'trait.air.desc': '날아서 지나가요 — 공중을 때리는 타워만 닿아요',
+  'trait.shield.name': '방패',
+  'trait.shield.desc': '처음 몇 대를 통째로 무시해요 — 자주 때려서 벗겨내세요',
+  'trait.armor.name': '장갑',
+  'trait.armor.desc': '한 대마다 {n}씩 깎여요 — 작게 여러 번 때리는 타워가 손해예요',
+  'trait.heal.name': '치유',
+  'trait.heal.desc': '주변 동료를 계속 되살려요 — 이쪽을 먼저 잡으세요',
+  'trait.raid.name': '습격',
+  'trait.raid.desc': '기지가 아니라 내 타워를 부수러 와요 — 길에서 떨어뜨려 지으세요',
+  'trait.enrage.name': '격노',
+  'trait.enrage.desc': '체력이 떨어지면 훨씬 빨라져요 — 느리게 만들어 두세요',
+
   'battle.waveBanner': '웨이브 {n}',
   'battle.finalWaveBanner': '마지막 웨이브!',
   'battle.bossBanner': '보스 출현!',

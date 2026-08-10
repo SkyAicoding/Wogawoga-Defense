@@ -5,7 +5,14 @@
  * 선택된 타워 패널: BattleUiApi 계약에 selectedTower()/requestSetTargeting()이 없어
  * 선택 확장 인터페이스로 기능 감지한다 — 없으면 패널을 숨긴다 (contractIssues 보고).
  */
-import type { AllyId, BattleUiApi, GameFacade, TargetingMode, TowerState } from '@/data/types';
+import type {
+  AllyId,
+  BattleUiApi,
+  GameFacade,
+  TargetingMode,
+  TowerState,
+  WavePreview,
+} from '@/data/types';
 import { TICK_RATE } from '@/data/types';
 import {
   ALL_ALLY_IDS,
@@ -13,6 +20,9 @@ import {
   ALLY_DEFS,
   ALLY_MAX_ACTIVE,
   ALLY_RETIRE_REFUND,
+  TOWER_DEFS,
+  counteredBy,
+  favoredAgainst,
 } from '@/data';
 import type { Screen } from '@/core/fsm';
 import { h, cls, fmt, mount, unmount, uiRoot, setText } from '../dom';
@@ -31,6 +41,8 @@ import {
 import type { TowerCard } from '../widgets/card';
 import { showModal } from '../widgets/modal';
 import type { ModalHandle } from '../widgets/modal';
+import { createWavePreview } from '../widgets/wavepreview';
+import type { WavePreviewBand } from '../widgets/wavepreview';
 
 /** selectedTower/requestSetTargeting이 계약(BattleUiApi)에 편입됨 — 별칭만 유지 */
 type BattleUiApiExt = BattleUiApi;
@@ -71,6 +83,15 @@ export function createBattleHud(): Screen<GameFacade> {
 
   // 열린 일시정지 모달 — 화면 이탈 시 닫아 결과 화면에 잔존하지 않게 한다
   let pauseModal: ModalHandle | null = null;
+
+  /**
+   * 웨이브 미리보기 띠 (prep 전용) + 그 미리보기를 손패 경고와 **함께 쓴다**.
+   * 웨이브 번호가 바뀔 때만 새로 뽑는다 — previewWave는 순수 함수이므로 같은 웨이브에
+   * 대해 항상 같은 값이고, 매 프레임 부르면 60Hz로 객체를 버리는 셈이 된다.
+   */
+  let band: WavePreviewBand | null = null;
+  let preview: WavePreview | null = null;
+  let previewWaveNo = -1;
 
   /**
    * 출동 버튼 — 아군 부족원 생산. **마을 패널 안**에 산다 (6단계 개편).
@@ -496,10 +517,16 @@ export function createBattleHud(): Screen<GameFacade> {
         onClick: () => api(facade)?.requestRefresh(),
       }, h('span', { class: 'refresh-ico', text: '🔄' }), refreshLabel);
 
+      // --- 웨이브 미리보기 띠 ------------------------------------------------
+      // 웨이브 호출 버튼 **바로 위** — 둘 다 prep에만 존재하므로 세로 예산을 나눠 쓴다.
+      // (상단은 390px에서 이미 포화라 HUD_TOP_PX를 한 자리도 안 건드린다)
+      band = createWavePreview();
+
       const bottom = h('div', { class: 'hud-bottom' },
         panelHost,
         scPanel,
         htPanel,
+        band.el,
         callWaveBtn,
         h('div', { class: 'hand-row hud-item' }, handHost, refreshBtn),
       );
@@ -514,6 +541,8 @@ export function createBattleHud(): Screen<GameFacade> {
       lastSelScenery = '';
       lastSelBase = false;
       lastAllySig = '';
+      preview = null;
+      previewWaveNo = -1;
       if (b) this.update?.(facade, 0);
     },
 
@@ -530,6 +559,10 @@ export function createBattleHud(): Screen<GameFacade> {
       allyBtns = [];
       lastAllySig = '';
       lastAllyPillSig = '';
+      band?.reset();
+      band = null;
+      preview = null;
+      previewWaveNo = -1;
     },
 
     update(facade) {
@@ -581,11 +614,31 @@ export function createBattleHud(): Screen<GameFacade> {
         );
         for (const c of cards) handHost.appendChild(c.el);
       }
+      /*
+       * 이번에 상대할 웨이브의 미리보기 — **prep이면 곧 올 웨이브, 전투 중이면 지금 웨이브**다.
+       * state.waveIndex가 두 국면에서 정확히 그 값이므로 번호를 그대로 넘긴다
+       * (기본 인자를 쓰면 전투 중에 '다음' 웨이브가 나와 지금 손에 든 카드와 어긋난다).
+       * 웨이브가 바뀔 때만 다시 뽑는다 — 순수 함수라 같은 웨이브면 항상 같은 값이다.
+       */
+      if (s.waveIndex !== previewWaveNo) {
+        previewWaveNo = s.waveIndex;
+        preview = b.sim.previewWave(s.waveIndex);
+      }
+      band?.update(s, preview);
+
       const sel = b.selectedCard();
       cards.forEach((c, i) => {
         c.setSelected(sel === i);
         const cost = s.hand[i]?.cost ?? 0;
         c.setDisabled(cost > s.gold);
+        /*
+         * 손패 상성 경고 — **배치 티어(T1)** 기준이다. 이 카드를 지금 놓으면 T1이 서기
+         * 때문이다(이미 세운 타워의 티어는 미리보기 띠의 수요 막대가 따로 말한다).
+         * 새로고침을 슬롯머신에서 **정보에 근거한 구매**로 바꾸는 것이 이 표시의 값이다.
+         */
+        const def = TOWER_DEFS[c.towerId];
+        const entries = preview ? preview.entries : [];
+        c.setCounter(counteredBy(def, 0, entries), favoredAgainst(def, 0, entries));
       });
       setText(refreshLabel, s.refreshCost === 0 ? t('common.free') : fmt(s.refreshCost));
 

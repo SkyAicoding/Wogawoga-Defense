@@ -12,6 +12,43 @@ export type DamageKind = 'normal' | 'crit' | 'poison' | 'burn' | 'heal' | 'gold'
 
 const MAX_ACTIVE = 24;
 
+// ---------------------------------------------------------------------------
+// 표기 규약 — **색만으로 구분하지 않는다**
+//
+// 색각 이상에서 색은 채널이 아니다. 그래서 상성이 개입한 타격에는 **부호**를 준다:
+//   감산된 피해 `(18)` — 괄호        유리한 피해 `43!` — 느낌표
+// 괄호는 "원래보다 작다", 느낌표는 "장갑이 있었는데도 거의 다 들어갔다"이고,
+// 둘 다 **같은 적에게 서로 다른 타워를 쐈을 때 나란히 보인다** — 그게 이 표기의 값이다
+// (트리케라톱스 armor 4: 얼음 T1 `(3)` · 창 T1 `(8)` · 발리스타 T1 `51!`).
+//
+// 왜 이 형태인가 (docs/counter-plan.md Q3 층 3): 24슬롯 난전에서 가장 짧아야 한다.
+// `76 ⤳ 36`(두 수 + 화살표)나 '빗나감'(낱말, ko/en 폭이 다르다)은 겹치면 못 읽는다.
+//
+// 지금은 **armor 감산에만** 붙는다. 신설 축(가죽🟫·흩어짐〽)은 Phase 2에서
+// 같은 규약에 얹는다 — 새 부호를 만들지 않고 괄호를 그대로 쓴다.
+// ---------------------------------------------------------------------------
+/** 원래 피해의 이 비율 이상을 장갑이 먹었으면 괄호 */
+export const MITIGATED_SHARE = 0.25;
+/** 장갑이 있는데도 이 비율 이하만 먹혔으면 느낌표 (뚫었다) */
+export const PIERCED_SHARE = 0.1;
+
+/**
+ * 데미지 숫자 문자열. `armor`는 **이 타격에 실제로 적용된 고정 감산**이다
+ * (적용되지 않는 경로 — 독 DoT의 ignoreArmor 등 — 은 호출자가 0을 넘긴다).
+ *
+ * 원래 피해를 이벤트가 싣고 다니지 않으므로 `dealt + armor`로 되짚는다.
+ * 감산 후 하한(최소 1)에 걸린 타격에서는 이 되짚기가 실제보다 작게 나오는데,
+ * 그때는 비율이 더욱 커져 어차피 괄호가 붙으므로 판정이 뒤집히지 않는다.
+ */
+export function damageText(dealt: number, armor: number): string {
+  const n = Math.max(1, Math.round(dealt));
+  if (armor <= 0) return String(n);
+  const share = armor / (n + armor);
+  if (share >= MITIGATED_SHARE) return `(${n})`;
+  if (share <= PIERCED_SHARE) return `${n}!`;
+  return String(n);
+}
+
 /** style.css의 .dmg--* 기본 크기(rem). scale 인자를 곱해 인라인으로 덮어쓴다 */
 const BASE_REM: Record<DamageKind, number> = {
   normal: 1.05,

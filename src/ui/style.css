@@ -418,6 +418,100 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   min-width: 0; overflow: hidden; text-overflow: ellipsis;
 }
 
+/* --- 웨이브 미리보기 띠 (prep 전용) ---------------------------------------
+ * 세로 예산이 이 위젯의 유일한 설계 제약이다. 접힘 상태는 **한 줄(36px)**이고
+ * 그 한 줄도 prep에만 존재한다 — 웨이브 호출 버튼(58px)과 같은 생애를 산다.
+ * 상단 HUD(HUD_TOP_PX 118)는 한 자리도 안 건드린다.
+ *
+ * 배경에는 hud-item을 주지 않는다(다른 패널과 같은 규약) — 칩·토글 버튼만
+ * 포인터를 받고 나머지는 캔버스로 흘려보내 띠에 가린 셀도 그대로 탭된다.
+ */
+.wave-preview {
+  width: 100%; background: linear-gradient(180deg, #4a3a24, #33261a);
+  border: var(--bd); border-radius: var(--r-md); box-shadow: var(--pop);
+  padding: 5px 8px; display: flex; flex-direction: column; gap: 6px;
+  animation: card-pop 0.25s ease both;
+}
+.wp-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.wp-title { font-size: 0.68rem; font-weight: 900; opacity: 0.78; flex: 0 0 auto; }
+.wp-wave { font-size: 0.92rem; font-weight: 900; color: var(--gold); flex: 0 0 auto; }
+/*
+ * 칩 줄은 **접어도 자르지 않는다** — 넘치면 가로로 민다. 세로로 흘리면 접힘이
+ * 두 줄이 되어 세로 예산 약속이 깨지고, 잘라 버리면 그 종은 화면에서 사라진다.
+ */
+.wp-chips {
+  flex: 1; min-width: 0; display: flex; gap: 5px; align-items: center;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+}
+.wp-chips::-webkit-scrollbar { display: none; }
+/*
+ * **펼치면 접힘의 약속이 풀린다** — 접힘은 "한 줄"을 지켜야 하지만 펼침은 그럴 이유가 없다.
+ * 가로로 밀린 칩은 320px에서 서너 개째부터 화면 밖이라, 펼친 상태에서까지 밀면
+ * 탭해서 상세를 볼 수 없는 종이 생긴다. 펼침에서는 줄바꿈으로 **전부** 보여 준다.
+ */
+.wave-preview.is-open .wp-chips { flex-wrap: wrap; overflow-x: visible; }
+/* 칩이 여러 줄이 되면 웨이브 번호와 토글은 **첫 줄에** 붙어 있어야 머리처럼 읽힌다 */
+.wave-preview.is-open .wp-head { align-items: flex-start; }
+.wave-preview.is-open .wp-title, .wave-preview.is-open .wp-wave { padding-top: 4px; }
+.wp-chip {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 2px;
+  min-height: 30px; padding: 2px 5px 2px 3px;
+  border: 2px solid rgba(0, 0, 0, 0.45); border-radius: var(--r-sm);
+  background: rgba(20, 14, 8, 0.55); color: var(--cream);
+}
+.wp-chip.is-sel { border-color: var(--gold); background: rgba(255, 208, 74, 0.18); }
+.wp-chip.is-boss { border-color: var(--red); }
+.wp-chip-ico { width: 26px; height: 26px; flex: 0 0 auto; }
+.wp-chip-ico svg { width: 100%; height: 100%; display: block; }
+.wp-chip-n { font-size: 0.76rem; font-weight: 900; }
+.wp-more { flex: 0 0 auto; font-size: 0.72rem; font-weight: 800; opacity: 0.75; padding: 0 2px; }
+.wp-toggle {
+  flex: 0 0 auto; min-width: 30px; min-height: 30px; border-radius: var(--r-sm);
+  border: 2px solid rgba(0, 0, 0, 0.45); background: rgba(20, 14, 8, 0.55);
+  color: var(--gold); font-weight: 900; font-size: 0.9rem;
+}
+/* 배지 — **색만으로 구분하지 않는다**: 아이콘(형태) + 낱말이 항상 함께 간다 */
+.wp-badge { display: inline-flex; align-items: center; gap: 1px; font-size: 0.62rem; font-weight: 900; }
+.wp-badge-ico { width: 11px; height: 11px; }
+.wp-badge-ico svg { width: 100%; height: 100%; display: block; }
+.wp-badge--air { color: #9fdcf7; }
+.wp-badge--armor { color: #d9c8a0; }
+.wp-badge--shield { color: #ffd04a; }
+.wp-badge--heal { color: #8be36a; }
+.wp-badge--raid { color: #ff9d6a; }
+.wp-badge--enrage { color: #ff8a8a; }
+.wp-body { display: flex; flex-direction: column; gap: 5px; }
+.wp-bars { display: flex; flex-direction: column; gap: 3px; }
+.wp-bars-label { font-size: 0.66rem; font-weight: 900; opacity: 0.72; }
+.wp-bar { display: flex; align-items: center; gap: 6px; }
+.wp-bar-ico { width: 18px; height: 18px; flex: 0 0 auto; }
+.wp-bar-ico svg, .wp-bar-ico img { width: 100%; height: 100%; display: block; border-radius: 4px; }
+.wp-bar-track {
+  flex: 1; min-width: 0; height: 9px; border-radius: 5px;
+  background: rgba(0, 0, 0, 0.42); overflow: hidden;
+}
+.wp-bar-fill { height: 100%; background: linear-gradient(90deg, #8be36a, #d9f28a); }
+/* 무력(DEMAND_WEAK 미만)은 **길이와 색을 함께** 바꾼다 — 길이가 1차 신호다 */
+.wp-bar.is-weak .wp-bar-fill { background: linear-gradient(90deg, #a05a3a, #d98a5a); }
+.wp-bar-val { flex: 0 0 34px; text-align: right; font-size: 0.7rem; font-weight: 900; color: var(--gold); }
+.wp-bar.is-weak .wp-bar-val { color: #ff9d6a; }
+.wp-detail {
+  display: flex; flex-direction: column; gap: 3px;
+  border-top: 2px solid rgba(0, 0, 0, 0.3); padding-top: 5px;
+}
+.wp-d-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.wp-d-name { font-size: 0.86rem; font-weight: 900; }
+.wp-d-hp { font-size: 0.68rem; font-weight: 800; opacity: 0.8; }
+.wp-d-trait { font-size: 0.7rem; font-weight: 700; opacity: 0.9; line-height: 1.25; }
+.wp-d-row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.wp-d-label { font-size: 0.66rem; font-weight: 900; color: #8be36a; flex: 0 0 auto; }
+.wp-d-row--bad .wp-d-label { color: #ff9d6a; }
+.wp-d-tw { display: inline-flex; align-items: center; gap: 3px; font-size: 0.68rem; font-weight: 800; }
+.wp-d-tw-ico { width: 16px; height: 16px; }
+.wp-d-tw-ico svg, .wp-d-tw-ico img { width: 100%; height: 100%; display: block; border-radius: 3px; }
+.wp-d-tw-eff { color: var(--gold); font-weight: 900; }
+.wp-d-none { font-size: 0.68rem; font-weight: 800; color: #ff9d6a; }
+
 .hand-row { display: flex; gap: 10px; width: 100%; align-items: stretch; }
 .hand-cards { display: flex; gap: 10px; flex: 1; }
 .tcard {
@@ -429,6 +523,21 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .tcard:active { transform: scale(0.94); }
 .tcard.is-selected { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(255, 208, 74, 0.55), var(--pop); transform: translateY(-6px); }
 .tcard.is-disabled { filter: grayscale(0.85) brightness(0.6); }
+/*
+ * 이번 웨이브 상성 — **회색으로 죽이지 않는다.** is-disabled(골드 부족)와 같은 회색을
+ * 쓰면 "돈이 없다"와 "안 듣는다"가 한 신호로 뭉개진다. 여기서는 채도만 낮추고
+ * 모서리에 **특성 아이콘**을 얹어 형태로 이유를 말한다(색각 대응).
+ * 카드는 여전히 눌린다 — 이건 금지가 아니라 정보다.
+ */
+.tcard.is-countered { filter: grayscale(0.6); }
+.tcard.is-countered .tcard-icon { opacity: 0.55; }
+.tcard.is-favored { border-color: rgba(255, 208, 74, 0.75); box-shadow: 0 0 0 2px rgba(255, 208, 74, 0.28), var(--pop); }
+.tcard-warn {
+  position: absolute; top: 3px; right: 3px; width: 17px; height: 17px;
+  color: #ff9d6a; filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.7));
+}
+.tcard-warn svg { width: 100%; height: 100%; display: block; }
+.tcard { position: relative; }
 .tcard-icon { width: 44px; height: 44px; }
 .tcard-icon svg { width: 100%; height: 100%; }
 .tcard-name { font-size: 0.78rem; font-weight: 800; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -647,6 +756,14 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   }
   .callwave { min-height: 46px; padding: 2px 20px; }
   .callwave-main { font-size: 1.05rem; }
+  /*
+   * 미리보기 띠: 가로에서는 '다음 웨이브'라는 낱말을 접는다. 바로 옆 웨이브 번호와
+   * 상단 HUD의 웨이브 배지가 같은 말을 이미 하고 있어 낱말이 사는 것은 자리뿐이다.
+   * 칩과 토글의 터치 타깃(30px)은 그대로 둔다 — 여기서 더 줄이면 못 누른다.
+   */
+  .wp-title { display: none; }
+  .wave-preview { padding: 4px 8px; gap: 4px; }
+  .wp-chip-ico { width: 22px; height: 22px; }
   .tower-panel { flex-direction: row; align-items: center; gap: 10px; padding: 8px 12px; }
   .tp-head { flex: 0 0 auto; }
   .tp-btns { flex: 1; flex-wrap: nowrap; }
@@ -693,6 +810,11 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
     padding-top: 0; padding-left: 8px;
     border-top: none; border-left: 2px solid rgba(0, 0, 0, 0.28);
   }
+  /* 같은 이유로 미리보기 띠도 낱말을 접는다 — 320×568에서 접힘 한 줄이 32px가 된다 */
+  .wp-title { display: none; }
+  .wave-preview { padding: 4px 7px; gap: 4px; }
+  .wp-chip-ico { width: 22px; height: 22px; }
+  .wp-badge-txt { display: none; } /* 배지는 아이콘만 — 낱말은 탭 후 상세에 있다 */
 }
 
 /* 저모션 선호 시 장식 애니메이션 축소 */

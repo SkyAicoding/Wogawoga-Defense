@@ -318,6 +318,66 @@ export interface WaveDef {
   goldReward: number;
 }
 
+// ---------------------------------------------------------------------------
+// 웨이브 미리보기 (읽기 전용 조회 — 상태를 건드리지 않고 hash()에도 안 들어간다)
+// ---------------------------------------------------------------------------
+/**
+ * 적의 **방어 특성 태그** — 지금은 전부 기존 필드에서 유도한다(신설 필드 0개).
+ * 유도 규칙은 src/data/balance.ts enemyTraitsOf 한 곳에만 있다.
+ *
+ * ⚠ 이 목록은 자리다. 상성 개편(docs/counter-plan.md)의 신설 축
+ * — 가죽🟫 · 흩어짐〽 · 정화✧ — 은 여기에 태그를 더하는 것으로 들어오고,
+ * 그때도 배지·막대·데미지 표기는 같은 규약을 그대로 쓴다.
+ */
+export type TraitTag =
+  | 'air' // 하늘 — flying (대공만이 닿는다)
+  | 'shield' // 방패 — shieldHits (앞의 N타를 통째로 무시)
+  | 'armor' // 장갑 — armor (타격당 고정 감산 → 작은 타격을 벌한다)
+  | 'heal' // 치유 — healAura (주변을 되살린다)
+  | 'raid' // 습격 — towerAttack (기지가 아니라 내 타워를 부순다)
+  | 'enrage'; // 격노 — enrage (저체력에서 빨라진다)
+
+/** 한 웨이브에 나오는 **한 종**의 요약 (그 종의 모든 SpawnGroup을 합산한 것) */
+export interface WavePreviewEntry {
+  defId: EnemyId;
+  /** 이 웨이브에 나오는 총 마릿수 */
+  count: number;
+  /**
+   * 개체 최대 HP = max(1, round(def.hp × hpMul)) — 웨이브 스케일이 반영된 실제 값이고
+   * 스폰 시점의 EnemyState.maxHp와 **정확히 같은 식**이다(sim/waves.ts spawn).
+   * 같은 종이 hpMul이 다른 그룹으로 나뉘면 **가장 단단한 개체**의 값이다
+   * (배지는 "한 마리를 죽이려면 얼마가 드는가"를 말하므로 최악을 보여야 한다).
+   */
+  maxHp: number;
+  /** 이 종이 이 웨이브에 들고 오는 체력 총합 (그룹별 정확 합산) */
+  totalHp: number;
+  /** 타격당 고정 감산 (EnemyDef.armor 그대로) — 수요 막대가 이 값만으로 계산된다 */
+  armor: number;
+  flying: boolean;
+  boss: boolean;
+  /** 특성 태그 (우선순위 정렬 — [0]이 칩에 그릴 배지 하나다) */
+  traits: TraitTag[];
+}
+
+/**
+ * 웨이브 미리보기 — **순수 조회**다. 시뮬레이션 상태를 한 톨도 건드리지 않고,
+ * 이벤트를 내지 않으며, hash()에 들어가지 않는다. 임의 웨이브를 조회할 수 있어
+ * 밸런스 계량기로도 쓴다(docs/counter-plan.md "계량기" 문단).
+ */
+export interface WavePreview {
+  /** 1-base 웨이브 번호 */
+  wave: number;
+  /** 종별 합산. **총 HP 내림차순**(동점은 종 id 사전순) — 칩 순서가 곧 위협 순서다 */
+  entries: WavePreviewEntry[];
+  totalHp: number;
+  totalCount: number;
+  goldReward: number;
+  /** 공중 적이 하나라도 있는가 (대공이 없는 덱에 대한 즉답) */
+  hasAir: boolean;
+  /** 보스가 있는가 */
+  boss: boolean;
+}
+
 export interface WavePlanParams {
   /** 웨이브1 예산 */
   budgetBase: number;
@@ -591,6 +651,14 @@ export interface BattleStateView {
   /** 지금 callWave 시 받을 조기 호출 보너스 골드 (prep 아닐 땐 0) */
   earlyCallBonusGold: number;
   hand: CardState[];
+  /**
+   * 이 판의 **카드 덱** (BattleOptions.deck 그대로, 읽기 전용).
+   * 손패는 여기서 뽑히므로 손패만 보면 "내가 쓸 수 있는 타워"의 부분집합만 보이고,
+   * 그것도 새로고침마다 바뀐다. 웨이브 미리보기의 수요 막대는 **내 덱에 있는 타워만**
+   * 그려야 하므로(없는 답을 알려주는 것은 정보가 아니라 좌절이다) 전체 목록이 필요하다.
+   * 시뮬레이션은 이 배열을 절대 수정하지 않는다 — hash()에도 들어가지 않는다.
+   */
+  deck: readonly TowerId[];
   refreshCost: number; // 0이면 무료
   enemies: readonly EnemyState[];
   towers: readonly TowerState[];
@@ -969,6 +1037,16 @@ export interface BattleSim {
   drainEvents(): SimEvent[];
   /** 결정론 검증용 상태 해시 */
   hash(): number;
+  /**
+   * **웨이브 미리보기** (읽기 전용). 인자를 생략하면 "다음에 올 웨이브"다 —
+   * prep 중에는 state.waveIndex가 이미 다음 웨이브 번호이므로 그대로,
+   * 전투 중이면 waveIndex + 1이다.
+   *
+   * 상태를 안 건드리고 이벤트를 안 내며 hash()에 안 들어간다. 임의 웨이브를
+   * 조회할 수 있는 것이 계약의 일부다 — 그래야 봇을 한 판도 안 돌리고
+   * 스테이지의 종별 HP 비중을 뽑는 계량기로 쓸 수 있다.
+   */
+  previewWave(wave?: number): WavePreview;
   /** 배치 가능 여부 (슬롯이고 비어있는가) */
   canPlaceAt(cellX: number, cellZ: number): boolean;
   /** 현재 배치/업그레이드 비용 조회 등 UI 헬퍼 */
