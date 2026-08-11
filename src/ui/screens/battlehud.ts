@@ -37,6 +37,7 @@ import {
   sceneryIconSvg,
   towerCountSvg,
   towerIconSvg,
+  traitIconSvg,
 } from '../widgets/card';
 import type { TowerCard } from '../widgets/card';
 import { showModal } from '../widgets/modal';
@@ -442,7 +443,12 @@ export function createBattleHud(): Screen<GameFacade> {
         const costLabel = h('span', { class: 'ally-btn-cost' });
         // 설명은 아래 안내 줄에서 읽는 게 기본 동선이지만, 마우스/스크린리더 경로도 같이 연다.
         // (title은 데스크톱 호버, aria-label은 보조기기 — 둘 다 같은 문장을 쓴다)
-        const label = `${t(`ally.${defId}.name`)} — ${allyDesc(defId)} · ${allyRules()}`;
+        // 가죽을 여는 카드(파수꾼)만 배지를 단다 — 데이터가 정하므로 종 이름을
+        // 여기 박지 않는다. `sunder`를 끄면 배지도 같이 사라진다.
+        const opensHide = ALLY_DEFS[defId].sunder === true;
+        const label =
+          `${t(`ally.${defId}.name`)} — ${allyDesc(defId)} · ${allyRules()}` +
+          (opensHide ? ` · ${t('battle.ally.sunderHint')}` : '');
         const el = h('button', {
           class: 'ally-btn hud-item',
           attrs: { type: 'button', 'aria-label': label, title: label },
@@ -452,6 +458,14 @@ export function createBattleHud(): Screen<GameFacade> {
           h('span', { class: 'ally-btn-name', text: t(`ally.${defId}.name`) }),
           costLabel,
         );
+        if (opensHide) {
+          el.appendChild(
+            h('span', { class: 'ally-btn-sunder' },
+              h('span', { class: 'ally-btn-sunder-ico', html: traitIconSvg('hide') }),
+              h('span', { class: 'ally-btn-sunder-txt', text: t('battle.ally.sunder') }),
+            ),
+          );
+        }
         return { el, costLabel, defId };
       });
       /**
@@ -473,11 +487,19 @@ export function createBattleHud(): Screen<GameFacade> {
         // 종별 한 줄 — descKey를 화면에 실제로 띄우는 자리. 5단계의 '출동 안내 패널'을
         // 여기로 흡수했다: 별도 패널이면 마을 패널과 배타 규칙이 어긋나고(둘 다 열릴 수
         // 있었다) 같은 정보가 두 자리에 흩어진다.
+        // 좁은 화면에서는 버튼의 배지가 아이콘만 남으므로(style.css @480px)
+        // "가죽을 연다"의 **문장**을 읽을 자리는 여기뿐이다.
         ...ALL_ALLY_IDS.map((defId) =>
           h('div', { class: 'ally-info-row' },
             h('span', { class: 'ally-info-ico', html: ALLY_ICON_SVG[defId] }),
             h('span', { class: 'ally-info-name', text: t(`ally.${defId}.name`) }),
-            h('span', { class: 'ally-info-desc', text: allyDesc(defId) }),
+            h('span', {
+              class: 'ally-info-desc',
+              text:
+                ALLY_DEFS[defId].sunder === true
+                  ? `${allyDesc(defId)} · ${t('battle.ally.sunder')}`
+                  : allyDesc(defId),
+            }),
           ),
         ),
       );

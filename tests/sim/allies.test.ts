@@ -787,3 +787,76 @@ describe('해시 반영', () => {
     expect(sim.hash()).not.toBe(h0);
   });
 });
+
+// ---------------------------------------------------------------------------
+/**
+ * 급소 열기 🟫🔓 (`AllyDef.sunder`, docs/counter-plan.md 단계 3).
+ *
+ * 이 규칙이 봉투 16번(아군의 한계 가치)에 얼마를 넣는지는 **스테이지1에서 거의 0**이다
+ * (가죽을 가진 종이 boar 하나뿐이고, 640시드에서 가죽 축 전체가 +7판이다 —
+ *  근거는 counter-plan.md 단계 3 착수 결과). 그래도 규칙 자체는 여기서 못 박는다:
+ * 투여량이 0인 것과 규칙이 안 도는 것은 다르고, 단계 5·6이 가죽 종을 늘리면
+ * 그때 이 테스트가 그 늘어난 값을 지킨다.
+ */
+describe('급소 열기 — 파수꾼이 붙잡은 적은 가죽이 열린다 (규칙 5-c)', () => {
+  /** 상한 10(= round(100000 × 0.0001))인 적을 40으로 때린다 — 열렸는지가 한눈에 갈린다 */
+  const hitsOf = (sunder: boolean, extra?: Partial<EnemyDef>): number[] => {
+    const sim = allySim({
+      enemy: { speed: 1, hp: 100_000, hide: 0.0001, ...extra },
+      ally: { clubber: { dmg: 40, sunder } },
+    });
+    train(sim);
+    sim.applyCommand({ type: 'callWave' });
+    const evs = runTicks(sim, 260);
+    return eventsOf(evs, 'enemyDamaged')
+      .filter((d) => d.source === 'clubber')
+      .map((d) => d.amount);
+  };
+
+  it('sunder가 없으면 상한이 그대로 걸린다 (대조군)', () => {
+    const hits = hitsOf(false);
+    expect(hits.length).toBeGreaterThan(0);
+    for (const a of hits) expect(a).toBe(10);
+  });
+
+  it('sunder가 있으면 상한이 사라지고 한 방이 그대로 들어간다', () => {
+    const hits = hitsOf(true);
+    expect(hits.length).toBeGreaterThan(0);
+    for (const a of hits) expect(a).toBe(40);
+  });
+
+  /**
+   * **한 규칙, 한 수업** — 여는 것은 가죽 하나뿐이고 armor는 안 건드린다.
+   * 이 어서션이 없으면 "붙잡으면 무적 관통"으로 슬금슬금 자라난다.
+   */
+  it('armor는 열지 않는다 — 감산은 그대로 남는다', () => {
+    const hits = hitsOf(true, { armor: 6 });
+    expect(hits.length).toBeGreaterThan(0);
+    for (const a of hits) expect(a).toBe(34); // 40 − armor 6, 상한 없음
+  });
+
+  /**
+   * 판정이 **매 틱의 봉쇄 상태**를 읽으므로 파수꾼이 사라지면 같은 틱에 가죽이 닫힌다.
+   * (`blockerAllyId`는 tickAllies가 매 틱 처음에 전부 지우고 다시 채운다)
+   * 그래서 이 규칙은 새 상태를 하나도 안 들고, hash()에 더할 것도 없다.
+   */
+  it('파수꾼이 사라지면 가죽이 다시 닫힌다', () => {
+    const sim = allySim({
+      enemy: { speed: 1, hp: 100_000, hide: 0.0001 },
+      // 수명이 짧은 파수꾼 → 도중에 사라진다. 그 뒤를 타워가 아니라 다음 아군이 잇는다
+      ally: { clubber: { dmg: 40, sunder: true, lifeTicks: 240 }, guardian: { dmg: 40 } },
+    });
+    train(sim);
+    sim.applyCommand({ type: 'callWave' });
+    runTicks(sim, 200);
+    expect(sim.state.enemies[0]!.blockerAllyId).toBeGreaterThanOrEqual(0);
+    train(sim, 'guardian'); // sunder가 없는 아군
+    const evs = runTicks(sim, 400);
+    expect(sim.state.allies.every((a) => a.defId === 'guardian')).toBe(true);
+    const late = eventsOf(evs, 'enemyDamaged')
+      .filter((d) => d.source === 'guardian')
+      .map((d) => d.amount);
+    expect(late.length).toBeGreaterThan(0);
+    for (const a of late) expect(a).toBe(10); // 상한이 돌아왔다
+  });
+});

@@ -15,6 +15,19 @@ export function addGold(ctx: SimCtx, delta: number): void {
 }
 
 /**
+ * 급소가 열려 있는가 — **지금 이 적을 붙잡고 있는 아군이 `sunder`인가**.
+ *
+ * 붙잡힘(`blockerAllyId`)은 매 틱 `updateAllies`가 처음에 전부 지우고 다시 채우므로
+ * 이 판정은 "이번 틱에 실제로 발이 묶여 있다"와 정확히 같다 — 곧 파수꾼이 죽거나
+ * 수명이 다해 사라지면 같은 틱에 가죽이 다시 닫힌다. 상태를 새로 들고 있지 않으므로
+ * `hash()`에 넣을 것도 없다(`blockerAllyId`는 이미 들어 있다).
+ */
+function isSundered(ctx: SimCtx, e: EnemySim): boolean {
+  if (e.blockerAllyId < 0) return false;
+  return ctx.world.findAlly(e.blockerAllyId)?.def.sunder === true;
+}
+
+/**
  * 피해 적용. 반환값 = 실제 피해량 (방패에 막히면 0).
  * ignoreArmor는 poison DoT 전용 (armor 무시).
  * splash는 **폭발 부가 피해 전용**(attack.applyArea 한 곳) — 흩어짐〽이 여기에만 걸린다.
@@ -26,6 +39,8 @@ export function addGold(ctx: SimCtx, delta: number): void {
  *  2. 장갑 🛡 — 고정 감산, 최소 1. **작은 타격**을 벌한다.
  *  3. 가죽 🟫 — 타격당 상한, 최소 1. **큰 한 방**을 벌한다. armor의 거울이라 마지막이다:
  *     상한은 "얼마가 들어오든 이 이상은 안 된다"이므로 모든 감산 뒤에 걸려야 뜻이 산다.
+ *     단계 3부터 **파수꾼이 붙잡은 적에게는 이 상한이 없다**(isSundered) — 아군이 타워
+ *     화력의 곱셈 인자가 되는 유일한 자리다.
  */
 export function damageEnemy(
   ctx: SimCtx,
@@ -53,7 +68,9 @@ export function damageEnemy(
   const raw = resist > 0 ? amount * (1 - resist) : amount;
   const afterArmor = ignoreArmor ? raw : Math.max(1, raw - e.def.armor);
   // 가죽 — 대상별 상한. maxHp 비율이라 티어를 올려도 최소 타격 횟수가 그대로다.
-  const cap = e.def.hide !== undefined ? hideCapFor(e.maxHp, e.def.hide) : Infinity;
+  // 급소 열기 🟫🔓 — 붙잡은 아군이 sunder면 그 적에게는 상한이 없다 (단계 3).
+  const cap =
+    e.def.hide !== undefined && !isSundered(ctx, e) ? hideCapFor(e.maxHp, e.def.hide) : Infinity;
   const dealt = Math.min(afterArmor, cap);
   // 축별로 못 넣은 몫. ignoreArmor면 afterArmor === raw라 lostArmor가 저절로 0이 된다
   const lostSplash = amount - raw;

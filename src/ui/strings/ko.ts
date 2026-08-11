@@ -119,6 +119,10 @@ export const ko: Record<string, string> = {
   'battle.ally.pillHint': '나가 있는 부족원 — 눌러서 마을 열기 (출동·강화)',
   // 세 종이 공유하는 규칙 — 버튼마다 세 번 적지 않고 여기 한 줄로 모은다
   'battle.ally.rules': '{s}초 뒤 마을로 돌아가요 · 살아 돌아오면 정가의 {p}% 환급 · 동시 {m}명까지',
+  // 파수꾼 전용 배지 — 이 카드만 타워 화력의 곱셈 인자다 (sunder, 단계 3).
+  // 짧아야 하는 자리라 "무엇을"만 적고 "왜"는 아래 안내 줄이 받는다.
+  'battle.ally.sunder': '가죽을 열어요',
+  'battle.ally.sunderHint': '이 부족원이 붙잡은 적은 가죽 상한이 사라져요 (큰 한 방이 그대로 들어가요)',
   'ally.clubber.name': '몽둥이꾼',
   // 마릿수는 balance.ALLY_BLOCK_CAPACITY 에서 넘어온다 (규칙이 바뀌면 문구도 따라 바뀐다)
   'ally.clubber.desc': '싸고 발 빠른 근접. 최대 {n}마리의 발을 묶어요',

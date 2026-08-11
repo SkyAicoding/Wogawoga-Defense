@@ -362,6 +362,23 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   font-weight: 800; padding: 4px 6px; transition: transform 0.08s ease, filter 0.1s ease;
 }
 .ally-btn:active { transform: scale(0.94); }
+/*
+ * 「가죽을 열어요」배지 — 버튼 **안쪽 위 모서리**에 얹는다 (단계 3, sunder).
+ * 흐름(flex row)에 안 넣는 이유: 390px에서 버튼 폭이 98px라 이름조차 접는 자리다.
+ * 절대 배치면 아이콘·가격의 자리도, 터치 타깃 48px도 한 자리 안 뺏는다.
+ * pointer-events: none — 배지를 눌러도 출동은 버튼이 받아야 한다.
+ */
+.ally-btn { position: relative; }
+.ally-btn-sunder {
+  position: absolute; top: 2px; right: 3px;
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 0 3px; border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45); color: #e7c79c;
+  font-size: 0.56rem; font-weight: 900; line-height: 1.6;
+  pointer-events: none;
+}
+.ally-btn-sunder-ico { width: 10px; height: 10px; flex: 0 0 auto; }
+.ally-btn-sunder-ico svg { width: 100%; height: 100%; display: block; }
 /* 아군은 한랭색 — 3D 인스턴스 색조(ALLY_TINT)·아군 체력바와 같은 축이다 */
 .ally-btn-ico { width: 26px; height: 26px; flex: 0 0 auto; }
 .ally-btn-ico svg { width: 100%; height: 100%; }
@@ -385,6 +402,9 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   .ally-btn-name { display: none; }
   .ally-btn-ico { width: 24px; height: 24px; }
   .ally-btn { gap: 6px; }
+  /* 이름을 접는 폭이면 배지의 낱말도 접는다 — 아이콘만 남고 문장은 아래 설명 줄이 받는다 */
+  .ally-btn-sunder-txt { display: none; }
+  .ally-btn-sunder { padding: 0 2px; }
   /* 버튼에서 이름이 접히는 폭이다 — 그만큼 아래 설명 줄이 유일한 정보원이 된다 */
   .ally-info-desc { font-size: 0.68rem; }
 }
@@ -515,6 +535,13 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .wp-d-tw-ico { width: 16px; height: 16px; }
 .wp-d-tw-ico svg, .wp-d-tw-ico img { width: 100%; height: 100%; display: block; border-radius: 3px; }
 .wp-d-tw-eff { color: var(--gold); font-weight: 900; }
+/*
+ * 가죽 웨이브의 아군 열쇠 칩 — 타워 칩과 **색으로 갈라 둔다**(한랭색 = 아군 축,
+ * 출동 버튼·아군 체력바·3D 인스턴스 색조와 같은 자리). 여기 붙는 낱말은 배율이
+ * 아니라 "가죽을 열어요"라, 금색(=수치)으로 쓰면 다른 칩의 숫자와 헷갈린다.
+ */
+.wp-d-tw--ally .wp-d-tw-name { color: #9fdcf7; }
+.wp-d-tw--ally .wp-d-tw-eff { color: #9fdcf7; font-weight: 800; }
 .wp-d-none { font-size: 0.68rem; font-weight: 800; color: #ff9d6a; }
 
 .hand-row { display: flex; gap: 10px; width: 100%; align-items: stretch; }

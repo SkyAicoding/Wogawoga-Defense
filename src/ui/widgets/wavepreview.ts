@@ -21,10 +21,18 @@
  *     *없는 답을 알려주는 것은 정보가 아니라 좌절이다.*
  */
 import type { BattleStateView, EnemyId, TowerId, WavePreview, WavePreviewEntry } from '@/data/types';
-import { DEMAND_WEAK, TOWER_DEFS, demandFor, isAttackTower, towerEffVs } from '@/data';
+import {
+  ALL_ALLY_IDS,
+  ALLY_DEFS,
+  DEMAND_WEAK,
+  TOWER_DEFS,
+  demandFor,
+  isAttackTower,
+  towerEffVs,
+} from '@/data';
 import { h, cls, setText } from '../dom';
 import { t } from '../i18n';
-import { enemyIconSvg, towerIconSvg, traitIconSvg } from './card';
+import { ALLY_ICON_SVG, enemyIconSvg, towerIconSvg, traitIconSvg } from './card';
 
 /** 칩 상한 — 넘치면 `+N종`으로 접는다 (390px에서 한 줄에 들어가는 한계) */
 export const MAX_CHIPS = 6;
@@ -75,6 +83,25 @@ function badgeOf(e: WavePreviewEntry): HTMLElement | null {
   return h('span', { class: `wp-badge wp-badge--${tag}` },
     h('span', { class: 'wp-badge-ico', html: traitIconSvg(tag) }),
     h('span', { class: 'wp-badge-txt', text: label }),
+  );
+}
+
+/**
+ * 가죽 🟫 웨이브의 "잘 듣는 것"에 끼워 넣는 **아군 열쇠 칩**.
+ *
+ * 왜 데이터에서 뽑는가 — `sunder`를 끄거나 다른 종에 옮기면 화면이 저절로 따라온다.
+ * 종 이름을 여기 박으면 규칙과 그림이 갈라지고, 이 저장소는 그 병을 이미 몇 번 앓았다.
+ * 아군은 **덱과 무관하게 언제나 살 수 있으므로**(마을 패널) "내 덱 안의 답만 보여 준다"는
+ * 이 상세의 규약을 어기지 않는다 — 없는 답을 알려주는 것이 아니다.
+ */
+function sunderChips(tag: string | undefined): HTMLElement[] {
+  if (tag !== 'hide') return [];
+  return ALL_ALLY_IDS.filter((id) => ALLY_DEFS[id].sunder === true).map((id) =>
+    h('span', { class: 'wp-d-tw wp-d-tw--ally' },
+      h('span', { class: 'wp-d-tw-ico', html: ALLY_ICON_SVG[id] }),
+      h('span', { class: 'wp-d-tw-name', text: t(`ally.${id}.name`) }),
+      h('span', { class: 'wp-d-tw-eff', text: t('battle.ally.sunder') }),
+    ),
   );
 }
 
@@ -137,6 +164,8 @@ export function createWavePreview(): WavePreviewBand {
     const good = rows.filter((r) => r.eff >= GOOD_EFF).slice(0, MAX_GOOD);
     const bad = rows.filter((r) => r.eff < DEMAND_WEAK);
     const tag = e.traits[0];
+    // 가죽 웨이브면 **답이 타워 밖에도 있다** — 파수꾼이 그 상한을 연다(단계 3).
+    const keys = sunderChips(tag);
     const twChip = (r: { id: TowerId; eff: number }): HTMLElement =>
       h('span', { class: 'wp-d-tw' },
         h('span', { class: 'wp-d-tw-ico', html: towerIconSvg(r.id) }),
@@ -163,9 +192,13 @@ export function createWavePreview(): WavePreviewBand {
       }),
       h('div', { class: 'wp-d-row' },
         h('span', { class: 'wp-d-label', text: t('battle.preview.good') }),
+        // 열쇠를 먼저 세운다 — 가죽 앞에서는 그게 이 줄의 결론이다
+        ...keys,
         ...(good.length > 0
           ? good.map(twChip)
-          : [h('span', { class: 'wp-d-none', text: t('battle.preview.noAnswer') })]),
+          : keys.length > 0
+            ? [] // 열쇠가 있으면 "답이 없다"가 거짓이 된다
+            : [h('span', { class: 'wp-d-none', text: t('battle.preview.noAnswer') })]),
       ),
     ];
     if (bad.length > 0) {
