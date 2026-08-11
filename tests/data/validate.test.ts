@@ -6,6 +6,7 @@ import { SIEGE_ADVANCE_TICKS, SIEGE_ENGAGE_RANGE } from '@/data/balance';
 import { ALL_ENEMY_IDS, BOUNTY_PER_COST, ENEMY_DEFS } from '@/data/enemies';
 import { ALL_TOWER_IDS, TOWER_DEFS } from '@/data/towers';
 import { STAGES } from '@/data/stages';
+import { makeBotSimFor } from '../sim/botharness';
 
 const EXPECTED_TOWERS: TowerId[] = [
   'spear', 'catapult', 'lightning', 'brazier', 'frost', 'poison', 'ballista', 'drum',
@@ -310,5 +311,177 @@ describe('balance 상수 (sim 하드코딩과 일치해야 함)', () => {
     expect(balance.ENDLESS_HP_GROWTH).toBe(1.06);
     expect(balance.WAVE_GOLD_BASE).toBe(30);
     expect(balance.WAVE_GOLD_PER_WAVE).toBe(6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 상성 축 불변식 I-1 ~ I-3 (docs/counter-plan.md 2단계)
+//
+// ⚠ **I-4(신설 특성 보유 종의 HP 비중 ≤ 25%)는 폐기됐다.** 폐기 근거는 아래
+//    '옛 I-4가 왜 죽었는가' 테스트가 직접 실행해서 보여준다 — 문서만이 아니라 코드가
+//    그 지표의 무력함을 잠근다. 대체 판정선은 counter-plan.md §단계 2에 있다.
+// ---------------------------------------------------------------------------
+
+/** 이 스테이지에서 손에 들어올 수 있는 타워 (해금이 'start'이거나 이 스테이지 이하) */
+function startingDeckFor(stageId: number): TowerId[] {
+  return EXPECTED_TOWERS.filter((id) => {
+    const u = TOWER_DEFS[id].unlock;
+    return u.type === 'start' || (u.type === 'stage' && u.stage <= stageId);
+  });
+}
+
+/** 쿨다운이 가장 짧은 = **연사** 타워 (T1 기준) */
+function fastestOf(ids: readonly TowerId[]): TowerId {
+  return [...ids].sort(
+    (a, b) =>
+      (TOWER_DEFS[a].tiers[0]?.cooldownTicks ?? 0) - (TOWER_DEFS[b].tiers[0]?.cooldownTicks ?? 0) ||
+      (a < b ? -1 : 1),
+  )[0] as TowerId;
+}
+
+describe('상성 축 (I-1 ~ I-3)', () => {
+  it('I-1 배지 하나 — armor/hide/splashResist/shieldHits 중 둘 이상을 가진 종은 없다', () => {
+    for (const id of EXPECTED_ENEMIES) {
+      const d = ENEMY_DEFS[id];
+      const axes = [
+        d.armor > 0 ? 'armor' : null,
+        d.hide !== undefined ? 'hide' : null,
+        d.splashResist !== undefined ? 'splash' : null,
+        (d.shieldHits ?? 0) > 0 ? 'shield' : null,
+      ].filter(Boolean);
+      expect(axes.length, `${id}: ${axes.join('+')}`).toBeLessThanOrEqual(1);
+      // 배지 계산도 같은 답을 내야 한다 — 화면과 데이터가 갈라지지 않게
+      const badges = balance
+        .enemyTraitsOf(d)
+        .filter((t) => t === 'armor' || t === 'hide' || t === 'splash' || t === 'shield');
+      expect(badges.length, `${id} 배지 ${badges.join('+')}`).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('I-1b 값의 범위 — hide/splashResist는 0 초과 1 미만 (0이면 무의미, 1이면 무적)', () => {
+    for (const id of EXPECTED_ENEMIES) {
+      const d = ENEMY_DEFS[id];
+      if (d.hide !== undefined) {
+        expect(d.hide, `${id}.hide`).toBeGreaterThan(0);
+        expect(d.hide, `${id}.hide`).toBeLessThan(1);
+      }
+      if (d.splashResist !== undefined) {
+        expect(d.splashResist, `${id}.splashResist`).toBeGreaterThan(0);
+        expect(d.splashResist, `${id}.splashResist`).toBeLessThan(1);
+      }
+    }
+  });
+
+  /**
+   * **I-2 거울 보증 — 연사 타워는 가죽에 걸리지 않는다.**
+   *
+   * 계획서 초안은 `cap ≥ 시작 덱 최속 타워의 **T4** dmg`였고 그건 **거짓이다**:
+   * boar가 나오는 스테이지1 w20의 cap은 39인데 spear T4는 43이라 이미 걸린다.
+   * 문턱을 T4에 두면 boar.hide를 0.20보다 크게(= 최소 타격 5회 미만으로) 밀어야 하는데,
+   * 그러면 "큰 한 방을 벌한다"는 축 자체가 무의미해진다.
+   *
+   * **실측으로 다시 유도한 문턱은 T3다.** 근거(hide 0.18 · 스테이지1, boar 등장 8개 웨이브):
+   *   cap 범위 39 ~ 146   ·   spear T1 12 / T2 18 / T3 28 / T4 43
+   *   → T3(28)까지는 **어느 웨이브에서도 무손실**, 걸리기 시작하는 것은 T4부터다.
+   *
+   * ⚠ 상한을 `hp × hide`(hpMul 1)로 잡으면 **실제보다 낮게** 나온다(27). boar는 hpMul 1로
+   *   나오는 웨이브가 없기 때문이다 — 가장 약한 개체가 w20의 219(cap 39)다. 그래서 이
+   *   테스트는 **그 종이 실제로 등장하는 웨이브**를 previewWave로 훑어 진짜 최소 상한을
+   *   쓴다(1단계 계량기. 40시드 스윕이 아니라 밀리초다).
+   * 이 선이 뜻하는 계약: *"연사 타워는 자기 정체성(작게 자주)을 유지하는 한 가죽을
+   * 신경 쓸 필요가 없다. T4·T5로 올려 **한 방이 커진 순간**부터만 값을 치른다."*
+   * 곧 가죽은 업그레이드 세금이 아니라 **큰 한 방에 매기는 값**이라는 설계가
+   * 데이터로 참이 된다 — 티어를 올려서 '빠져나가는' 것이 아니라, 올릴수록 이 축에
+   * 다가가는 쪽이 정상이다.
+   */
+  it('I-2 거울 보증 — 가죽 상한은 시작 덱 연사 타워의 T3 dmg 이상이다', () => {
+    for (const stage of STAGES) {
+      const deck = startingDeckFor(stage.id);
+      const fast = fastestOf(deck);
+      const t3 = TOWER_DEFS[fast].tiers[2]?.dmg ?? 0;
+      const hidden = stage.wavePlan.allowedEnemies.filter(
+        (eid) => ENEMY_DEFS[eid].hide !== undefined,
+      );
+      if (hidden.length === 0) continue;
+      // 이 스테이지가 실제로 내보내는 편성을 훑어 **진짜 최소 상한**을 찾는다
+      const sim = makeBotSimFor(stage, 1, deck, 0, false);
+      const minCap = new Map<EnemyId, number>();
+      for (let w = 1; w <= stage.waveCount; w++) {
+        for (const e of sim.previewWave(w).entries) {
+          if (e.hideCap === undefined) continue;
+          const cur = minCap.get(e.defId);
+          if (cur === undefined || e.hideCap < cur) minCap.set(e.defId, e.hideCap);
+        }
+      }
+      for (const eid of hidden) {
+        const cap = minCap.get(eid);
+        if (cap === undefined) continue; // 이 스테이지 편성에 실제로는 안 나온다
+        expect(
+          cap,
+          `스테이지${stage.id} ${eid}: 최소 cap ${cap} < ${fast} T3 ${t3}`,
+        ).toBeGreaterThanOrEqual(t3);
+      }
+    }
+  });
+
+  /**
+   * **I-3 해결 가능성** — "내가 가진 답 전부를 무력화하는 적"은 만들 수 없다.
+   * 각 스테이지의 전 종에 대해, 그 스테이지 시작 덱 중 유효 배율 ≥ 0.8인 타워가
+   * 최소 하나 있어야 한다. T3 기준(플레이어가 실제로 도달하는 티어)으로 잰다.
+   */
+  it('I-3 해결 가능성 — 전 종에 대해 시작 덱 중 배율 ≥0.8인 타워가 하나는 있다', () => {
+    for (const stage of STAGES) {
+      const deck = startingDeckFor(stage.id).filter((id) => balance.isAttackTower(TOWER_DEFS[id]));
+      for (const eid of stage.wavePlan.allowedEnemies) {
+        const d = ENEMY_DEFS[eid];
+        const e = {
+          defId: eid,
+          count: 1,
+          maxHp: d.hp,
+          totalHp: d.hp,
+          armor: d.armor,
+          ...(d.hide !== undefined ? { hideCap: balance.hideCapFor(d.hp, d.hide) } : {}),
+          ...(d.splashResist !== undefined ? { splashResist: d.splashResist } : {}),
+          flying: d.flying,
+          boss: d.boss ?? false,
+          traits: balance.enemyTraitsOf(d),
+        };
+        const best = Math.max(...deck.map((id) => balance.towerEffVs(TOWER_DEFS[id], 2, e)));
+        const detail = deck
+          .map((id) => `${id} ${balance.towerEffVs(TOWER_DEFS[id], 2, e).toFixed(2)}`)
+          .join(' · ');
+        expect(best, `스테이지${stage.id} ${eid}: ${detail}`).toBeGreaterThanOrEqual(0.8);
+      }
+    }
+  });
+
+  /**
+   * **옛 I-4가 왜 죽었는가 — 이 테스트가 그 이유다.**
+   *
+   * 폐기된 I-4는 "신설 특성 보유 종의 웨이브 총 HP 비중 ≤ 25%"였다. 그런데 그 지표는
+   * **어느 종이 특성을 갖는가**만 보고 **그 특성이 얼마나 센가**는 안 본다. 곧 hide를
+   * 0.20으로 두든 0.02로 두든(= 최소 타격 5회든 50회든) 비중은 **한 자리도 안 움직인다.**
+   * 온보딩이 실제로 깨지는지는 후자가 정하는데, 지표는 전자만 재는 것이다.
+   *
+   * 아래가 그것을 실행해서 보인다. 이 성질 때문에 I-4는 투여량 판단에 **원리적으로**
+   * 쓸 수 없고, 그래서 폐기하고 실측(하한 팔)으로 옮겼다.
+   * 대체 판정선과 그 유도는 docs/counter-plan.md §단계 2에 있다.
+   */
+  it('폐기 근거 — HP 비중 지표는 투여량에 완전히 둔감하다 (그래서 안전선이 될 수 없다)', () => {
+    const share = (hide: number, splash: number): number => {
+      // 비중은 hp와 편성만으로 정해진다 — 방어 수치는 분자·분모 어디에도 안 들어간다
+      const defs = { ...ENEMY_DEFS, boar: { ...ENEMY_DEFS.boar, hide }, raptor: { ...ENEMY_DEFS.raptor, splashResist: splash } };
+      const ids = STAGES[0]?.wavePlan.allowedEnemies ?? [];
+      let axis = 0;
+      let total = 0;
+      for (const id of ids) {
+        const d = defs[id];
+        total += d.hp;
+        if (d.hide !== undefined || d.splashResist !== undefined) axis += d.hp;
+      }
+      return axis / total;
+    };
+    // 투여량을 10배 차이로 벌려도 지표는 완전히 같다
+    expect(share(0.2, 0.6)).toBe(share(0.02, 0.06));
   });
 });

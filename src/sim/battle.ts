@@ -37,7 +37,7 @@ import type {
   WavePreviewEntry,
 } from '@/data/types';
 import { Rng } from '@/core/rng';
-import { ALLY_MAX_ACTIVE, enemyTraitsOf } from '@/data/balance';
+import { ALLY_MAX_ACTIVE, enemyTraitsOf, hideCapFor } from '@/data/balance';
 import { isBuildableCell, rasterizePathCells, sceneryCells } from '@/data/grid';
 import {
   allySortiePoints,
@@ -525,7 +525,11 @@ class Battle implements BattleSim {
         hit.count += g.count;
         hit.totalHp += maxHp * g.count;
         // 같은 종이 여러 hpMul로 나뉘면 배지는 **가장 단단한 개체**를 말한다
-        if (maxHp > hit.maxHp) hit.maxHp = maxHp;
+        if (maxHp > hit.maxHp) {
+          hit.maxHp = maxHp;
+          // 가죽 상한은 maxHp에 비례하므로 **같은 개체**를 따라가야 한다
+          if (eDef.hide !== undefined) hit.hideCap = hideCapFor(maxHp, eDef.hide);
+        }
       } else {
         byId.set(g.enemyId, {
           defId: g.enemyId,
@@ -533,6 +537,8 @@ class Battle implements BattleSim {
           maxHp,
           totalHp: maxHp * g.count,
           armor: eDef.armor,
+          ...(eDef.hide !== undefined ? { hideCap: hideCapFor(maxHp, eDef.hide) } : {}),
+          ...(eDef.splashResist !== undefined ? { splashResist: eDef.splashResist } : {}),
           flying: eDef.flying,
           boss: eDef.boss ?? false,
           traits: enemyTraitsOf(eDef),

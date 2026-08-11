@@ -39,9 +39,19 @@ export const PIERCED_SHARE = 0.1;
  * 원래 피해를 이벤트가 싣고 다니지 않으므로 `dealt + armor`로 되짚는다.
  * 감산 후 하한(최소 1)에 걸린 타격에서는 이 되짚기가 실제보다 작게 나오는데,
  * 그때는 비율이 더욱 커져 어차피 괄호가 붙으므로 판정이 뒤집히지 않는다.
+ *
+ * `mitigated`(2단계)는 **가죽🟫·흩어짐〽 전용 통로**다. 이 둘은 원래 피해를 UI가
+ * 되짚을 수 없어서(상한값·저항률이 화면에 없다) sim이 직접 "깎였다"를 실어 보낸다.
+ * 이미 `MITIGATED_MIN_SHARE`로 **눈에 띄는 손실만** 걸러져 오므로 여기서는 그대로 괄호다.
+ * 장갑은 옛 경로를 그대로 쓴다 — 되짚기가 가능하고, `n!`(뚫었다)이 그 비율에서만 나온다.
  */
-export function damageText(dealt: number, armor: number): string {
+export function damageText(
+  dealt: number,
+  armor: number,
+  mitigated?: 'armor' | 'hide' | 'splash',
+): string {
   const n = Math.max(1, Math.round(dealt));
+  if (mitigated === 'hide' || mitigated === 'splash') return `(${n})`;
   if (armor <= 0) return String(n);
   const share = armor / (n + armor);
   if (share >= MITIGATED_SHARE) return `(${n})`;

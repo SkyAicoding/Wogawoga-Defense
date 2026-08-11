@@ -19,7 +19,9 @@ import {
   demandFor,
   enemyTraitsOf,
   favoredAgainst,
+  hideCapFor,
   isAttackTower,
+  isSplashDamage,
   towerEffVs,
 } from '@/data';
 import { World, type EnemySim, type SimCtx } from '@/sim/entities';
@@ -38,6 +40,9 @@ function entry(id: EnemyDef['id'], count = 1, hpMul = 1): WavePreviewEntry {
     maxHp,
     totalHp: maxHp * count,
     armor: d.armor,
+    // previewWave와 **같은 식**이어야 한다 — 이 헬퍼가 어긋나면 거울 시험 자체가 거짓이 된다
+    ...(d.hide !== undefined ? { hideCap: hideCapFor(maxHp, d.hide) } : {}),
+    ...(d.splashResist !== undefined ? { splashResist: d.splashResist } : {}),
     flying: d.flying,
     boss: d.boss ?? false,
     traits: enemyTraitsOf(d),
@@ -62,9 +67,12 @@ function miniCtx(): SimCtx {
 
 describe('enemyTraitsOf — 기존 필드만으로 유도한다', () => {
   it('스테이지1 7종의 태그가 데이터와 일치한다', () => {
-    expect(enemyTraitsOf(ENEMY_DEFS.raptor)).toEqual([]);
+    // 2단계에서 raptor가 흩어짐〽을, boar가 가죽🟫을 얻었다 (compy는 일부러 비워 뒀다 —
+    // 투석기의 정당한 밥으로 남기는 자리다)
+    expect(enemyTraitsOf(ENEMY_DEFS.raptor)).toEqual(['splash']);
     expect(enemyTraitsOf(ENEMY_DEFS.compy)).toEqual([]);
-    expect(enemyTraitsOf(ENEMY_DEFS.boar)).toEqual(['enrage']);
+    // boar = 가죽 + 격노 → 가죽이 앞 (답을 바꾸는 쪽이 먼저. 격노는 답을 안 바꾼다)
+    expect(enemyTraitsOf(ENEMY_DEFS.boar)).toEqual(['hide', 'enrage']);
     expect(enemyTraitsOf(ENEMY_DEFS.trike)).toEqual(['armor']);
     expect(enemyTraitsOf(ENEMY_DEFS.ptera)).toEqual(['air']);
     expect(enemyTraitsOf(ENEMY_DEFS.blade)).toEqual(['raid']);
@@ -85,6 +93,8 @@ describe('enemyTraitsOf — 기존 필드만으로 유도한다', () => {
       const tags = enemyTraitsOf(d);
       expect(tags.includes('air')).toBe(d.flying);
       expect(tags.includes('armor')).toBe(d.armor > 0);
+      expect(tags.includes('hide')).toBe(d.hide !== undefined);
+      expect(tags.includes('splash')).toBe(d.splashResist !== undefined);
       expect(tags.includes('shield')).toBe((d.shieldHits ?? 0) > 0);
       expect(tags.includes('heal')).toBe(!!d.healAura);
       expect(tags.includes('raid')).toBe(!!d.towerAttack);
@@ -106,11 +116,15 @@ describe('towerEffVs — sim/combat.damageEnemy의 거울이다', () => {
         if (dmg <= 0) continue;
         for (const eDef of Object.values(ENEMY_DEFS)) {
           const e = ctx.world.acquireEnemy();
+          // maxHp는 **실제 값**이어야 한다 — 가죽 상한이 maxHp 비례라 1e9로 두면
+          // cap이 천문학적이 되어 그 축이 시험에서 통째로 빠진다(통과하지만 무의미).
+          // hp만 크게 둬서 죽지 않게 한다.
           Object.assign(e, {
-            defId: eDef.id, def: eDef, hp: 10 ** 9, maxHp: 10 ** 9,
+            defId: eDef.id, def: eDef, hp: 10 ** 9, maxHp: eDef.hp,
             shieldHitsLeft: 0, alive: true, flying: eDef.flying, statuses: [],
           });
-          const dealt = damageEnemy(ctx, e, dmg, def.id);
+          // 폭발로 들어가는 타워는 sim에서도 splash=true로 들어간다(attack.applyArea)
+          const dealt = damageEnemy(ctx, e, dmg, def.id, false, isSplashDamage(def));
           ctx.events.length = 0;
           const canHit = eDef.flying ? def.canTargetAir : def.canTargetGround;
           const eff = towerEffVs(def, tier, entry(eDef.id));
@@ -118,7 +132,9 @@ describe('towerEffVs — sim/combat.damageEnemy의 거울이다', () => {
             // 못 때리는 것은 0 — 시뮬레이션에서는 애초에 조준 자체가 안 된다
             expect(eff, `${def.id} T${tier + 1} → ${eDef.id}`).toBe(0);
           } else {
-            expect(Math.round(eff * dmg), `${def.id} T${tier + 1} → ${eDef.id}`).toBe(dealt);
+            // ⚠ 반올림해서 비교하면 안 된다 — splashResist는 **소수** 피해를 낳는다
+            //   (투석기 T2 47 × 0.7 = 32.9). 이미 splashScale이 같은 성질이라 새 일은 아니다.
+            expect(eff * dmg, `${def.id} T${tier + 1} → ${eDef.id}`).toBeCloseTo(dealt, 9);
           }
         }
       }
@@ -140,7 +156,7 @@ describe('towerEffVs — sim/combat.damageEnemy의 거울이다', () => {
 
 describe('수요 막대 — 못 때리는 것은 0으로 센다', () => {
   it('공중이 섞이면 대공 없는 타워의 막대가 그 몫만큼 짧아진다', () => {
-    const es = [entry('raptor', 10), entry('ptera', 5)];
+    const es = [entry('compy', 24), entry('ptera', 5)]; // 지상은 무축(compy)이어야 대공 몫만 남는다
     const airShare = airShareOf(es);
     // 투석기는 공중을 못 때린다 → 정확히 (1 − 공중 비중)
     expect(demandFor(TOWER_DEFS.catapult, 0, es)).toBeCloseTo(1 - airShare, 9);
@@ -175,8 +191,8 @@ describe('수요 막대 — 못 때리는 것은 0으로 센다', () => {
 describe('counteredBy — 두 축을 다른 자로 잰다', () => {
   it('공중은 하드 게이트다 — 비중이 문턱을 넘으면 수요 막대와 무관하게 잡힌다', () => {
     // 공중 비중을 문턱 부근으로 맞춘 두 웨이브
-    const heavy = [entry('raptor', 40), entry('ptera', 8)]; // 공중 ≈ 23%
-    const light = [entry('raptor', 200), entry('ptera', 2)]; // 공중 ≈ 1.5%
+    const heavy = [entry('compy', 96), entry('ptera', 8)]; // 공중 ≈ 23%
+    const light = [entry('compy', 480), entry('ptera', 2)]; // 공중 ≈ 1.5%
     expect(airShareOf(heavy)).toBeGreaterThan(AIR_BLIND_SHARE);
     expect(airShareOf(light)).toBeLessThan(AIR_BLIND_SHARE);
     expect(counteredBy(TOWER_DEFS.catapult, 0, heavy)).toBe('air');
@@ -193,15 +209,15 @@ describe('counteredBy — 두 축을 다른 자로 잰다', () => {
   });
 
   it('평범한 지상 웨이브에서는 아무 카드도 잡히지 않는다 (채널이 배경이 되지 않는다)', () => {
-    const es = [entry('raptor', 10), entry('compy', 20)];
+    const es = [entry('compy', 44)];
     for (const id of ['spear', 'catapult', 'frost', 'lightning', 'ballista'] as const) {
       expect(counteredBy(TOWER_DEFS[id], 0, es), id).toBeNull();
     }
   });
 
   it('유리 표시는 벌하는 축이 있을 때만 켜진다', () => {
-    const plain = [entry('raptor', 10), entry('compy', 20)];
-    const air = [entry('raptor', 10), entry('ptera', 6)];
+    const plain = [entry('compy', 44)]; // 축이 하나도 없는 웨이브
+    const air = [entry('compy', 24), entry('ptera', 6)];
     // 축이 없는 웨이브: 배율은 1.00이지만 테두리는 안 켜진다
     expect(demandFor(TOWER_DEFS.spear, 0, plain)).toBeCloseTo(1, 9);
     expect(favoredAgainst(TOWER_DEFS.spear, 0, plain)).toBe(false);

@@ -453,17 +453,23 @@ export const ENDLESS_UNLOCK_STAGE = 3;
  *  raid   내 타워가 표적이 된다 — 배치 거리를 바꾼다.
  *  enrage 마지막 40%만 빨라진다 — 답을 바꾸지는 않는다.
  */
-export const TRAIT_PRIORITY: readonly TraitTag[] = ['air', 'shield', 'armor', 'heal', 'raid', 'enrage'];
+export const TRAIT_PRIORITY: readonly TraitTag[] = [
+  'air', 'shield', 'armor', 'hide', 'splash', 'heal', 'raid', 'enrage',
+];
 
 /**
- * 적의 특성 태그 — **기존 필드만** 읽는다. 새 필드를 만들지 않는다(1단계의 계약).
- * 신설 축(가죽🟫·흩어짐〽·정화✧)은 여기에 분기를 더하는 것으로 들어온다.
+ * 적의 특성 태그. 2단계에서 가죽🟫·흩어짐〽 두 분기가 들어왔다(정화✧는 6단계).
+ * **I-1(배지 하나)이 armor/hide/splashResist/shieldHits의 동시 보유를 금지**하므로
+ * 앞의 넷 중 실제로 켜지는 것은 언제나 최대 하나다 — 우선순위는 그 뒤(heal/raid/enrage)와
+ * 겹칠 때만 일한다.
  */
 export function enemyTraitsOf(def: EnemyDef): TraitTag[] {
   const out: TraitTag[] = [];
   if (def.flying) out.push('air');
   if ((def.shieldHits ?? 0) > 0) out.push('shield');
   if (def.armor > 0) out.push('armor');
+  if (def.hide !== undefined) out.push('hide');
+  if (def.splashResist !== undefined) out.push('splash');
   if (def.healAura) out.push('heal');
   if (def.towerAttack) out.push('raid');
   if (def.enrage) out.push('enrage');
@@ -483,17 +489,53 @@ export function isAttackTower(def: TowerDef): boolean {
 }
 
 /**
+ * `enemyDamaged.mitigated`가 실리는 **최소 감산 비율**. 원래 피해의 이만큼을 못 넣었을
+ * 때만 "무엇이 깎았다"가 이벤트에 실린다.
+ *
+ * 왜 문턱이 필요한가 — 가죽 상한은 타워 dmg 바로 위/아래를 스칠 수 있다(창 T3 28 대
+ * boar w1 cap 27 = 1 손실). 그 1을 부호로 그리면 괄호가 **매 타격 켜져** 있어 정보가
+ * 아니라 배경이 된다. 이 저장소가 `damagenumbers.ts`에서 이미 같은 판단을 했고
+ * (거기 `MITIGATED_SHARE`와 같은 값이다), 그 잣대를 sim 쪽으로 옮겨 세 축이 **하나의
+ * 규칙**을 쓰게 한다. 결정론이라 sim에 있어도 무해하다(순수 산술).
+ */
+export const MITIGATED_MIN_SHARE = 0.25;
+
+/**
+ * **가죽 상한의 유일한 식** — `sim/combat.damageEnemy`와 `sim/battle.previewWave`가
+ * 둘 다 이것을 부른다. 거울을 두 번 적으면 언젠가 갈라지므로 식은 한 곳에만 둔다.
+ * 최소 1인 이유: 상한이 0이 되면 어떤 타워도 그 적을 **영원히** 못 죽인다.
+ */
+export function hideCapFor(maxHp: number, hide: number): number {
+  return Math.max(1, Math.round(maxHp * hide));
+}
+
+/**
+ * 이 타워의 피해가 **폭발로** 들어가는가 — 곧 흩어짐〽이 걸리는가.
+ *
+ * `attackKind: 'ballistic'` + `splash`면 `impactBallistic`이 **직격 없이** `applyArea`만
+ * 부르고(`excludeId = -1`), `splashScale(0)` = 1이라 착탄점의 적도 **전량을 폭발로** 받는다.
+ * 곧 이 타워는 피해의 100%가 splash 플래그를 달고 damageEnemy에 들어간다.
+ * 지금 이 조건에 걸리는 타워는 **투석기 하나뿐**이고(유일한 ballistic+splash),
+ * 그래서 이 축의 배율이 근사가 아니라 **정확**하다.
+ */
+export function isSplashDamage(def: TowerDef): boolean {
+  return def.attackKind === 'ballistic' && def.tiers.some((t) => t.splash !== undefined);
+}
+
+/**
  * 타워 한 종이 적 한 종에게 내는 **유효 배율** (0~1).
- *   못 때린다(대공 없음 등)            → 0
- *   때린다                             → max(1, dmg − armor) / dmg
+ *   못 때린다(대공 없음 등) → 0
+ *   때린다                  → `damageEnemy` 한 방을 그대로 되짚은 값 / dmg
  *
- * ⚠ 1단계는 `armor` 감산과 `canTargetAir`만 본다. 이유는 계약이다 —
- * 이 단계는 밸런스를 한 자리도 바꾸지 않으므로, 아직 데이터에 없는 축을
- * 화면에만 그리면 그것이야말로 거짓 정보다. 근사가 아니라 **지금 참인 전부**다.
+ * **combat.damageEnemy의 거울이다** — 순서까지 같다:
+ *   흩어짐(폭발 한정 비율) → 장갑(고정 감산, 최소 1) → 가죽(타격당 상한)
+ * 둘이 어긋나면 미리보기 막대와 카드 경고가 조용히 거짓말을 한다.
+ * `tests/data/counter.test.ts`가 두 식이 같은 답을 내는지 잠근다.
  *
- * 남은 오차를 정직하게 적는다: 독가시의 DoT는 armor를 무시하고(combat.damageEnemy
- * ignoreArmor), 번개의 체인·투석기의 스플래시는 여러 마리를 한 번에 친다.
- * 곧 이 값은 **직격 한 방의 비율**이지 DPS 비율이 아니다.
+ * 남은 오차를 정직하게 적는다: 독가시의 DoT는 armor를 무시하고(ignoreArmor), 번개의 체인은
+ * 여러 마리를 한 번에 친다. 곧 이 값은 **한 방의 비율**이지 DPS 비율이 아니다.
+ * 가죽이 특히 그렇다 — cap은 **대상별**이라 여러 마리를 덮는 폭발에서는 마리마다 따로
+ * 걸리고, 이 함수는 그중 한 마리를 본다.
  */
 export function towerEffVs(def: TowerDef, tier: number, e: WavePreviewEntry): number {
   const canHit = e.flying ? def.canTargetAir : def.canTargetGround;
@@ -501,7 +543,11 @@ export function towerEffVs(def: TowerDef, tier: number, e: WavePreviewEntry): nu
   const t = def.tiers[Math.max(0, Math.min(def.tiers.length - 1, Math.floor(tier)))];
   const dmg = t ? t.dmg : 0;
   if (dmg <= 0) return 0;
-  return Math.max(1, dmg - e.armor) / dmg;
+  const resist = isSplashDamage(def) ? (e.splashResist ?? 0) : 0;
+  const raw = resist > 0 ? dmg * (1 - resist) : dmg;
+  let dealt = Math.max(1, raw - e.armor);
+  if (e.hideCap !== undefined) dealt = Math.min(dealt, e.hideCap);
+  return dealt / dmg;
 }
 
 /**
@@ -570,7 +616,15 @@ export function hasCounterAxis(entries: readonly WavePreviewEntry[]): boolean {
   let total = 0;
   for (const e of entries) {
     total += e.totalHp;
-    if (e.flying || e.armor > 0 || e.traits.includes('shield')) axis += e.totalHp;
+    if (
+      e.flying ||
+      e.armor > 0 ||
+      e.hideCap !== undefined ||
+      e.splashResist !== undefined ||
+      e.traits.includes('shield')
+    ) {
+      axis += e.totalHp;
+    }
   }
   return total > 0 && axis / total >= COUNTER_AXIS_SHARE;
 }
@@ -593,8 +647,11 @@ export function airShareOf(entries: readonly WavePreviewEntry[]): number {
  * 두 축을 **다른 자로** 잰다 (위 두 상수의 주석 참조):
  *  1. 공중 — 못 때리는데 공중 비중이 AIR_BLIND_SHARE 이상이면 즉시 'air'.
  *     하드 게이트라 평균으로 희석되면 안 된다.
- *  2. 장갑 — 수요 막대가 DEMAND_WEAK 아래면 'armor'.
+ *  2. 나머지 — 수요 막대가 DEMAND_WEAK 아래면, **가장 많이 깎은 축**의 이름을 돌려준다.
  * 둘 다 걸리면 공중이 이긴다. 한 대도 못 대는 쪽이 언제나 더 큰 문제다.
+ *
+ * 2단계에서 축이 셋(장갑·가죽·흩어짐)이 됐으므로 "무엇에 막혔는가"를 **체력 가중으로 귀속**
+ * 한다 — `damageEnemy`가 `mitigated` 한 필드를 고르는 규칙과 같은 잣대다(가장 크게 깎은 것 하나).
  */
 export function counteredBy(
   def: TowerDef,
@@ -604,14 +661,34 @@ export function counteredBy(
   if (!isAttackTower(def)) return null;
   if (!def.canTargetAir && airShareOf(entries) >= AIR_BLIND_SHARE) return 'air';
   if (demandFor(def, tier, entries) >= DEMAND_WEAK) return null;
-  // 감산으로 잃은 체력이 실제로 있어야 '장갑 탓'이라고 말할 수 있다
-  let armorLoss = 0;
+  // 축별로 "이 축이 없었다면 얼마나 더 들어갔을까"를 체력 가중으로 모은다
+  const loss: Partial<Record<TraitTag, number>> = {};
+  let total = 0;
   for (const e of entries) {
     const canHit = e.flying ? def.canTargetAir : def.canTargetGround;
     if (!canHit) continue;
-    armorLoss += e.totalHp * (1 - towerEffVs(def, tier, e));
+    const gap = e.totalHp * (1 - towerEffVs(def, tier, e));
+    if (gap <= 0) continue;
+    total += gap;
+    // 이 종에서 실제로 켜져 있는 축 하나에 귀속한다 (I-1이 둘 이상을 금지한다)
+    const tag: TraitTag =
+      e.hideCap !== undefined
+        ? 'hide'
+        : e.splashResist !== undefined && isSplashDamage(def)
+          ? 'splash'
+          : 'armor';
+    loss[tag] = (loss[tag] ?? 0) + gap;
   }
-  return armorLoss > 0 ? 'armor' : null;
+  if (total <= 0) return null;
+  let best: TraitTag = 'armor';
+  let bestV = -1;
+  for (const [k, v] of Object.entries(loss) as [TraitTag, number][]) {
+    if (v > bestV) {
+      best = k;
+      bestV = v;
+    }
+  }
+  return best;
 }
 
 /** 이 카드가 이번 웨이브에 **유리한가** (옅은 테두리) */

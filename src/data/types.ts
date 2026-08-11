@@ -205,6 +205,27 @@ export interface EnemyDef {
   armor: number;
   /** 방패: 피해 무시 횟수 */
   shieldHits?: number;
+  /**
+   * **가죽** 🟫 — 한 번의 damageEnemy가 넣을 수 있는 최대치 = `round(maxHp × hide)` (0~1).
+   *
+   * `armor`의 정확한 거울이다: armor가 "유효한 최소 **타격 크기**"를 못 박는다면 hide는
+   * "죽이는 데 필요한 최소 **타격 횟수**"(= 1/hide)를 못 박는다. 두 규칙이 같은 함수의
+   * 연속된 두 줄이라 플레이어가 배울 것은 하나뿐이다.
+   *
+   * **절대값이 아니라 비율인 이유** — 절대값이면 cap이 고정인데 타워 dmg는 티어당 ×1.6로
+   * 자라서, 업그레이드할수록 잘리는 비율이 커진다(= 반업그레이드 세금). 비율로 두면 cap이
+   * maxHp와 함께 자라 최소 타격 횟수가 **티어·웨이브 불변의 약속**이 된다.
+   *
+   * 광역을 자르지 않는다: `applyArea`가 적마다 damageEnemy를 따로 부르므로 cap은
+   * **대상별**로 걸린다. 곧 가죽은 "한 방"만 자르고 "여러 마리"는 splashResist가 맡는다.
+   */
+  hide?: number;
+  /**
+   * **흩어짐** 〽 — `applyArea`(폭발 부가 피해)만 `×(1 − 값)` (0~1).
+   * 오라(pulseTick)·체인(fireBeam)·직격·아군·기지 화살은 전부 면제다. 곧 이 축이 벌하는
+   * 것은 "광역"이 아니라 **폭발**이고, 그래서 티어로 빠져나갈 수 없다.
+   */
+  splashResist?: number;
   flying: boolean;
   boss?: boolean;
   /** 처치 골드 */
@@ -333,6 +354,8 @@ export type TraitTag =
   | 'air' // 하늘 — flying (대공만이 닿는다)
   | 'shield' // 방패 — shieldHits (앞의 N타를 통째로 무시)
   | 'armor' // 장갑 — armor (타격당 고정 감산 → 작은 타격을 벌한다)
+  | 'hide' // 가죽 — hide (타격당 상한 → **큰 한 방**을 벌한다. armor의 거울)
+  | 'splash' // 흩어짐 — splashResist (폭발 부가 피해만 깎는다)
   | 'heal' // 치유 — healAura (주변을 되살린다)
   | 'raid' // 습격 — towerAttack (기지가 아니라 내 타워를 부순다)
   | 'enrage'; // 격노 — enrage (저체력에서 빨라진다)
@@ -351,8 +374,16 @@ export interface WavePreviewEntry {
   maxHp: number;
   /** 이 종이 이 웨이브에 들고 오는 체력 총합 (그룹별 정확 합산) */
   totalHp: number;
-  /** 타격당 고정 감산 (EnemyDef.armor 그대로) — 수요 막대가 이 값만으로 계산된다 */
+  /** 타격당 고정 감산 (EnemyDef.armor 그대로) */
   armor: number;
+  /**
+   * **가죽 상한의 절대값** = `round(maxHp × def.hide)` — 이번 웨이브에 실제로 걸리는 타격당
+   * 상한이다. 필드는 비율인데 여기만 절대값인 이유: 배지(`🟫가죽37`)와 데미지 숫자(`(37)`)가
+   * **같은 자를 써야** 화면에서 직접 비교된다. 가죽이 없는 종은 undefined.
+   */
+  hideCap?: number;
+  /** 폭발 부가 피해 감산 비율 (EnemyDef.splashResist 그대로). 없으면 undefined */
+  splashResist?: number;
   flying: boolean;
   boss: boolean;
   /** 특성 태그 (우선순위 정렬 — [0]이 칩에 그릴 배지 하나다) */
@@ -724,6 +755,13 @@ export type SimEvent =
        */
       source: TowerId | StatusKind | AllyId | HometownSourceId;
       shielded: boolean;
+      /**
+       * **무엇이 이 숫자를 깎았는가** — 데미지 숫자가 `(37)`처럼 괄호를 그릴 근거.
+       * 감산이 실제로 일어났을 때만 실린다(없으면 undefined = 온전히 들어갔다).
+       * 둘 이상 겹치면 **가장 크게 깎은 것** 하나만 싣는다 — 칩과 같은 규칙(배지 하나)이고,
+       * 15~20px 화면에서 두 부호를 겹쳐 그릴 자리가 없다.
+       */
+      mitigated?: 'armor' | 'hide' | 'splash';
     }
   | {
       type: 'enemyDied';

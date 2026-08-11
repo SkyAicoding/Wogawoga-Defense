@@ -476,6 +476,11 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .wp-badge-ico svg { width: 100%; height: 100%; display: block; }
 .wp-badge--air { color: #9fdcf7; }
 .wp-badge--armor { color: #d9c8a0; }
+/* 가죽 — 장갑(밝은 모래)의 거울이라 같은 계열의 **어두운 흙빛**으로 짝을 이룬다.
+   색만으로 구분되지 않는다: 아이콘 형태(한 겹 두꺼운 판)와 낱말이 항상 함께 간다. */
+.wp-badge--hide { color: #c08c5a; }
+/* 흩어짐 — 폭발 계열(주황)에서 한 칸 옮긴 자주. 습격(#ff9d6a)과 안 겹치는 색조다 */
+.wp-badge--splash { color: #c9a0e0; }
 .wp-badge--shield { color: #ffd04a; }
 .wp-badge--heal { color: #8be36a; }
 .wp-badge--raid { color: #ff9d6a; }

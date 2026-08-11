@@ -1,10 +1,12 @@
 /**
- * 데미지 파이프라인 — 방패 소진(피해 무효) → armor 고정 감산(최소 1) → hp 감소
+ * 데미지 파이프라인 — 방패 소진(피해 무효) → 흩어짐 비율 감산(폭발 한정) → armor 고정
+ * 감산(최소 1) → 가죽 타격당 상한(최소 1) → hp 감소
  * → 사망 시 bounty 골드. 기지 누수는 baseDamaged로 이어진다.
  * 타워 피해(적 부족의 공격)도 여기 있다 — 감쇠/방어 없이 정수 피해가 그대로 들어간다.
  * 상태이상 부여는 attack/status 쪽에서 담당 (순환 임포트 방지).
  */
 import type { AllyId, HometownSourceId, StatusKind, TowerId, TowerState } from '@/data/types';
+import { MITIGATED_MIN_SHARE, hideCapFor } from '@/data/balance';
 import type { AllySim, EnemySim, SimCtx } from './entities';
 
 export function addGold(ctx: SimCtx, delta: number): void {
@@ -15,6 +17,15 @@ export function addGold(ctx: SimCtx, delta: number): void {
 /**
  * 피해 적용. 반환값 = 실제 피해량 (방패에 막히면 0).
  * ignoreArmor는 poison DoT 전용 (armor 무시).
+ * splash는 **폭발 부가 피해 전용**(attack.applyArea 한 곳) — 흩어짐〽이 여기에만 걸린다.
+ *
+ * ── 세 감산의 순서와 그 이유 (docs/counter-plan.md 2단계) ────────────────────
+ *  0. 방패 — 최우선. 아예 "맞지 않은" 것이라 뒤의 계산이 존재하지 않는다.
+ *  1. 흩어짐 〽 — 폭발이면 먼저 비율로 깎는다. **감산 전**이라야 armor와 곱셈이 아니라
+ *     덧셈으로 겹치지 않는다(둘 다 곱셈이면 작은 타격이 두 번 벌받아 0으로 눌린다).
+ *  2. 장갑 🛡 — 고정 감산, 최소 1. **작은 타격**을 벌한다.
+ *  3. 가죽 🟫 — 타격당 상한, 최소 1. **큰 한 방**을 벌한다. armor의 거울이라 마지막이다:
+ *     상한은 "얼마가 들어오든 이 이상은 안 된다"이므로 모든 감산 뒤에 걸려야 뜻이 산다.
  */
 export function damageEnemy(
   ctx: SimCtx,
@@ -22,6 +33,7 @@ export function damageEnemy(
   amount: number,
   source: TowerId | StatusKind | AllyId | HometownSourceId,
   ignoreArmor = false,
+  splash = false,
 ): number {
   if (!e.alive) return 0;
   if (e.shieldHitsLeft > 0) {
@@ -37,7 +49,27 @@ export function damageEnemy(
     });
     return 0;
   }
-  const dealt = ignoreArmor ? amount : Math.max(1, amount - e.def.armor);
+  const resist = splash ? (e.def.splashResist ?? 0) : 0;
+  const raw = resist > 0 ? amount * (1 - resist) : amount;
+  const afterArmor = ignoreArmor ? raw : Math.max(1, raw - e.def.armor);
+  // 가죽 — 대상별 상한. maxHp 비율이라 티어를 올려도 최소 타격 횟수가 그대로다.
+  const cap = e.def.hide !== undefined ? hideCapFor(e.maxHp, e.def.hide) : Infinity;
+  const dealt = Math.min(afterArmor, cap);
+  // 축별로 못 넣은 몫. ignoreArmor면 afterArmor === raw라 lostArmor가 저절로 0이 된다
+  const lostSplash = amount - raw;
+  const lostArmor = raw - afterArmor;
+  const lostHide = afterArmor - dealt;
+  // 가장 크게 깎은 축 하나만 — 그리고 그 손실이 **눈에 띌 때만** 싣는다
+  const worst = Math.max(lostHide, lostArmor, lostSplash);
+  let mitigated: 'armor' | 'hide' | 'splash' | undefined;
+  if (worst > 0 && worst / (dealt + worst) >= MITIGATED_MIN_SHARE) {
+    mitigated =
+      lostHide >= lostArmor && lostHide >= lostSplash
+        ? 'hide'
+        : lostArmor >= lostSplash
+          ? 'armor'
+          : 'splash';
+  }
   e.hp -= dealt;
   ctx.events.push({
     type: 'enemyDamaged',
@@ -47,6 +79,7 @@ export function damageEnemy(
     z: e.z,
     source,
     shielded: false,
+    ...(mitigated ? { mitigated } : {}),
   });
   if (e.hp <= 0) {
     e.alive = false;

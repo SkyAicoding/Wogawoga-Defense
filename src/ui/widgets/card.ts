@@ -380,6 +380,19 @@ const TRAIT_ICONS: Record<TraitTag, string> = {
   armor: BADGE(
     `<path d="M4 6 h16 v4 H4 Z M6 11 h12 v4 H6 Z M8 16 h8 v4 H8 Z" fill="currentColor"/>`,
   ),
+  // 가죽 — 두꺼운 판 위로 튕겨 나가는 큰 타격(한 방의 상한). 장갑의 '겹'과 반대로
+  // **한 겹의 두꺼운 판** + 위쪽 화살표라 15~20px에서도 장갑과 헷갈리지 않는다.
+  hide: BADGE(
+    `<path d="M3 14 h18 v6 H3 Z" fill="currentColor"/>
+     <path d="M12 3 L18 11 H6 Z" fill="currentColor" opacity="0.75"/>`,
+  ),
+  // 흩어짐 — 중심에서 사방으로 흩어지는 파편(폭발만 깎는다)
+  splash: BADGE(
+    `<circle cx="12" cy="12" r="3.2" fill="currentColor"/>
+     <path d="M12 2 l1.6 3.6 h-3.2 Z M12 22 l-1.6 -3.6 h3.2 Z M2 12 l3.6 -1.6 v3.2 Z M22 12 l-3.6 1.6 v-3.2 Z
+              M5 5 l3.4 1.4 -2 2 Z M19 19 l-3.4 -1.4 2 -2 Z M19 5 l-1.4 3.4 -2 -2 Z M5 19 l1.4 -3.4 2 2 Z"
+           fill="currentColor" opacity="0.8"/>`,
+  ),
   // 치유 — 십자
   heal: BADGE(`<path d="M10 3 h4 v7 h7 v4 h-7 v7 h-4 v-7 H3 v-4 h7 Z" fill="currentColor"/>`),
   // 습격 — 부러진 기둥(내 타워를 부순다)

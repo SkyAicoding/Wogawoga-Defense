@@ -55,11 +55,23 @@ function repTier(state: BattleStateView, id: TowerId): number {
   return tier;
 }
 
-/** 특성 배지 한 개 (아이콘 + 짧은 낱말). 장갑만 수치를 함께 쓴다 */
+/**
+ * 특성 배지 한 개 (아이콘 + 짧은 낱말). **수치를 함께 쓰는 것은 장갑과 가죽뿐**이다.
+ *
+ * 가죽이 절대값(`가죽37`)인 이유 — 필드는 비율이지만 화면은 절대값이라야 전투 중의
+ * 데미지 숫자 `(37)`과 **같은 자로** 읽힌다. 비율(0.18)이나 횟수(최소 6대)는 그 비교가 안 된다.
+ * 흩어짐은 수치를 안 쓴다: 그 값은 "내 폭발이 얼마나 깎이는가"라 적이 아니라 **타워**의
+ * 성질이고, 그건 아래 수요 막대가 이미 길이로 말한다.
+ */
 function badgeOf(e: WavePreviewEntry): HTMLElement | null {
   const tag = e.traits[0];
   if (!tag) return null;
-  const label = tag === 'armor' ? `${t('trait.armor.name')}${e.armor}` : t(`trait.${tag}.name`);
+  const label =
+    tag === 'armor'
+      ? `${t('trait.armor.name')}${e.armor}`
+      : tag === 'hide' && e.hideCap !== undefined
+        ? `${t('trait.hide.name')}${e.hideCap}`
+        : t(`trait.${tag}.name`);
   return h('span', { class: `wp-badge wp-badge--${tag}` },
     h('span', { class: 'wp-badge-ico', html: traitIconSvg(tag) }),
     h('span', { class: 'wp-badge-txt', text: label }),
@@ -144,7 +156,9 @@ export function createWavePreview(): WavePreviewBand {
         text: tag
           ? tag === 'armor'
             ? t('trait.armor.desc', { n: e.armor })
-            : t(`trait.${tag}.desc`)
+            : tag === 'hide' && e.hideCap !== undefined
+              ? t('trait.hide.desc', { n: e.hideCap })
+              : t(`trait.${tag}.desc`)
           : t('battle.preview.plain'),
       }),
       h('div', { class: 'wp-d-row' },

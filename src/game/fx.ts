@@ -443,7 +443,7 @@ export class FxRouter {
             spawnDamageNumber(
               p.sx,
               p.sy,
-              ev.shielded ? '⛨' : damageText(ev.amount, armor),
+              ev.shielded ? '⛨' : damageText(ev.amount, armor, ev.mitigated),
               kind,
               ds,
             );

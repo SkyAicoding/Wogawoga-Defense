@@ -69,7 +69,9 @@ function applyArea(
     if (!e.alive || e.flying || e.id === excludeId) continue;
     const d = dist(x, z, e.x, e.z);
     if (d > splash.radius + e.radius) continue;
-    dealt += damageEnemy(ctx, e, dmg * splashScale(d, splash), source);
+    // 마지막 인자 splash=true — 흩어짐〽이 걸리는 **유일한 호출부**다.
+    // 오라(pulseTick)·체인(fireBeam)·직격·아군·기지 화살은 전부 false로 남는다.
+    dealt += damageEnemy(ctx, e, dmg * splashScale(d, splash), source, false, true);
     if (status && e.alive) tryApplyStatus(ctx, e, status, sourceTowerId);
   }
   return dealt;
