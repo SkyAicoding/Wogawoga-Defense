@@ -97,9 +97,12 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
  * 타워 수 칩(따뜻한 색)과 한눈에 갈린다. 정원이 차면 색으로 알린다.
  */
 /*
- * HP 줄에 얹히므로 상단 칩들보다 한 치수 작다 — 줄 높이(하트 30px)를 넘기지 않는다.
+ * 상단 칩들보다 한 치수 작다. HP 줄에 얹혀 있을 때 생긴 치수인데, 첫 줄로 옮긴 뒤에도
+ * **그대로 둔다** — 첫 줄이 칩 4개에서 5개가 됐고 320px에서 가장 빠듯한 자리라
+ * 여기서 키우면 그만큼 다른 칩을 깎아야 한다.
  * 대신 **터치 타깃은 44px를 지킨다**: 보이는 높이는 32px로 두고 ::after로 위아래 6px씩
  * 넓혀 32+12 = 44px를 만든다 (레이아웃 높이는 그대로라 상단 HUD 예약이 안 커진다).
+ * 첫 줄의 다른 요소가 48px(일시정지)라 44px 타깃은 줄 높이 안에 그대로 들어간다.
  */
 .pill--ally { position: relative; padding: 2px 10px 2px 4px; min-height: 32px; gap: 4px; flex: 0 0 auto; }
 .pill--ally::after { content: ''; position: absolute; inset: -6px -4px; }
@@ -298,8 +301,21 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .screen--battle .hud-item { pointer-events: auto; }
 .hud-col { position: relative; justify-content: space-between; padding-bottom: calc(var(--safe-bottom) + 8px); }
 .hud-top { display: flex; flex-direction: column; gap: 8px; }
-.hud-top-row { display: flex; align-items: center; gap: 8px; }
+/*
+ * flex-wrap: wrap 은 **안전망**이지 레이아웃이 아니다.
+ * 아래 압축 규칙이 320px에서도 한 줄에 들어가게 맞춰 놓았지만(실측), 골드가
+ * 여섯 자리를 넘거나 폰트 대체가 일어나면 그 여유가 사라질 수 있다. 그때
+ * nowrap이면 **맨 오른쪽 부족 칩이 화면 밖으로 나가 못 눌리게 된다** — 그건
+ * 표시가 잘리는 게 아니라 마을 패널로 가는 입구가 사라지는 것이다(기능 손실).
+ * 줄바꿈이 일어나면 HUD가 한 줄만큼 높아져 HUD_TOP_PX가 실측보다 작아지지만,
+ * 그건 격자 몇 점이 HUD 뒤로 가는 것뿐이고 가로모드가 이미 의도적으로 감수하는
+ * 종류의 오차다. 못 누르는 버튼보다 낫다.
+ */
+.hud-top-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .hud-top-spacer { flex: 1; }
+/* 칩 안의 숫자는 절대 접히면 안 된다 — 접히는 순간 줄 높이가 두 배가 되고
+   HUD_TOP_PX(카메라 예약)가 거짓말이 된다 */
+.hud-top-row .pill, .hud-top-row .wave-badge { white-space: nowrap; flex: 0 0 auto; }
 .wave-badge {
   display: inline-flex; align-items: baseline; gap: 6px; min-height: 44px; align-items: center;
   padding: 4px 14px; border: 2.5px solid var(--ink); border-radius: 999px;
@@ -307,13 +323,72 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .wave-label { font-size: 0.78rem; font-weight: 800; opacity: 0.85; }
 .wave-num { font-size: 1.1rem; font-weight: 900; color: #fff; }
-.hud-hp { display: flex; align-items: center; gap: 8px; }
-.hp-heart { width: 30px; height: 30px; flex: 0 0 auto; filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.4)); }
-.hp-heart svg { width: 100%; height: 100%; }
-.hp-bar { flex: 1; height: 20px; border-radius: 10px; border: 2.5px solid var(--ink); background: rgba(0, 0, 0, 0.55); overflow: hidden; }
-.hp-fill { height: 100%; width: 100%; border-radius: 7px; background: linear-gradient(180deg, #8be36a, #55a838); transition: width 0.25s ease; }
-.hp-fill.is-low { background: linear-gradient(180deg, #ff7a63, #e04f3f); animation: hp-blink 0.8s ease-in-out infinite; }
-.hp-num { font-weight: 900; min-width: 40px; text-align: right; text-shadow: 0 2px 0 rgba(0, 0, 0, 0.5); }
+/*
+ * ── 첫 줄이 칩 5개가 됐다 ────────────────────────────────────────────────
+ * HP 줄(.hud-hp)을 걷어내면서 부족 칩이 이 줄로 올라왔다. 실측(320×568,
+ * .col 안쪽 296px)에서 기본 치수로 두면 줄 내용이 **531px**라 호박 칩과 부족 칩이
+ * 통째로 화면 밖으로 밀려난다. (넘침 자체는 이번에 생긴 게 아니다 — 칩 4개일 때도
+ * 455px였다. 다만 그때 밀려나던 건 표시뿐인 호박 칩이었고, 지금 밀려나는 부족 칩은
+ * **마을 패널로 가는 유일한 상시 입구**라 밀려나면 기능이 죽는다.)
+ *
+ * 그래서 좁은 폭에서는 줄 전체를 한 치수 줄인다. **정보는 하나도 안 버린다** —
+ * 접는 것은 낱말 '웨이브' 하나뿐이고, 그 낱말은 바로 아래 미리보기 띠와 웨이브
+ * 배너가 이미 말하고 있다(같은 근거로 .wp-title도 접힌다).
+ * 터치 타깃은 40px 아래로 내려가지 않게 잡았다.
+ */
+@media (max-width: 480px) {
+  .hud-top-row { gap: 6px; }
+  .hud-top-row .icon-btn { width: 42px; height: 42px; font-size: 1.1rem; }
+  .hud-top-row .wave-badge { padding: 2px 10px; min-height: 42px; }
+  .hud-top-row .wave-num { font-size: 1rem; }
+  .hud-top-row .pill { min-height: 42px; padding: 3px 9px 3px 4px; gap: 4px; font-size: 0.92rem; }
+  .hud-top-row .pill-ico { width: 24px; height: 24px; }
+}
+/* 390 이하 — 낱말을 접고 칩을 한 치수 더 줄인다 (320에서 줄이 딱 들어가는 값) */
+@media (max-width: 420px) {
+  .hud-top-row { gap: 4px; }
+  .hud-top-row .icon-btn { width: 40px; height: 40px; font-size: 1rem; }
+  .hud-top-row .wave-label { display: none; }
+  .hud-top-row .wave-badge { padding: 2px 7px; min-height: 40px; }
+  .hud-top-row .wave-num { font-size: 0.9rem; }
+  .hud-top-row .pill { min-height: 40px; padding: 2px 6px 2px 2px; gap: 2px; font-size: 0.8rem; }
+  .hud-top-row .pill-ico { width: 19px; height: 19px; }
+  .hud-top-row .pill--ally { padding: 2px 6px 2px 2px; }
+  .hud-top-row .pill--ally .pill-ico { width: 19px; height: 19px; }
+  .hud-top-row .pill--ally .pill-num { font-size: 0.8rem; }
+}
+/*
+ * 320px — 마지막 한 치수. 위 값으로도 실측 325px라 부족 칩 오른쪽 29px이 잘렸다.
+ * 여기서 더 줄일 곳은 글자와 여백뿐이라 그것만 줄인다(칩 개수는 그대로).
+ * 일시정지 버튼은 40×40에서 멈춘다 — 유일한 '나가는 문'이라 더 못 줄인다.
+ * 부족 칩의 ::after(위아래 6px)가 살아 있어 터치 타깃은 40+12 = 52px를 지킨다.
+ *
+ * 실측 결과(320×568, 쓸 수 있는 폭 296px · nowrap으로 강제해 잰 줄 내용 폭):
+ *   보통   타워 4 · 골드 850 · 호박 12 · 부족 2/6   → 296  (딱 맞는다)
+ *   후반   타워 15 · 골드 9,999 · 호박 999 · 6/6    → 296  (딱 맞는다)
+ *   극단   골드 **123,450**                          → 308  (12px 초과 → 줄바꿈)
+ * 극단만 안 들어간다. 거기까지 맞추려고 글자를 더 줄이면 **늘 보는 화면**이
+ * 안 보이는 경우 하나 때문에 나빠진다. 그래서 그 경우는 위의 flex-wrap 안전망에
+ * 맡긴다 — 줄이 하나 늘 뿐 부족 칩은 끝까지 눌린다(실측 allyFullyVisible=true).
+ */
+@media (max-width: 360px) {
+  .hud-top-row { gap: 2px; }
+  .hud-top-row .wave-badge { padding: 2px 5px; }
+  .hud-top-row .wave-num { font-size: 0.82rem; }
+  .hud-top-row .pill { padding: 2px 4px 2px 1px; gap: 2px; font-size: 0.76rem; }
+  .hud-top-row .pill-ico { width: 16px; height: 16px; }
+  .hud-top-row .pill--ally { padding: 2px 4px 2px 1px; }
+  .hud-top-row .pill--ally .pill-ico { width: 16px; height: 16px; }
+  .hud-top-row .pill--ally .pill-num { font-size: 0.76rem; }
+}
+/*
+ * ── .hud-hp(하트·체력바·숫자) 는 삭제됐다 ────────────────────────────────
+ * 사용자 요청으로 기지 HP는 판 위 홈타운 지붕 위 3D 바로 옮겼다
+ * (render/views/healthbars.ts, barKind 4). `.hp-fill.is-low` 가 하던 저체력
+ * 점멸도 거기서 셰이더로 재현한다 — 역치 30% · 주기 0.8초 그대로다.
+ * @keyframes hp-blink 자체는 남긴다: `.tp-btn--clear.is-armed` / `.tp-btn--up.is-armed`
+ * (제거·레벨업 2단 확인 무장 표시)가 아직 쓴다.
+ */
 .hud-side {
   position: absolute; right: calc(var(--safe-right) + 2px); top: 36%;
   display: flex; flex-direction: column; gap: 10px;

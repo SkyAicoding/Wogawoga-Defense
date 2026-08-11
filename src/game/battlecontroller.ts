@@ -35,16 +35,37 @@ const PREP_TICKS_FIRST = 150;
 const PREP_TICKS_LATER = 90;
 /** 승패 연출 후 결과 화면 전환 지연 */
 const END_DELAY_MS = 1500;
-/** HUD 예약 영역 (카메라 플레이필드 fit용, CSS와 대략 일치) — 세로 레이아웃 */
-const HUD_TOP_PX = 118;
+/**
+ * HUD 예약 영역 (카메라 플레이필드 fit용, CSS와 대략 일치) — 세로 레이아웃.
+ *
+ * ── 118 → 74 (상단 HUD가 두 줄에서 **한 줄**이 됐다) ────────────────────────
+ * 사용자 요청으로 둘째 줄(.hud-hp: 하트·체력바·숫자)을 걷어냈다. 이 값을 같이
+ * 줄이지 않으면 없앤 줄만큼 판이 넓어지지 않는다 — 넓어지는 것이 이 작업의 목적이다.
+ *
+ * 실측(?test=1 · `.hud-top` 의 getBoundingClientRect().bottom):
+ *   개정 전  10(.col 위 여백) + 48(첫 줄) + 8(gap) + 32(HP 줄) = 98
+ *   개정 후  10 + 48 = **58**            ← 폭 > 480px
+ *            10 + 42 = 52                ← 폭 ≤ 480px (칩 압축)
+ *            10 + 40 = 50                ← 폭 ≤ 420px (낱말 접기까지)
+ * 즉 예약해야 할 최대치는 58이다. 74는 거기에 개정 전과 같은 비율의 여유
+ * (118/98 ≈ 1.20 → 58×1.28)를 남긴 값이다. 여유를 남기는 이유는 노치 기기의
+ * safe-area-inset-top 이 이 상수에 반영되지 않기 때문이고, 그 한계는 개정 전에도
+ * 똑같았다(노치 47px이면 개정 전 실측도 145 > 118이었다).
+ */
+const HUD_TOP_PX = 74;
 const HUD_BOTTOM_RATIO = 0.27;
 const HUD_BOTTOM_MIN_PX = 208;
 /**
  * 가로모드(style.css: max-height 560px 압축 HUD)가 실제 차지하는 높이 근사.
- * 실측 HUD는 상단 96 / 하단 116(iPhone 13 landscape 750×342)이라 이 값보다 크지만,
- * 그만큼 예약하면 342px 높이에서 셀이 8.5→6.8px 로 줄어 오히려 못 쓰게 된다.
- * 실제로 상시 HUD 뒤로 내려가는 격자점은 165개 중 4개뿐이라 이 근사를 유지한다
- * (제거 패널은 상시 요소가 아니고, 배경이 포인터를 통과시켜 탭은 살아 있다).
+ * 하단(116 실측)은 여전히 이 값보다 크지만, 그만큼 예약하면 342px 높이에서 셀이
+ * 8.5→6.8px 로 줄어 오히려 못 쓰게 된다. 실제로 상시 HUD 뒤로 내려가는 격자점은
+ * 165개 중 4개뿐이라 하단은 이 근사를 유지한다 (제거 패널은 상시 요소가 아니고,
+ * 배경이 포인터를 통과시켜 탭은 살아 있다).
+ *
+ * **상단은 더 이상 근사가 아니다.** HP 줄을 걷어내면서 실측이 96 → 58로 내려가
+ * (750×342 실측: 여백 10 + 첫 줄 48) 이 상수가 처음으로 실측을 덮는다.
+ * 64는 그 58을 덮으면서 남는 여유가 6px이라 그대로 둔다 — 줄이면 얻는 건 6px인데
+ * 노치(safe-area) 기기에서 곧바로 모자라진다.
  */
 const LANDSCAPE_MAX_CSS_H = 560;
 const HUD_TOP_LANDSCAPE_PX = 64;
@@ -307,7 +328,8 @@ export class BattleController {
     const s3 = this.stage3d;
     // 아군은 적 습격대와 같은 InstancedMesh에 얹혀 그려진다 (드로우콜 증가 0)
     s3.enemies.update(st.enemies, alpha, s3.cellToWorld, dt, st.allies);
-    // 오버레이 인스턴스 한 메시 — 적/아군/타워 체력바 + 파괴 잔해 + 침묵 룬 (드로우콜 1)
+    // 오버레이 인스턴스 한 메시 — 적/아군/타워/기지 체력바 + 파괴 잔해 + 침묵 룬 (드로우콜 1)
+    // 기지 바는 HUD 둘째 줄(하트+체력바)을 대신한다 — 타워와 같은 규칙(만피면 안 그린다)
     s3.healthbars.update(
       st.enemies,
       st.towers,
@@ -315,6 +337,13 @@ export class BattleController {
       s3.cellToWorld,
       s3.towerStatus.marks(),
       st.allies,
+      {
+        cellX: this.stage.baseCell.x,
+        cellZ: this.stage.baseCell.z,
+        hp: st.baseHp,
+        maxHp: st.baseHpMax,
+        level: st.baseLevel,
+      },
     );
     s3.projectiles.update(st.projectiles, alpha, dt);
     s3.towers.aim(st.towers, st.enemies, alpha);

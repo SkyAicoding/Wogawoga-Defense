@@ -410,11 +410,12 @@ export function traitIconSvg(tag: TraitTag): string {
   return TRAIT_ICONS[tag];
 }
 
-/** 기지 HP 하트 */
-export const heartSvg = SVG(
-  `<path d="M24 42 C10 32 4 24 4 15 A10 10 0 0 1 24 11 A10 10 0 0 1 44 15 C44 24 38 32 24 42 Z"
-     fill="#ff5a5a" stroke="#8f1d1d" stroke-width="3"/>`,
-);
+/*
+ * heartSvg(기지 HP 하트)는 삭제됐다 — 유일한 사용처였던 HUD 둘째 줄(.hud-hp)이
+ * 사용자 요청으로 사라졌고, 기지 HP는 홈타운 지붕 위 3D 바가 맡는다.
+ * 3D로 다시 만들지 않은 이유는 render/views/healthbars.ts 헤더에 있다
+ * (15~20px 화면에서 안 읽히고 드로우콜만 먹는다).
+ */
 
 /** 별 (채움/빈칸) */
 export function starSvg(filled: boolean): string {

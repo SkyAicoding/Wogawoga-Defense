@@ -32,7 +32,6 @@ import {
   amberSvg,
   createTowerCard,
   goldSvg,
-  heartSvg,
   hometownIconSvg,
   sceneryIconSvg,
   towerCountSvg,
@@ -131,7 +130,6 @@ export function createBattleHud(): Screen<GameFacade> {
   let waveNum!: HTMLElement;
   let goldNum!: HTMLElement;
   let amberNum!: HTMLElement;
-  let hpNum!: HTMLElement;
   let towerNum!: HTMLElement;
   let towerPill!: HTMLElement;
   let allyPillNum!: HTMLElement;
@@ -139,7 +137,6 @@ export function createBattleHud(): Screen<GameFacade> {
   /** 직전 프레임의 타워 수 — 줄어든 순간에만 경보 클래스를 붙인다 */
   let lastTowerCount = -1;
   let lastAllyPillSig = '';
-  let hpFill!: HTMLElement;
   let speedBtn!: HTMLElement;
   let autoBtn!: HTMLElement;
   let handHost!: HTMLElement;
@@ -240,11 +237,18 @@ export function createBattleHud(): Screen<GameFacade> {
       waveNum = h('span', { class: 'wave-num' });
       goldNum = h('span', { class: 'pill-num' });
       amberNum = h('span', { class: 'pill-num' });
-      hpNum = h('span', { class: 'hp-num' });
       towerNum = h('span', { class: 'pill-num' });
       allyPillNum = h('span', { class: 'pill-num' });
-      hpFill = h('div', { class: 'hp-fill' });
 
+      /*
+       * ── 상단은 이제 **한 줄**이다 (사용자 요청) ─────────────────────────────
+       * 둘째 줄(.hud-hp)에 있던 하트·체력바·숫자는 통째로 사라지고, 기지 HP는
+       * 판 위 홈타운 지붕 위에 3D 바로 나온다(render/views/healthbars.ts, kind 4).
+       * 규칙도 타워와 같아졌다 — **깎이는 동안에만 보인다**.
+       * 그 대가로 HUD는 "지금 몇 대 남았나"를 상시로는 말하지 않게 됐지만,
+       * 그게 바로 사용자가 요구한 것이고 대신 플레이필드가 한 줄만큼 넓어졌다
+       * (battlecontroller.HUD_TOP_PX 118 → 74).
+       */
       const top = h('div', { class: 'hud-top' },
         h('div', { class: 'hud-top-row' },
           h('button', {
@@ -264,11 +268,6 @@ export function createBattleHud(): Screen<GameFacade> {
             h('span', { class: 'pill-ico', html: goldSvg }), goldNum),
           h('div', { class: 'pill pill--amber hud-item' },
             h('span', { class: 'pill-ico', html: amberSvg }), amberNum),
-        ),
-        h('div', { class: 'hud-hp' },
-          h('span', { class: 'hp-heart hud-item', html: heartSvg }),
-          h('div', { class: 'hp-bar hud-item' }, hpFill),
-          hpNum,
           /*
            * 부족 칩 — 나가 있는 인원 n/6 + **마을 패널로 가는 상시 입구**.
            *
@@ -282,6 +281,11 @@ export function createBattleHud(): Screen<GameFacade> {
            * 바로 옆 타워 수 칩과 같은 종류(상태 표시)이고, 누르면 판 위의 움막을 탭한
            * 것과 같은 경로로 마을을 고른다(api.selectBase). 그래서 "급할 때 첫 한 명"의
            * 동선이 2탭으로 돌아온다 — 출동 버튼 자체는 여전히 패널 안에만 있다.
+           *
+           * ⚠ HP 줄이 사라지면서 **첫 줄 맨 오른쪽(호박 칩 뒤)** 으로 옮겨 왔다.
+           * 사용자가 "가장 오른쪽 동전 옆"이라 했고 그 자리면 골드·호박 어느 쪽으로
+           * 읽어도 옆이다. 옮기면서 **기능은 그대로다** — 여전히 button이고 여전히
+           * api.selectBase()를 부른다. 죽이면 마을 패널로 가는 상시 입구가 다시 0이 된다.
            */
           (allyPill = h('button', {
             class: 'pill pill--ally hud-item',
@@ -596,7 +600,8 @@ export function createBattleHud(): Screen<GameFacade> {
       setText(waveNum, s.endless ? `∞ ${s.waveIndex}` : `${s.waveIndex}/${s.waveCount}`);
       setText(goldNum, fmt(s.gold));
       setText(amberNum, fmt(s.amberEarned));
-      setText(hpNum, `${s.baseHp}`);
+      // 기지 HP는 더 이상 HUD에 없다 — 홈타운 지붕 위 3D 바가 맡는다
+      // (render/views/healthbars.ts kind 4, 저체력 점멸까지 그쪽으로 옮겼다)
       // 부족 칩 — 나가 있는 인원. 상한에 닿으면 색이 바뀐다(패널 안 표시와 같은 규약)
       const allyPillSig = `${s.allies.length}/${s.allyCap}`;
       if (allyPillSig !== lastAllyPillSig) {
@@ -614,9 +619,6 @@ export function createBattleHud(): Screen<GameFacade> {
         }
         lastTowerCount = towerCount;
       }
-      const pct = s.baseHpMax > 0 ? (s.baseHp / s.baseHpMax) * 100 : 0;
-      hpFill.style.width = `${pct}%`;
-      cls(hpFill, 'is-low', pct <= 30);
 
       // 우측 토글
       setText(speedBtn, `x${b.speed}`);

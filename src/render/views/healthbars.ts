@@ -1,8 +1,10 @@
 /**
- * 오버레이 인스턴스 계층 — **적 체력바 / 내 타워 체력바 / 파괴 잔해 / 침묵 룬**을
- * 전부 하나의 InstancedMesh로 그린다 (드로우콜 1). barKind로 정점·프래그먼트를 가른다:
- *   0 = 적 체력바, 1 = 타워 체력바 (카메라 정렬 빌보드)
+ * 오버레이 인스턴스 계층 — **적 체력바 / 내 타워 체력바 / 기지 체력바 / 파괴 잔해 /
+ * 침묵 룬**을 전부 하나의 InstancedMesh로 그린다 (드로우콜 1).
+ * barKind로 정점·프래그먼트를 가른다:
+ *   0 = 적 체력바, 1 = 타워·아군 체력바 (카메라 정렬 빌보드)
  *   2 = 파괴 잔해, 3 = 침묵 룬     (지면/지붕에 눕는 원형 표식, towerstatus.ts가 상태 소유)
+ *   4 = 기지(홈타운) 체력바        (빌보드 — 1과 같은 팔레트, 크기와 저체력 경보만 다르다)
  * 만피는 숨긴다 — 바가 보인다 = 지금 뭔가 깎이고 있다는 신호다.
  *
  * ── 왜 네 가지를 한 메시에 몰아넣는가 (드로우콜 예산) ────────────────────────
@@ -37,6 +39,18 @@
  *    기본 줌에서 유닛이 20px 남짓이라 색만으로는 부족하고, 테두리 명도 대비가
  *    "선이 하나 더 굵다"로 읽힌다. 높이도 0.13 → 0.22로 키웠다
  *    (실측: 데스크톱 기본 줌에서 채움 높이 1~2px → 4~5px).
+ *
+ * ── 기지 바는 왜 kind 1이 아니라 4인가 ────────────────────────────────────
+ * 사용자 요구는 "홈타운 위에 **다른 타워들처럼** 공격받으면 게이지가 나오도록"이다.
+ * 그래서 팔레트·테두리·눈금은 타워(kind 1)와 **한 픽셀도 다르지 않게** 두고,
+ * 오직 두 가지만 갈랐다 — (a) 크기, (b) 저체력 점멸.
+ * 그 둘을 위해 kind를 나눈 것이지 다른 물건으로 보이게 하려고 나눈 게 아니다.
+ * 프래그먼트는 `own = min(vKind, 1.0)`으로 1과 4를 같은 팔레트에 태우고,
+ * `isBase = step(3.5, vKind)`로 점멸만 기지에 건다.
+ * (b)가 필요한 이유: HUD 둘째 줄을 걷어내면서 `.hp-fill.is-low`(30% 이하 0.8초 점멸)가
+ * 같이 사라졌다. 그건 장식이 아니라 **패배가 임박했다는 유일한 경보**였고,
+ * style.css의 prefers-reduced-motion 블록이 그 애니메이션만은 일부러 안 끄고 있다.
+ * 없앨 게 아니라 옮길 신호라 판단해 3D 바로 그대로 이사시켰다(주기·역치 동일).
  */
 import * as THREE from 'three';
 import type { AllyState, EnemyState, TowerState } from '@/data/types';
@@ -69,6 +83,33 @@ const ALLY_BAR_H = 0.15;
 const ALLY_BAR_Y = 0.95;
 /** 티어 스케일에 곱하는 바 높이 — 지붕 바로 위 (towerTierScale 기준) */
 const TOWER_BAR_HEIGHT = 1.45;
+/**
+ * 기지(홈타운) 체력바 — **타워 바보다 크다**. 기지 HP는 패배 조건이라 타워 한 기보다
+ * 무겁고, 마을 자체가 타워보다 큰 구조물(반경 1.45 = 약 2.9셀)이라 타워와 같은 0.9면
+ * 마을 위에서 오히려 작아 보인다. 그렇다고 마을 폭(2.9셀)을 채우면 이웃 셀까지 덮으므로
+ * 그 절반쯤인 1.3셀에서 멈춘다 — 타워 바의 1.44배이고 판은 가리지 않는다.
+ */
+const BASE_BAR_W = 1.3;
+const BASE_BAR_H = 0.3;
+/**
+ * 마을 레벨(1~5)별 지붕 높이 — **실측값**이다.
+ * tests/render/basecamp.test.ts 의 visibleHeight 와 같은 방식으로 레벨×피해 15조합을
+ * 재서 얻었다(피해 0 기준): 1.228 / 1.240 / 1.639 / 1.639 / 2.126.
+ * 레벨을 반영하는 이유는 마을이 **위로 자라기** 때문이다(움막 → 망루 → 망루 꼭대기층).
+ * Lv5 값 하나로 고정하면 Lv1 마을 위 0.9만큼 허공에 뜨고, Lv1 값으로 고정하면
+ * Lv3부터 망루에 파묻힌다. 바는 depthTest를 받으므로 파묻히면 **아예 안 보인다**.
+ *
+ * ⚠ 피해 단계(0/1/2)로는 낮추지 않는다. 반파 마을은 1.403까지 주저앉지만(실측),
+ * 바가 그때 같이 내려오면 **피해를 입을수록 바가 움직이는** 꼴이라 읽기가 어려워진다.
+ * 무너진 마을 위에서 여유가 조금 더 생길 뿐 가려지지는 않으므로 온전한 높이로 고정한다.
+ */
+const BASE_ROOF_Y: readonly number[] = [1.228, 1.24, 1.639, 1.639, 2.126];
+/**
+ * 지붕과 바 사이 여유. 타워 바가 대다수 타워 지붕 위에 남기는 간격(T5 기준 0.03~0.45)의
+ * 중간쯤이고, 데스크톱 기본 줌(1셀 ≈ 20.5px)에서 약 4.5px — "지붕에 붙어 있지만
+ * 파묻히진 않았다"로 읽히는 최소값이다.
+ */
+const BASE_BAR_CLEARANCE = 0.22;
 /** 지면 표식(잔해) 높이 — 지형 z-파이팅을 polygonOffset과 함께 피한다 */
 const GROUND_Y = 0.045;
 const _pos = new THREE.Vector3();
@@ -77,6 +118,21 @@ const _quat = new THREE.Quaternion();
 const _flatQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
 const _scl = new THREE.Vector3();
 const _mat = new THREE.Matrix4();
+
+/**
+ * 기지 체력바에 필요한 것 전부 — 셀 좌표 · HP · 마을 레벨.
+ * BattleState를 통째로 받지 않는 이유는 이 뷰가 sim 타입에 묶이지 않기 때문이다
+ * (다른 인자도 전부 필요한 필드만 받는다). update의 **마지막 선택 인자**라
+ * 기존 호출부·테스트는 한 줄도 고치지 않아도 그대로 돈다.
+ */
+export interface BaseBarInfo {
+  cellX: number;
+  cellZ: number;
+  hp: number;
+  maxHp: number;
+  /** 마을 레벨 (1-base) — 바 높이가 이걸 따라간다 */
+  level: number;
+}
 
 export class HealthBarView {
   private mesh: THREE.InstancedMesh;
@@ -90,7 +146,7 @@ export class HealthBarView {
     this.fillAttr = new THREE.InstancedBufferAttribute(fills, 1);
     this.fillAttr.setUsage(THREE.DynamicDrawUsage);
     geo.setAttribute('fill', this.fillAttr);
-    // 0 = 적 바, 1 = 타워 바, 2 = 파괴 잔해, 3 = 침묵 룬
+    // 0 = 적 바, 1 = 타워·아군 바, 2 = 파괴 잔해, 3 = 침묵 룬, 4 = 기지 바
     const kinds = new Float32Array(CAPACITY);
     this.kindAttr = new THREE.InstancedBufferAttribute(kinds, 1);
     this.kindAttr.setUsage(THREE.DynamicDrawUsage);
@@ -123,8 +179,8 @@ varying vec2 vBarUv;`,
 vKind = barKind;
 vBarUv = position.xy + 0.5;
 vec4 mvPosition;
-if (barKind < 1.5) {
-  // 체력바: 빌보드 — 인스턴스 위치 + 카메라 우/상 벡터 * 로컬 좌표 * 인스턴스 스케일
+if (barKind < 1.5 || barKind > 3.5) {
+  // 체력바(0·1·4): 빌보드 — 인스턴스 위치 + 카메라 우/상 벡터 * 로컬 좌표 * 인스턴스 스케일
   vec4 ipos = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
   float bsx = length(vec3(instanceMatrix[0]));
   float bsy = length(vec3(instanceMatrix[1]));
@@ -150,22 +206,32 @@ varying vec2 vBarUv;`,
         .replace(
           '#include <color_fragment>',
           `#include <color_fragment>
-if (vKind < 1.5) {
+if (vKind < 1.5 || vKind > 3.5) {
   // ── 체력바 ────────────────────────────────────────────────────────────
+  // own: 0 = 적, 1 = 내 편(타워·아군 kind 1, 기지 kind 4). 기지는 팔레트·테두리·눈금이
+  // 타워와 **완전히 같다** — 갈리는 건 크기와 아래 저체력 점멸뿐이다.
+  float own = min(vKind, 1.0);
+  float isBase = step(3.5, vKind);
   // 적: 초록→빨강 (자연/생명). 테두리는 검정.
   vec3 foeCol = mix(vec3(0.85, 0.16, 0.1), vec3(0.28, 0.82, 0.2), smoothstep(0.25, 0.6, vFill));
   // 내 타워: 청록→호박→적색 (구조물/경보). 만피 근처 색이 적과 완전히 다르다.
   vec3 ownCol = mix(vec3(0.98, 0.22, 0.13), vec3(1.0, 0.72, 0.12), smoothstep(0.15, 0.45, vFill));
   ownCol = mix(ownCol, vec3(0.36, 0.86, 0.95), smoothstep(0.5, 0.8, vFill));
-  vec3 hpCol = mix(foeCol, ownCol, vKind);
-  vec3 barCol = vBarUv.x < vFill ? hpCol : mix(vec3(0.06, 0.05, 0.05), vec3(0.10, 0.09, 0.11), vKind);
+  vec3 hpCol = mix(foeCol, ownCol, own);
+  // 기지 저체력 경보 — HUD에서 사라진 .hp-fill.is-low 를 그대로 옮겨 왔다.
+  // 역치 30%·주기 0.8초(≈7.85rad/s)까지 CSS와 같은 값이고, 밝기 배율 대신
+  // 뜨거운 흰빛으로 **섞는다**: 저체력 색이 이미 짙은 적색이라 밝기만 곱하면
+  // R이 1.0에 물려 거의 안 움직인다(toneMapped=false → 출력에서 잘린다).
+  float low = isBase * (1.0 - step(0.30, vFill));
+  hpCol = mix(hpCol, vec3(1.0, 0.92, 0.72), low * 0.5 * (0.5 + 0.5 * sin(uTime * 7.85)));
+  vec3 barCol = vBarUv.x < vFill ? hpCol : mix(vec3(0.06, 0.05, 0.05), vec3(0.10, 0.09, 0.11), own);
   // 타워 바는 테두리를 두껍게 + 밝은 돌색으로 — 색이 안 보이는 크기에서도 갈린다
-  float inset = mix(0.06, 0.17, vKind);
+  float inset = mix(0.06, 0.17, own);
   float edge = step(inset, vBarUv.y) * step(vBarUv.y, 1.0 - inset)
              * step(inset * 0.35, vBarUv.x) * step(vBarUv.x, 1.0 - inset * 0.35);
   // 타워 바 중앙 눈금 — 반쯤 깎였는지가 한눈에 잡힌다
-  float tick = vKind * step(abs(vBarUv.x - 0.5), 0.012) * step(0.25, vBarUv.y) * step(vBarUv.y, 0.75);
-  vec3 frame = mix(vec3(0.04), vec3(0.93, 0.90, 0.82), vKind);
+  float tick = own * step(abs(vBarUv.x - 0.5), 0.012) * step(0.25, vBarUv.y) * step(vBarUv.y, 0.75);
+  vec3 frame = mix(vec3(0.04), vec3(0.93, 0.90, 0.82), own);
   diffuseColor.rgb = mix(frame, mix(barCol, vec3(0.16, 0.14, 0.13), tick), edge);
 } else {
   // ── 지속 표식 (towerstatus.ts) ───────────────────────────────────────
@@ -221,9 +287,27 @@ if (vKind < 1.5) {
     cellToWorld: CellToWorld,
     marks: readonly TowerMark[] = [],
     allies: readonly AllyState[] = [],
+    base: BaseBarInfo | null = null,
   ): void {
     let n = 0;
     _quat.identity();
+    /*
+     * 기지가 **맨 앞**이다. 순서는 그리기에는 아무 영향이 없지만 CAPACITY(160)를
+     * 넘길 때 누가 잘리는지를 정한다 — 적 56 + 타워 15 + 아군 6 + 표식이 한꺼번에
+     * 몰리는 최악 프레임에서 잘려도 되는 바가 기지 바일 리는 없다(패배 조건이다).
+     * 규칙은 타워와 완전히 같다: **만피면 안 그린다**.
+     */
+    if (base && base.hp < base.maxHp) {
+      cellToWorld(base.cellX, base.cellZ, _pos);
+      // 마을 그룹은 지형 y와 무관하게 y=0에 놓인다(stage3d) — 절대 높이를 쓴다
+      const lv = Math.max(1, Math.min(BASE_ROOF_Y.length, Math.floor(base.level)));
+      _pos.y = (BASE_ROOF_Y[lv - 1] ?? 2.126) + BASE_BAR_CLEARANCE;
+      _mat.compose(_pos, _quat, _scl.set(BASE_BAR_W, BASE_BAR_H, 1));
+      this.mesh.setMatrixAt(n, _mat);
+      this.fillAttr.setX(n, Math.max(0, base.hp) / Math.max(1, base.maxHp));
+      this.kindAttr.setX(n, 4);
+      n++;
+    }
     for (const e of enemies) {
       if (!e.alive || e.hp >= e.maxHp || n >= CAPACITY) continue;
       const sx = lerp(e.prevX, e.x, alpha);

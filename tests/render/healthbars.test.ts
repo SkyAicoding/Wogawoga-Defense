@@ -157,6 +157,42 @@ describe('HealthBarView', () => {
     view.dispose();
   });
 
+  /**
+   * **기지 바 — 패배 조건이라 타워 바와 같은 규칙을 따르되 자리가 다르다.**
+   * HUD 둘째 줄(하트 + 체력바)을 걷어내면서 이 바가 그 역할을 물려받았다.
+   * 셋을 잠근다:
+   *  (1) 만피면 안 그린다 — 이 파일의 대원칙이고 사용자 요구("공격받으면 나온다")다
+   *  (2) 마을 레벨이 오르면 바가 위로 간다 — BASE_ROOF_Y 표가 basecamp.ts 의 모델
+   *      높이를 손으로 베껴 온 값이라, 마을을 더 높이면 이 테스트가 먼저 걸려야 한다
+   *  (3) barKind 4 — 셰이더가 `min(vKind, 1.0)`으로 내 편 팔레트에 태우므로 타워(1)와
+   *      같은 색이지만, 값이 갈려 있어야 나중에 기지만 따로 칠할 수 있다
+   */
+  it('기지 바: 만피면 숨기고, 마을 레벨이 오르면 위로 간다 (barKind 4)', () => {
+    const scene = new THREE.Scene();
+    const view = new HealthBarView(scene);
+    const mesh = meshesOf(scene)[0]!;
+    const base = (hp: number, level: number) => ({ cellX: 3, cellZ: 4, hp, maxHp: 25, level });
+
+    // (1) 만피 — 아무것도 안 그린다
+    view.update([], [], 1, cellToWorld, [], [], base(25, 1));
+    expect(mesh.count, '만피 기지는 바가 없다').toBe(0);
+
+    // (2) 레벨이 오르면 지붕이 높아지므로 바도 올라간다
+    const yAt = (level: number): number => {
+      view.update([], [], 1, cellToWorld, [], [], base(10, level));
+      const m = new THREE.Matrix4();
+      mesh.getMatrixAt(0, m);
+      return new THREE.Vector3().setFromMatrixPosition(m).y;
+    };
+    expect(yAt(5), 'Lv5 장옥이 Lv1 움막보다 높다').toBeGreaterThan(yAt(1));
+
+    // (3) barKind 4 + 채움 비율
+    view.update([], [], 1, cellToWorld, [], [], base(10, 1));
+    expect(mesh.geometry.getAttribute('barKind').getX(0), '기지 = 4').toBe(4);
+    expect(mesh.geometry.getAttribute('fill').getX(0), '10/25').toBeCloseTo(0.4, 5);
+    view.dispose();
+  });
+
   it('용량(CAPACITY)을 넘겨도 터지지 않는다', () => {
     const scene = new THREE.Scene();
     const view = new HealthBarView(scene);
