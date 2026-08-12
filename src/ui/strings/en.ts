@@ -107,9 +107,9 @@ export const en: Record<string, string> = {
   'battle.lvOf': 'Lv.{n}/{m}',
   'battle.home.title': 'Hometown',
   // Reach = how far the tribe walks out from the village (sim/allies.ts rule 2)
-  'battle.home.stats': 'HP {hp} · Range {r} · Reach {s}',
-  'battle.home.desc': 'Leveling up raises HP, attack, range and your tribe reach',
-  'battle.home.next': 'Next → HP {hp} · ATK {d} · Range {r} · Reach {s}',
+  'battle.home.stats': 'HP {hp} · Range {r} · Tribe {s}',
+  'battle.home.desc': 'Raises HP, damage, range — and how many tribespeople you can field',
+  'battle.home.next': 'Next → HP {hp} · DMG {d} · Range {r} · Tribe {s}',
   'battle.home.confirmDesc': 'Tap again to spend {n} gold (no refund)',
   'battle.home.maxed': 'Fully grown (max level)',
   'battle.ally.title': 'Rally',
@@ -123,7 +123,7 @@ export const en: Record<string, string> = {
   'ally.slinger.name': 'Slinger',
   'ally.slinger.desc': 'Throws from behind. Hits fliers, but pins nobody',
   'ally.guardian.name': 'Guardian',
-  'ally.guardian.desc': 'Shield and armor. Outlasts being swarmed by {n}',
+  'ally.guardian.desc': 'Shield and armor. Holds out even when swarmed by {n}',
   // --- Wave preview band (prep only) ---------------------------------------
   'battle.preview.title': 'Next wave',
   'battle.preview.expand': 'Show details',

@@ -1,9 +1,11 @@
 /** 타워/적/전역 상수 데이터 검증 — 밸런스 수치를 계약으로 잠근다. */
 import { describe, expect, it } from 'vitest';
-import type { EnemyId, TowerId } from '@/data/types';
+import type { BaseLevelDef, EnemyId, TowerId, TowerTier } from '@/data/types';
 import * as balance from '@/data/balance';
 import { SIEGE_ADVANCE_TICKS, SIEGE_ENGAGE_RANGE } from '@/data/balance';
+import { ALL_ALLY_IDS, ALLY_DEFS } from '@/data/allies';
 import { ALL_ENEMY_IDS, BOUNTY_PER_COST, ENEMY_DEFS } from '@/data/enemies';
+import { BASE_LEVELS } from '@/data/hometown';
 import { ALL_TOWER_IDS, TOWER_DEFS } from '@/data/towers';
 import { STAGES } from '@/data/stages';
 import { makeBotSimFor } from '../sim/botharness';
@@ -295,6 +297,100 @@ describe('타워 구조물 체력', () => {
     for (const id of EXPECTED_TOWERS) {
       if (id === 'drum') continue; // 버프 전용 — dmgPct가 0이라 비교 대상이 아니다
       expect(balance.TOWER_HP_PER_STAR, id).toBeLessThanOrEqual(TOWER_DEFS[id].starBonus.dmgPct);
+    }
+  });
+});
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 아군 부족 유닛 — 9단계 재정의가 데이터에 남긴 계약
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 사용자가 부족을 다시 정의하면서 **수명·출격 한계선이 통째로 사라졌고**, 그 자리에
+ * 두 가지가 들어왔다: 마을 레벨이 파는 **정원(BaseLevelDef.allyCap)**과, 소모품이
+ * 아니라 **영구 유닛**이 된 값(cost). 규칙 전문은 src/sim/allies.ts 헤더.
+ *
+ * 여기(tests/data)가 잠그는 것은 **표 자체의 무결성**이다 — 봇도 시뮬레이션도 타지 않아
+ * 분산이 0이고 밀리초에 끝난다. 행동(정원이 실제로 커맨드를 거부하는가, 미리보기가
+ * 다음 레벨을 읽는가)은 tests/sim/hometown.test.ts가 따로 맡는다. 둘은 서로를 대신하지
+ * 못한다: 표가 옳아도 sim이 안 읽으면 소용없고, sim이 옳아도 표가 무너지면 팔 물건이 없다.
+ *
+ * ⚠ **AllyDef.lifeTicks는 삭제됐다.** 이 파일에는 그것을 검사하던 항목이 없었으므로
+ * 지울 것도 없었고, 되살아나는 것은 컴파일러가 막는다 — ALLY_DEFS는 객체 리터럴을
+ * `Record<AllyId, AllyDef>`에 대입하므로 잉여 속성 검사에 걸린다. 그래서 여기에
+ * "lifeTicks가 없다"는 런타임 어서션을 따로 두지 않았다(tsc가 이미 하는 일이다).
+ */
+describe('아군 정원 (BaseLevelDef.allyCap)', () => {
+  it('레벨마다 엄격 증가하고, 한 칸이 정확히 한 자리씩 판다', () => {
+    expect(BASE_LEVELS.length).toBeGreaterThanOrEqual(2);
+    for (let i = 1; i < BASE_LEVELS.length; i++) {
+      const prev = (BASE_LEVELS[i - 1] as BaseLevelDef).allyCap;
+      const cur = (BASE_LEVELS[i] as BaseLevelDef).allyCap;
+      /*
+       * 엄격 증가가 필요한 이유: 자유 이동이 되면서 마을이 아군에게 파는 손잡이가
+       * **이 열 하나뿐**이다. 두 레벨이 같은 정원을 팔면 그 사이 칸은 HP·화력만 남고
+       * 아군에게는 0을 파는 칸이 된다 — 8단계의 출격 한계선이 경로가 짧은 스테이지에서
+       * 겪었던 바로 그 함정이다(src/data/hometown.ts "자르기에서 곡선 압축으로").
+       */
+      expect(cur, `Lv${i + 1} 정원`).toBeGreaterThan(prev);
+      /*
+       * 그리고 증분은 1이다. 한 칸에 +2를 몰아주면 나머지 칸이 다시 0을 파는 칸이 되고,
+       * 정원은 사람 수라 반올림으로 얼버무릴 수 없다(0.5명은 없다).
+       * 실측 표: 2 · 3 · 4 · 5 · 6 (레벨당 +1).
+       */
+      expect(cur - prev, `Lv${i + 1} 정원 증가폭`).toBe(1);
+    }
+  });
+
+  it('전 레벨이 정수이고 Lv1이 1명 이상이다', () => {
+    for (let i = 0; i < BASE_LEVELS.length; i++) {
+      const cap = (BASE_LEVELS[i] as BaseLevelDef).allyCap;
+      // sim이 Math.round로 받으므로(hometown.ts allyCapFor) 소수를 넣으면 표와 실제가
+      // 조용히 갈린다 — 표 쪽에서 막는다
+      expect(Number.isInteger(cap), `Lv${i + 1} 정원 ${cap}`).toBe(true);
+    }
+    // Lv1이 0이면 이 상품이 **시작 시점에 통째로 존재하지 않는다** (출동 버튼이 늘 회색).
+    // 방치 난이도의 하한이기도 하다 — 아무것도 안 사면 Lv1 정원이 부족의 전부다.
+    expect((BASE_LEVELS[0] as BaseLevelDef).allyCap).toBeGreaterThanOrEqual(1);
+  });
+
+  it('만렙 정원 = balance.ALLY_MAX_ACTIVE (표와 절대 상한이 갈리지 않는다)', () => {
+    const max = (BASE_LEVELS[BASE_LEVELS.length - 1] as BaseLevelDef).allyCap;
+    /*
+     * 두 숫자가 갈리면 조용히 둘 중 하나가 죽는다:
+     *  · 표 < 상한이면 표의 마지막 칸이 절대 상한에 닿지 못해 **살 수 없는 여유**가 남고,
+     *  · 표 > 상한이면 allyCapFor의 min()이 그 초과분을 먹어 **돈을 내고 아무것도 못 산다**
+     *    (렌더 인스턴스 정원이기도 하다 — 넘기면 버퍼가 잘린다).
+     */
+    expect(max).toBe(balance.ALLY_MAX_ACTIVE);
+  });
+});
+
+describe('아군 값 (영구 유닛이 된 뒤의 하한)', () => {
+  /**
+   * **cost 하한 — 아군은 가장 싼 타워 T1의 절반보다는 비싸야 한다.**
+   *
+   * 8단계까지 아군은 20초짜리 소모품이었고, 그래서 값도 "타워 T1의 절반 이하"에 맞춰
+   * 있었다(clubber 40 · slinger 60 · guardian 85 — src/data/allies.ts 4단계 튜닝 기록).
+   * 9단계에 수명이 사라지면서 그 근거가 통째로 무너졌다: **되돌아오지 않는 20초**가
+   * 아니라 **쓰러질 때까지 남는 영구 전력**이므로, 같은 영구 구조물인 타워와 같은
+   * 값대에 있어야 한다. 아래 실측이 그 자리를 보여 준다:
+   *   가장 싼 타워 T1 = frost 90  →  하한 45
+   *   아군 실비용    = clubber 90 · slinger 110 · guardian 160  (전부 하한의 2배 이상)
+   * 곧 지금 값은 하한에 붙어 있지 않다 — 이 문턱은 "적정값"이 아니라 **소모품 시절의
+   * 가격표로 되돌아가는 것**을 막는 난간이다(40은 45 아래라 즉시 빨개진다).
+   *
+   * 왜 상한은 두지 않는가: 위쪽은 이미 balance.allyCostFor의 지수 인상(1.2^인원)과
+   * 정원이 함께 잡는다. 아래쪽만 데이터에 난간이 없었다.
+   */
+  it('아군 cost는 가장 싼 타워 T1 cost의 절반보다 크다', () => {
+    const cheapestT1 = Math.min(
+      ...EXPECTED_TOWERS.map((id) => (TOWER_DEFS[id].tiers[0] as TowerTier).cost),
+    );
+    expect(cheapestT1).toBe(90); // frost — 이 값이 바뀌면 위 유도도 다시 봐야 한다
+    const floor = cheapestT1 / 2;
+    for (const id of ALL_ALLY_IDS) {
+      const def = ALLY_DEFS[id];
+      expect(def.cost, `${id} cost ${def.cost} ≤ 하한 ${floor}`).toBeGreaterThan(floor);
     }
   });
 });

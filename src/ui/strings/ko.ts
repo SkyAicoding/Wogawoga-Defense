@@ -107,11 +107,13 @@ export const ko: Record<string, string> = {
   'battle.close': '닫기',
   'battle.lvOf': 'Lv.{n}/{m}',
   'battle.home.title': '홈타운',
-  // 출격거리 = 부족원이 마을에서 몇 타일 앞까지 나가는가 (sim/allies.ts 규칙 2).
-  // 이 줄에 없으면 "마을을 키우면 부족원이 더 멀리 나간다"는 설계가 화면 어디에도 없다
-  'battle.home.stats': '체력 {hp} · 사거리 {r} · 출격거리 {s}',
-  'battle.home.desc': '올리면 체력·공격력·사거리와 부족원 출격거리가 함께 커져요',
-  'battle.home.next': '올리면 → 체력 {hp} · 공격 {d} · 사거리 {r} · 출격거리 {s}',
+  // 정원 = 마을이 동시에 내보낼 수 있는 부족원 수 (sim/hometown.ts allyCapFor).
+  // 이 줄에 없으면 "마을을 키우면 부족원이 늘어난다"는 설계가 화면 어디에도 없다.
+  // ⚠ 9단계까지 이 자리는 '출격거리'였다 — 값은 정원으로 바뀌었는데 라벨만 남아
+  //   화면이 '출격거리 2'라고 말하고 있었다(검증에서 실측으로 잡혔다).
+  'battle.home.stats': '체력 {hp} · 사거리 {r} · 부족원 {s}',
+  'battle.home.desc': '올리면 체력·공격력·사거리와 부족원 정원이 함께 커져요',
+  'battle.home.next': '올리면 → 체력 {hp} · 공격 {d} · 사거리 {r} · 부족원 {s}',
   'battle.home.confirmDesc': '한 번 더 누르면 {n} 골드가 빠져요 (되돌릴 수 없음)',
   'battle.home.maxed': '더 키울 수 없어요 (최대 단계)',
   'battle.ally.title': '부족 출동',
@@ -130,7 +132,7 @@ export const ko: Record<string, string> = {
   'ally.slinger.name': '돌팔매꾼',
   'ally.slinger.desc': '뒤에서 던져요. 공중도 맞히지만 아무도 막지 못해요',
   'ally.guardian.name': '파수꾼',
-  'ally.guardian.desc': '방패와 갑옷. {n}마리에게 둘러싸여도 수명을 채워요',
+  'ally.guardian.desc': '방패와 갑옷. {n}마리에게 둘러싸여도 오래 버텨요',
   // --- 웨이브 미리보기 띠 (prep 전용) --------------------------------------
   // 칩에는 **적 이름을 쓰지 않는다** — '안킬로사우루스'가 390px에서 깨진다.
   // 이름은 탭 후 상세에만 나오고, 칩은 아이콘 + 마릿수 + 특성 배지로만 말한다.

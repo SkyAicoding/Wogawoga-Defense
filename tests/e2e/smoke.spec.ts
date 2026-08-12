@@ -2,7 +2,7 @@
  * E2E 스모크 — 실제 빌드에서 타이틀→로비→전투 플로우, 테스트 훅(?test=1)으로
  * 배치/웨이브 빨리감기, 콘솔 에러 0 + 드로우콜 예산(≤60) 어서션.
  */
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 declare global {
   interface Window {
@@ -11,12 +11,34 @@ declare global {
         state: {
           phase: string;
           waveIndex: number;
+          /** 준비 단계 잔여 틱 — 크게 박아 두면 웨이브가 스스로 시작하지 않는다(적 0 통제) */
+          prepTicksLeft: number;
           gold: number;
           baseHp: number;
           hand: { towerId: string; cost: number }[];
-          enemies: { blockerAllyId: number }[];
+          enemies: { blockerAllyId: number; x: number; z: number }[];
           towers: readonly unknown[];
-          allies: { id: number; defId: string; targetId: number; hp: number }[];
+          /**
+           * 9단계) dist/pathIndex/slot/holdDist 가 사라지고 tgtX/tgtZ/walked 가 생겼다 —
+           * 아군은 경로가 아니라 **찍은 칸으로 직선**으로 간다 (sim/allies.ts 규칙 2).
+           */
+          allies: {
+            id: number;
+            defId: string;
+            targetId: number;
+            hp: number;
+            alive: boolean;
+            x: number;
+            z: number;
+            tgtX: number;
+            tgtZ: number;
+            walked: number;
+          }[];
+          /**
+           * ⚠ 이 칸은 **절대 상한(ALLY_MAX_ACTIVE 6)**이지 지금 마을이 허용하는 정원이
+           * 아니다(실측: Lv1에서 sim.allyCap()은 2인데 이 값은 6). 상한 판정에는 반드시
+           * `sim.allyCap()`을 쓴다 — 이 파일에서 이 필드를 어서션에 쓰지 않는 이유다.
+           */
           allyCap: number;
           baseLevel: number;
           baseLevelMax: number;
@@ -25,8 +47,9 @@ declare global {
         };
         allyCost(defId: string): number;
         canTrainAlly(defId: string): boolean;
-        allySortieRange(): number;
-        allySortiePoints(): { x: number; z: number }[];
+        /** 지금 마을 레벨이 허용하는 부족원 정원 (9단계에 allySortieRange를 대신한다) */
+        allyCap(): number;
+        baseNextStats(): { hpMax: number; dmg: number; range: number; allyCap: number } | null;
         canPlaceAt(x: number, z: number): boolean;
         hasScenery(x: number, z: number): boolean;
         towerAt(x: number, z: number): unknown | null;
@@ -79,6 +102,96 @@ async function tapBase(page: Page): Promise<{ x: number; y: number }> {
   await page.mouse.click(p.x, p.y);
   await page.waitForTimeout(250);
   return p;
+}
+
+/**
+ * 마을 패널 한 줄의 **마지막 숫자**를 읽는다 — 그 자리가 정원 칸이다.
+ *
+ * 왜 라벨 문자열('부족원 N')이 아니라 위치로 읽는가: 라벨은 ko/en 두 벌이고 카피는
+ * 계약이 아니다. 라벨을 어서션하면 문구를 다듬는 것만으로 테스트가 빨개져, 이 테스트가
+ * **옳은 수정을 막는 물건**이 된다. (9단계 검증에서 실제로 그 일이 났다: 라벨이
+ * '출격거리'로 남아 화면이 거짓말을 하고 있었는데, 고치자 '{s}명'의 '명' 때문에
+ * 이 추출이 깨졌다. 지금은 두 언어 모두 정원이 **줄의 마지막 숫자**다.)
+ * 그래서 잠그는 것은 "이 줄의 마지막 숫자가 sim이 말하는 정원과 같은가"다 —
+ * 값이 틀리거나 사라지면 그대로 빨개진다.
+ */
+async function tailNumber(loc: Locator): Promise<number | null> {
+  const text = ((await loc.textContent()) ?? '').trim();
+  const m = /(\d+)\s*$/.exec(text);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * 판(캔버스)까지 탭이 **실제로 닿는** 셀 중 기준점에서 가장 먼 칸.
+ *
+ * 마을 패널이 열려 있으면 판의 절반쯤이 HUD에 덮인다(패널 배경은 포인터를 통과시키지만
+ * 버튼·출동 구역은 hud-item이라 삼킨다). 그래서 좌표만 계산해 찍으면 탭이 패널에 먹혀
+ * **아무 일도 일어나지 않고** 테스트는 "이동이 안 된다"고 잘못 말한다(실측으로 겪었다).
+ * elementFromPoint로 캔버스인지 확인하고 고른다.
+ *
+ * 격자 크기는 훅으로 알 수 없으므로 **배치 가능 셀의 경계 상자**를 격자의 보수적 근사로
+ * 쓴다(판 밖 칸을 찍으면 moveAlly가 거부한다 — sim/allies.ts 규칙 2의 격자 밖 거부).
+ */
+async function pickBoardCell(
+  page: Page,
+  from: { x: number; z: number },
+): Promise<{ x: number; z: number; px: number; py: number; d: number }> {
+  const cell = await page.evaluate((origin) => {
+    const g = window.__wgd!;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (let z = 0; z < 40; z++) {
+      for (let x = 0; x < 40; x++) {
+        if (!g.sim.canPlaceAt(x, z)) continue;
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minZ = Math.min(minZ, z);
+        maxZ = Math.max(maxZ, z);
+      }
+    }
+    let best: { x: number; z: number; px: number; py: number; d: number } | null = null;
+    for (let z = minZ; z <= maxZ; z++) {
+      for (let x = minX; x <= maxX; x++) {
+        const p = g.cellToScreen(x, z);
+        if (p.x < 4 || p.y < 4 || p.x > window.innerWidth - 4 || p.y > window.innerHeight - 4) {
+          continue;
+        }
+        const el = document.elementFromPoint(p.x, p.y);
+        if (!el || el.tagName !== 'CANVAS') continue;
+        const d = Math.hypot(x - origin.x, z - origin.z);
+        if (!best || d > best.d) best = { x, z, px: p.x, py: p.y, d };
+      }
+    }
+    return best;
+  }, from);
+  expect(cell, '판 위에서 탭할 수 있는 칸을 하나도 찾지 못했다').not.toBeNull();
+  return cell as { x: number; z: number; px: number; py: number; d: number };
+}
+
+/**
+ * rAF 2회 뒤부터 20프레임 관측한 드로우콜/삼각형 최대치 (renderInfo는 매 프레임 리셋된다).
+ * 아래 두 테스트가 같은 잣대를 써야 두 곳의 실측값을 나란히 읽을 수 있다.
+ */
+function maxFrame(page: Page): Promise<{ calls: number; tris: number }> {
+  return page.evaluate(
+    () =>
+      new Promise<{ calls: number; tris: number }>((res) => {
+        const g = window.__wgd!;
+        let calls = 0;
+        let tris = 0;
+        let i = 0;
+        const step = (): void => {
+          const r = g.renderInfo();
+          calls = Math.max(calls, r.calls);
+          tris = Math.max(tris, r.triangles);
+          if (++i >= 20) res({ calls, tris });
+          else requestAnimationFrame(step);
+        };
+        requestAnimationFrame(() => requestAnimationFrame(step));
+      }),
+  );
 }
 
 test('타이틀 → 로비 → 전투 → 웨이브 진행 (콘솔 에러 0, 드로우콜 예산)', async ({ page }) => {
@@ -363,11 +476,19 @@ test('방해 지형지물: 탭 → 골드로 제거 → 그 자리에 타워 건
 });
 
 /**
- * 아군 부족원 출동 — 마을에서 주민을 뽑아 길목에서 적을 막아 세운다.
+ * 아군 부족원 출동 — 마을에서 주민을 뽑아 적을 막아 세운다.
  *
  * **드로우콜이 이 테스트의 핵심이다.** 아군은 적 습격대와 같은 InstancedMesh,
  * 같은 오버레이 메시를 쓰므로(구조 검증은 tests/render/allies.test.ts) 두 메시가
  * 이미 켜져 있는 프레임 — 즉 실측 최악 프레임의 조건 — 에서는 **한 콜도 늘면 안 된다**.
+ *
+ * ── 9단계에 이 테스트에서 바뀐 것 ──────────────────────────────────────────
+ * 상한이 상수(ALLY_MAX_ACTIVE 6)에서 **마을 레벨의 함수**로 옮겨갔다(Lv1 2명 → Lv5 6명).
+ * 그래서 "세 명을 잇달아"처럼 **머릿수를 박아 둔 문장이 전부 거짓**이 됐고, 전부
+ * `sim.allyCap()`에 물어보는 형태로 다시 유도했다. 문턱을 낮춘 것이 아니라 재는 대상이
+ * 옮겨간 것이다 — 그 대신 이 테스트는 옛 판본이 잴 수 없던 것을 새로 잠근다:
+ * **정원이 차면 골드가 남아도 회색이고, 마을을 올리면 그 자리에서 한 명이 더 나간다.**
+ * 이동 명령(규칙 2)은 분량이 커서 아래 별도 테스트로 뺐다.
  */
 test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0', async ({ page }) => {
   const errors: string[] = [];
@@ -404,21 +525,73 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
     expect(box!.height, `출동 버튼 ${i} 높이`).toBeGreaterThanOrEqual(44);
   }
 
-  // --- 연속 출동: 패널이 닫히지 않고 세 명을 잇달아 내보낼 수 있는가 --------
-  // 상시 바(1탭)를 잃은 대가를 여기서 갚는다 — 열어 두면 이후는 여전히 1탭이다
+  /*
+   * --- 연속 출동: 패널이 닫히지 않고 **정원만큼** 잇달아 내보낼 수 있는가 --------
+   * 상시 바(1탭)를 잃은 대가를 여기서 갚는다 — 열어 두면 이후는 여전히 1탭이다.
+   *
+   * 9단계) 몇 번 누를 수 있는지를 **상수로 적을 수 없게 됐다.** 상한이
+   * ALLY_MAX_ACTIVE(6) 고정에서 **마을 레벨의 함수**로 옮겨갔기 때문이다
+   * (BaseLevelDef.allyCap — Lv1 2명 → Lv5 6명). 그래서 sim에게 지금 정원을 묻고
+   * 그만큼 누른다. 3을 박아 두면 Lv1에서 세 번째가 거부돼 빨개지는데(실측),
+   * 그건 기능이 깨진 게 아니라 **테스트가 옛 상수를 들고 있는 것**이다.
+   */
   await page.evaluate(() => window.__wgd!.setGold(5000));
-  for (let i = 0; i < 3; i++) {
-    await btns.nth(i).click();
+  const cap1 = await page.evaluate(() => window.__wgd!.sim.allyCap());
+  expect(cap1, 'Lv1 정원').toBeGreaterThanOrEqual(1);
+  for (let i = 0; i < cap1; i++) {
+    await btns.nth(i % 3).click();
     await page.waitForTimeout(120);
     expect(await page.evaluate(() => window.__wgd!.selectedBase()), `${i + 1}번째 출동 뒤 마을 선택`)
       .toBe(true);
     await expect(homePanel).toBeVisible();
   }
-  expect(await page.evaluate(() => window.__wgd!.allies().length), '연속 3회 출동').toBe(3);
-  // 인원 표시가 실제 인원을 따라간다
-  await expect(page.locator('.ally-count-num')).toHaveText(/^3\//);
+  expect(
+    await page.evaluate(() => window.__wgd!.allies().length),
+    `정원(${cap1})만큼 연속 출동`,
+  ).toBe(cap1);
+  /*
+   * 인원 표시가 실제 인원을 따라간다 — **분자만** 잰다.
+   * ⚠ 분모는 state.allyCap(절대 상한 6)이라 Lv1에서 "2/6"으로 뜬다. 마을이 2명까지만
+   * 허용하는데 화면은 6명까지 갈 수 있다고 말하는 셈이고, `is-full`도 그래서 안 붙는다.
+   * 이건 이 파일이 고칠 수 있는 자리가 아니라 **src 쪽 결함**이라 보고했다 —
+   * 여기서 분모까지 어서션하면 지금 빨간 줄이 되고, 6을 기대값으로 박으면 그 결함을
+   * 계약으로 굳힌다. 그래서 분자만 잠근다.
+   */
+  await expect(page.locator('.ally-count-num')).toHaveText(new RegExp(`^${cap1}/`));
 
-  // --- 전투 중에도 열리고 출동된다 -----------------------------------------
+  /*
+   * --- 정원이 정말 **마을 레벨의 함수**인가 (9단계의 새 억제 장치) -------------
+   * 출격 한계선이 사라진 자리를 정원이 물려받았다(sim/allies.ts "억제 장치가 자리를
+   * 옮겼다"). 그 계약이 화면에서 참이려면 둘이 함께 성립해야 한다:
+   *   · 정원이 차면 **골드가 남아도** 세 버튼이 전부 회색이다(canTrainAlly 그대로), 그리고
+   *   · 마을을 한 단 올리면 **그 자리에서** 다시 살아나 한 명이 더 나간다.
+   * 상한이 다시 상수로 굳거나 레벨과의 연결이 끊기면 둘 중 하나가 바로 빨개진다.
+   */
+  for (let i = 0; i < 3; i++) {
+    await expect(btns.nth(i), `정원이 찼는데 출동 버튼 ${i}가 살아 있다`).toHaveClass(/is-disabled/);
+  }
+  const grown = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.setGold(100_000);
+    const before = g.sim.allyCap();
+    g.upgradeBase();
+    return { before, after: g.sim.allyCap(), level: g.baseInfo().level };
+  });
+  expect(grown.after, `Lv${grown.level} 정원 (Lv1은 ${grown.before})`).toBeGreaterThan(grown.before);
+  await expect(btns.nth(0), '레벨업했는데 출동 버튼이 회색인 채다').not.toHaveClass(/is-disabled/);
+  await btns.nth(0).click();
+  await page.waitForTimeout(150);
+  expect(
+    await page.evaluate(() => window.__wgd!.allies().length),
+    '레벨업이 연 자리에 한 명이 더 들어간다',
+  ).toBe(cap1 + 1);
+
+  /*
+   * --- 전투 중에도 열리고 출동된다 -----------------------------------------
+   * 9단계) 수명이 사라져 **자리를 비우는 길은 쓰러지는 것뿐**이다(규칙 3 — 귀환도
+   * 환급도 없다). 그래서 여기서 한 명을 쓰러뜨려 자리를 만든 뒤 웨이브 도중에 그 자리를
+   * 다시 채운다. 죽음이 정원을 돌려주지 않으면 이 블록이 그대로 빨개진다.
+   */
   await page.evaluate(() => {
     const g = window.__wgd!;
     g.callWave();
@@ -427,7 +600,14 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
   await page.waitForTimeout(200);
   expect(await page.evaluate(() => window.__wgd!.sim.state.phase)).toBe('wave');
   await expect(homePanel).toBeVisible();
-  const beforeWaveTrain = await page.evaluate(() => window.__wgd!.allies().length);
+  const beforeWaveTrain = await page.evaluate(() => {
+    const g = window.__wgd!;
+    const first = g.sim.state.allies[0];
+    if (first) first.alive = false; // 한 명 전사 → 자리 하나가 빈다
+    g.ff(2); // 사망 회수(sweepDeadAllies)
+    return g.allies().length;
+  });
+  expect(beforeWaveTrain, '전사한 자리가 실제로 비었다').toBe(cap1);
   await btns.nth(0).click();
   await page.waitForTimeout(150);
   expect(
@@ -440,7 +620,7 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
   await expect(homePanel).toBeHidden();
   await page.evaluate(() => {
     const g = window.__wgd!;
-    for (const a of g.sim.state.allies as unknown as { alive: boolean }[]) a.alive = false;
+    for (const a of g.sim.state.allies) a.alive = false;
     g.ff(2);
   });
 
@@ -455,7 +635,8 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
       const ok = g.trainAlly('clubber');
       steps.push({ cost, ok, spent: before - g.sim.state.gold, alive: g.allies().length });
     }
-    return { steps, cap: g.sim.state.allyCap, gold: g.sim.state.gold };
+    // 9단계) 상한은 state.allyCap(절대 상한)이 아니라 **지금 마을 레벨의 정원**이다
+    return { steps, cap: g.sim.allyCap(), gold: g.sim.state.gold };
   });
   const cap = econ.cap;
   for (let i = 0; i < cap; i++) {
@@ -482,21 +663,7 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
 
   // --- 최악 프레임 조건에서 드로우콜 증가 0 ---------------------------------
   // 습격대 공유 메시 + 오버레이 메시를 켜 둔 정지 장면에서 아군만 넣고 뺀다.
-  const maxCalls = (): Promise<number> =>
-    page.evaluate(
-      () =>
-        new Promise<number>((res) => {
-          const g = window.__wgd!;
-          const seen: number[] = [];
-          let i = 0;
-          const step = (): void => {
-            seen.push(g.renderInfo().calls);
-            if (++i >= 20) res(Math.max(...seen));
-            else requestAnimationFrame(step);
-          };
-          requestAnimationFrame(() => requestAnimationFrame(step));
-        }),
-    );
+  const maxCalls = async (): Promise<number> => (await maxFrame(page)).calls;
 
   await page.evaluate(() => {
     const g = window.__wgd!;
@@ -504,6 +671,13 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
     g.place(0, 6, 6);
     g.callWave();
     g.ff(180);
+    // 9단계) 아래 A/B는 **세 종이 다 나가야** "종이 셋이어도 메시는 하나"를 잰다.
+    // 정원이 마을 레벨의 함수가 됐으므로 여기서 마을을 만렙까지 올려 정원을 연다 —
+    // Lv1(2명)에서 재면 두 종만 나가 종별 메시 회귀를 놓친다.
+    for (let i = 0; i < 8; i++) {
+      g.setGold(999999);
+      g.upgradeBase();
+    }
   });
   await page.waitForTimeout(300);
   await page.evaluate(() => {
@@ -520,7 +694,7 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
     }
     if (st.towers[0]) st.towers[0].hp = Math.round(st.towers[0].maxHp * 0.6);
     // 아군은 전부 비워 둔 상태에서 먼저 잰다
-    for (const a of g.sim.state.allies as unknown as { alive: boolean }[]) a.alive = false;
+    for (const a of g.sim.state.allies) a.alive = false;
     g.ff(1);
   });
   await page.waitForTimeout(400);
@@ -533,9 +707,11 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
     for (const id of ['clubber', 'slinger', 'guardian', 'clubber', 'slinger', 'guardian']) {
       if (g.trainAlly(id)) n++;
     }
-    return n;
+    return { n, cap: g.sim.allyCap() };
   });
-  expect(trained).toBeGreaterThan(0);
+  // 만렙 정원을 다 채웠는가 — 못 채우면 아래 델타가 무엇의 몫인지 알 수 없다
+  expect(trained.n, `만렙 정원 ${trained.cap}명을 다 못 채웠다`).toBe(trained.cap);
+  expect(trained.cap, '만렙 정원이 세 종을 다 내보낼 만큼은 된다').toBeGreaterThanOrEqual(3);
   await page.waitForTimeout(400);
   const callsWithAlly = await maxCalls();
 
@@ -549,13 +725,20 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
    */
   expect(
     callsWithAlly - callsNoAlly,
-    `아군 0명 ${callsNoAlly} → ${trained}명 ${callsWithAlly} (종마다 메시를 만들면 3이 된다)`,
+    `아군 0명 ${callsNoAlly} → ${trained.n}명 ${callsWithAlly} (종마다 메시를 만들면 3이 된다)`,
   ).toBeLessThanOrEqual(1);
   await page.evaluate(() => window.__wgd?.pause(false));
 
-  // --- 실제로 적을 막아 세우는가 -------------------------------------------
-  // 타워를 전부 판다: 남겨 두면 적이 출격 한계선(기지 앞 6타일)에 닿기 전에 죽어
-  // 봉쇄를 관찰할 수 없다 — 여기서 보려는 건 "주민만으로 막아 세운다"이다.
+  /*
+   * --- 실제로 적을 막아 세우는가 -------------------------------------------
+   * 타워를 전부 판다: 남겨 두면 적이 부족원에게 닿기 전에 죽어 봉쇄를 관찰할 수 없다 —
+   * 여기서 보려는 건 "주민만으로 막아 세운다"이다.
+   *
+   * 9단계) 옛 주석은 "적이 출격 한계선(기지 앞 6타일)에 닿기 전에"라고 적었는데
+   * **그 선은 사라졌다.** 지금 부족원은 명령이 없으면 홈타운 앞 집결 지점
+   * (ALLY_MUSTER_FORWARD 1.4타일)에 서 있고, 봉쇄는 거기서 사거리(1.0~1.15) 안에 든
+   * 적에게 걸린다. 즉 만나는 자리가 앞에서 문 앞으로 당겨졌을 뿐, 재는 것은 같다.
+   */
   await page.evaluate(() => {
     const g = window.__wgd!;
     const st = g.sim.state as unknown as { towers: { id: number }[] };
@@ -572,6 +755,23 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
       for (const id of ['clubber', 'guardian', 'clubber', 'slinger', 'clubber', 'guardian']) {
         if (g.canTrainAlly(id)) g.trainAlly(id);
       }
+      /*
+       * 9단계) **부족원을 적 쪽으로 내보낸다.** 위 A/B 블록이 마을을 만렙으로 올려 뒀는데
+       * (사거리 4.6 · 168dps), 집결 지점은 그 사거리 **안**이라 적이 부족원에게 닿기 전에
+       * 마을이 먼저 죽인다 — 그 상태로 재면 300회를 돌려도 봉쇄가 한 번도 안 걸린다(실측 0).
+       * 옛 판본에서 이 자리를 지켜 주던 것은 출격 한계선(기지 앞 6타일)이었고, 그게
+       * 사라진 지금 같은 조건을 만드는 방법이 **이동 명령**이다. 마침 그것이 9단계가
+       * 산 물건이다: 어디서 붙을지를 플레이어가 정한다.
+       */
+      const head = st.enemies[0];
+      if (head) {
+        g.sim.applyCommand({
+          type: 'moveAlly',
+          allyId: -1,
+          cellX: Math.round(head.x),
+          cellZ: Math.round(head.z),
+        });
+      }
       g.ff(4);
       return st.enemies.filter((e) => e.blockerAllyId >= 0).length;
     });
@@ -581,6 +781,224 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
     }
   }
   expect(blocked, '아군이 적을 한 번도 막아 세우지 못했다').toBeGreaterThan(0);
+
+  expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
+});
+
+/**
+ * **이동 명령** — 9단계에 부족이 얻은 유일한 새 조작 (sim/allies.ts 규칙 2).
+ *
+ * 사용자 지시는 "부족을 선택해서 원하는 위치를 블럭을 찍으면 거기까지 이동"이었다.
+ * 그 문장이 화면에서 참인지는 sim 테스트로는 알 수 없다 — 커맨드는 멀쩡한데 마을 패널의
+ * '이동 명령' 버튼이 모드를 안 켜거나, 켜도 판 탭이 HUD에 먹히면 **플레이어에게는 기능이
+ * 없는 것**이다. 그래서 여기서는 손가락이 하는 일만 한다: 버튼을 누르고, 판을 찍고,
+ * 그 결과를 **sim 상태로** 확인한다(DOM만 보면 "버튼이 켜졌다"까지밖에 모른다).
+ *
+ * 잠그는 것 넷:
+ *  ① 인원 0이면 버튼이 회색이다 (보낼 사람이 없는데 모드가 켜지면 다음 탭이 사라진다)
+ *  ② 버튼 → 판 탭이 **살아 있는 전원**의 목표를 그 칸으로 박는다 (커맨드의 allyId −1)
+ *  ③ 실제로 그 칸으로 걸어가 **도착해서 선다** (규칙 2의 도착 판정)
+ *  ④ 흩어져도 드로우콜이 늘지 않는다 — 자유 이동이 예산에 지불하는 값이 0인가
+ *
+ * 적을 한 마리도 내보내지 않는다(준비 단계를 얼려 둔다). 근접 아군은 교전 중이면 그
+ * 자리에 서므로(규칙 5) 적이 있으면 "안 걸어간 것"과 "붙잡혀 선 것"이 구분되지 않고,
+ * ④의 A/B도 적·투사체·연출이 흔들어 놓는다(실측: 통제 없이 재면 델타가 −1~+1로 튄다).
+ */
+test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸어간다 (드로우콜 증가 0)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/?test=1', { waitUntil: 'networkidle' });
+  await page.mouse.click(100, 300);
+  await page.getByRole('button', { name: /전투/ }).first().click();
+  await page.waitForFunction(() => window.__wgd !== undefined);
+
+  /**
+   * 준비 단계를 얼린다 — prepTicksLeft가 0이 되면 웨이브가 **스스로** 시작한다
+   * (PREP_TICKS_FIRST 150틱 = 5초라 이 테스트의 준비 동작보다 짧다). 크게 박아 두면
+   * 적이 한 마리도 나오지 않아 위 문단의 통제가 성립한다. ff()로 시간을 밀 때마다
+   * 다시 박아야 한다.
+   */
+  const holdPrep = (): Promise<void> =>
+    page.evaluate(() => {
+      window.__wgd!.sim.state.prepTicksLeft = 1e9;
+    });
+  await holdPrep();
+  await page.waitForTimeout(900);
+  const quiet = await page.evaluate(() => ({
+    phase: window.__wgd!.sim.state.phase,
+    enemies: window.__wgd!.sim.state.enemies.length,
+  }));
+  expect(quiet, '통제 실패: 적이 없는 준비 단계여야 한다').toEqual({ phase: 'prep', enemies: 0 });
+
+  const homePanel = page.locator('.tower-panel--home');
+  const moveBtn = homePanel.locator('.tp-btn--move');
+  await tapBase(page);
+  await expect(homePanel).toBeVisible();
+
+  // ① 보낼 사람이 없으면 회색 (누를 수는 있어도 뜻이 없는 모드는 열지 않는다)
+  await expect(moveBtn, '인원 0인데 이동 버튼이 살아 있다').toHaveClass(/is-disabled/);
+
+  // 마을을 만렙까지 올려 정원을 열고(9단계: 정원 = 마을 레벨) 전원을 내보낸다
+  const squad = await page.evaluate(() => {
+    const g = window.__wgd!;
+    for (let i = 0; i < 8; i++) {
+      g.setGold(999_999);
+      g.upgradeBase();
+    }
+    g.setGold(999_999);
+    let n = 0;
+    for (const id of ['clubber', 'slinger', 'guardian', 'clubber', 'slinger', 'guardian']) {
+      if (g.trainAlly(id)) n++;
+    }
+    g.sim.state.prepTicksLeft = 1e9;
+    return { n, cap: g.sim.allyCap() };
+  });
+  expect(squad.n, '만렙 정원을 다 채웠다').toBe(squad.cap);
+  expect(squad.cap, '여럿을 한 번에 보내는 것이 이 조작의 요점이다').toBeGreaterThanOrEqual(2);
+
+  /*
+   * ④의 통제 A: **모여 있는** 상태의 프레임. 패널을 닫고 잰다 —
+   * 열어 두면 사거리 링(+메시)과 이동 목표 표식이 한쪽 표본에만 끼어 그 몫이
+   * 그대로 아군 탓으로 청구된다(표식은 명령 뒤에만 뜬다).
+   * 출동 먼지(fx allyTrained의 ring/burst)가 사라질 때까지 실시간을 흘린 뒤 얼린다.
+   */
+  await tapBase(page);
+  await expect(homePanel).toBeHidden();
+  await page.waitForTimeout(2500);
+  await holdPrep();
+  await page.evaluate(() => window.__wgd!.pause(true));
+  await page.waitForTimeout(300);
+  const clustered = await maxFrame(page);
+  await page.evaluate(() => window.__wgd!.pause(false));
+
+  // ② 마을 패널 → '이동 명령' → 판 위 셀 탭
+  await tapBase(page);
+  await expect(homePanel).toBeVisible();
+  await expect(moveBtn, '인원이 있는데 이동 버튼이 회색이다').not.toHaveClass(/is-disabled/);
+  await moveBtn.click();
+  await expect(moveBtn, '이동 명령 모드가 켜지지 않았다').toHaveClass(/is-on/);
+
+  const before = await page.evaluate(() => window.__wgd!.allies());
+  const target = await pickBoardCell(page, before[0] as { x: number; z: number });
+  expect(target.d, '집결 지점과 너무 가까운 칸을 골랐다 (이동을 관찰할 수 없다)').toBeGreaterThan(3);
+  await page.mouse.click(target.px, target.py);
+  await page.waitForTimeout(250);
+
+  const ordered = await page.evaluate(() =>
+    window.__wgd!.sim.state.allies.map((a) => ({ id: a.id, tgtX: a.tgtX, tgtZ: a.tgtZ })),
+  );
+  expect(ordered.length, '명령을 받을 부족원').toBe(squad.n);
+  for (const a of ordered) {
+    // allyId −1 = 살아 있는 전원 (규칙 2) — 한 탭으로 여섯이 같은 목표를 받는다.
+    // toEqual이 아니라 축별 근사인 이유: 셀 좌표는 placement가 Math.round로 만들고,
+    // 가장자리 칸에서는 그 결과가 **-0**이라 toEqual(0)이 Object.is로 갈라진다(실측).
+    expect(a.tgtX, `#${a.id} 목표 x`).toBeCloseTo(target.x, 5);
+    expect(a.tgtZ, `#${a.id} 목표 z`).toBeCloseTo(target.z, 5);
+  }
+  // 명령이 먹혔으면 모드는 스스로 꺼지고(다음 탭이 다시 선택이 된다), 마을 선택은 남는다
+  await expect(moveBtn, '명령 뒤에도 이동 모드가 켜져 있다').not.toHaveClass(/is-on/);
+  expect(await page.evaluate(() => window.__wgd!.selectedBase()), '탭이 마을 선택을 풀었다').toBe(
+    true,
+  );
+
+  // ③ 정말 걸어가고, 도착해서 선다
+  const walked = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.ff(120); // 4초 — 도착 전 중간 지점
+    const mid = g.allies().map((a) => ({ id: a.id, x: a.x, z: a.z }));
+    g.ff(900); // 30초 — 가장 느린 파수꾼(0.85타일/초)도 판을 가로지르고 남는다
+    g.sim.state.prepTicksLeft = 1e9;
+    return {
+      mid,
+      end: g.sim.state.allies.map((a) => ({ id: a.id, x: a.x, z: a.z, walked: a.walked })),
+      enemies: g.sim.state.enemies.length,
+    };
+  });
+  expect(walked.enemies, '통제가 유지됐다 (적이 끼면 근접 아군은 멈춰 선다)').toBe(0);
+  const distTo = (p: { x: number; z: number }): number => Math.hypot(p.x - target.x, p.z - target.z);
+  for (const a of before) {
+    const mid = walked.mid.find((m) => m.id === a.id)!;
+    const end = walked.end.find((m) => m.id === a.id)!;
+    expect(distTo(mid), `#${a.id} 4초 뒤 남은 거리`).toBeLessThan(distTo(a) - 1);
+    // 도착 판정(ARRIVE_EPS2)은 제곱거리 1e-6 — 눈금 하나 안쪽이면 선 것이다
+    expect(distTo(end), `#${a.id} 도착`).toBeLessThan(0.01);
+    expect(end.walked, `#${a.id} 걸은 거리`).toBeGreaterThan(0);
+  }
+
+  /*
+   * ④ 흩어진 프레임의 예산. 위 명령은 전원을 **한 칸**에 모으므로 판 전체로 벌려
+   * 다시 잰다(각자 다른 칸 = 커맨드의 allyId ≥ 0 경로). 자유 이동이 산 것이
+   * 드로우콜을 물어야 하는가가 이 항목의 질문이다.
+   *
+   * 실측(desktop 1280×800 · swiftshader · 적 0 · 마을 만렙 · 6명):
+   *   아군 0명   11콜 / 30,497삼각형
+   *   모여 있음  12콜 / 38,285      ← 아군의 몫은 1콜 (자기 InstancedMesh 하나)
+   *   흩어짐     12콜 / 38,441      ← **흩어짐의 몫은 0콜 · +156삼각형**
+   * 곧 자유 이동은 예산을 사지 않는다. 인스턴스는 위치만 바뀌고 개수가 그대로이며,
+   * 아군은 애초에 절두체 컬링을 끄고 언제나 그린다(render/views/enemyview.ts).
+   * 종마다·개체마다 메시를 만드는 회귀가 들어오면 여기서 5콜씩 튄다.
+   * 삼각형 여유 2,000은 같은 장면을 반복해 재도 ±300쯤 흔들리기 때문이고(애니메이션),
+   * 그 폭은 아군 하나 몫(약 1,300)보다 작다.
+   */
+  await page.evaluate(() => {
+    const g = window.__wgd!;
+    // 판의 네 귀퉁이 + 한가운데 — 격자 크기를 훅으로 알 수 없으므로 배치 가능 셀의
+    // 경계 상자로 잡는다 (pickBoardCell과 같은 근사)
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (let z = 0; z < 40; z++) {
+      for (let x = 0; x < 40; x++) {
+        if (!g.sim.canPlaceAt(x, z)) continue;
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minZ = Math.min(minZ, z);
+        maxZ = Math.max(maxZ, z);
+      }
+    }
+    const midX = Math.round((minX + maxX) / 2);
+    const midZ = Math.round((minZ + maxZ) / 2);
+    const pts = [
+      { x: minX, z: minZ },
+      { x: maxX, z: minZ },
+      { x: minX, z: maxZ },
+      { x: maxX, z: maxZ },
+      { x: midX, z: midZ },
+      { x: minX, z: midZ },
+    ];
+    g.sim.state.allies.forEach((a, i) => {
+      const p = pts[i % pts.length]!;
+      g.sim.applyCommand({ type: 'moveAlly', allyId: a.id, cellX: p.x, cellZ: p.z });
+    });
+    g.ff(900);
+    g.sim.state.prepTicksLeft = 1e9;
+  });
+  await tapBase(page); // 패널을 닫아 표본 A와 같은 조건으로 되돌린다
+  await expect(homePanel).toBeHidden();
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.__wgd!.pause(true));
+  await page.waitForTimeout(300);
+  const scattered = await maxFrame(page);
+  const spread = await page.evaluate(() => {
+    const xs = window.__wgd!.allies();
+    let far = 0;
+    for (const a of xs) {
+      for (const b of xs) far = Math.max(far, Math.hypot(a.x - b.x, a.z - b.z));
+    }
+    return far;
+  });
+  const msg = `모임 ${JSON.stringify(clustered)} → 흩어짐 ${JSON.stringify(scattered)} (최대 간격 ${spread.toFixed(1)}타일)`;
+  expect(spread, '흩어지지 않았다 (통제가 성립하지 않는다)').toBeGreaterThan(6);
+  expect(scattered.calls - clustered.calls, msg).toBeLessThanOrEqual(1);
+  expect(scattered.tris - clustered.tris, msg).toBeLessThanOrEqual(2_000);
+  await page.evaluate(() => window.__wgd!.pause(false));
 
   expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
 });
@@ -627,10 +1045,7 @@ test('홈타운: 기지가 쏜다 · 레벨업 2단 확인 · 골드/최대레�
   await page.mouse.click(cell.x, cell.y);
   await page.waitForTimeout(250);
   expect(await page.evaluate(() => window.__wgd!.selectedBase())).toBe(true);
-  const sortie1 = await page.evaluate(() => ({
-    now: window.__wgd!.sim.allySortieRange(),
-    pts: window.__wgd!.sim.allySortiePoints(),
-  }));
+  const cap1 = await page.evaluate(() => window.__wgd!.sim.allyCap());
   const panel = page.locator('.tower-panel--home');
   await expect(panel).toBeVisible();
   const upBtn = panel.locator('.tp-btn--up');
@@ -668,26 +1083,39 @@ test('홈타운: 기지가 쏜다 · 레벨업 2단 확인 · 골드/최대레�
   expect(afterSecond.range).toBeGreaterThan(init.range);
 
   /*
-   * 6단계) 마을이 파는 네 번째 물건 — **아군 출격 한계선**.
-   * 레벨업으로 실제로 늘어야 하고, 그 사실이 패널에 숫자로 떠 있어야 한다
-   * (안 뜨면 "이 결제가 아군까지 강화한다"를 플레이어가 알 방법이 없다).
+   * 마을이 파는 네 번째 물건 — 9단계에 **출격 한계선에서 부족원 정원으로 바뀌었다.**
+   *
+   * 옛 판본은 `sim.allySortieRange()`가 커지고 `allySortiePoints()`의 정지 지점이
+   * 기지에서 멀어지는 것을 쟀는데, 그 둘은 **함수째로 삭제됐다**(사용자가 "반경 제한 없이
+   * 맵 어디든"으로 재정의 → sim/allies.ts 재정의 ④). 그러니 문턱을 낮출 것이 아니라
+   * **선언을 다시 유도해야 한다**: 마을 레벨 칸이 파는 물건이 바뀌었을 뿐, "레벨업이
+   * 아군을 실제로 키우고 그 사실이 결제 전에 화면에 숫자로 떠 있다"는 계약은 그대로다.
+   * 새 선언은 셋이다 —
+   *   ① 레벨업으로 정원이 실제로 커진다(sim이 확정한 값으로),
+   *   ② 지금 성능 줄이 그 정원을 띄운다,
+   *   ③ 미리보기 줄이 **다음 레벨의** 정원을 띄운다(지금 값도, 상수도 아니다).
+   * ③이 있어야 옛 판본과 같은 판별력이 남는다: 패널이 정원 칸을 잃거나, 지금 값을
+   * 다음 값이라고 우기면 그 자리에서 빨개진다.
+   * (패널 문자열은 rAF 폴링으로 갱신되므로 재시도 어서션을 쓴다 — 한 번 읽고 끝내면
+   *  결제 직후 한 프레임을 앞질러 읽어 옛 값을 보는 경합이 생긴다)
    */
-  const reach2 = await page.evaluate(() => ({
-    now: window.__wgd!.sim.allySortieRange(),
-    pts: window.__wgd!.sim.allySortiePoints(),
+  const cap2 = await page.evaluate(() => ({
+    now: window.__wgd!.sim.allyCap(),
+    next: window.__wgd!.sim.baseNextStats(),
   }));
-  expect(reach2.now, `Lv2 출격 한계선 (Lv1은 ${sortie1.now})`).toBeGreaterThan(sortie1.now);
-  expect(reach2.pts.length, '경로마다 정지 지점이 하나씩').toBe(sortie1.pts.length);
-  // 정지 지점이 실제로 기지에서 멀어졌다 (표식이 규칙을 따라 움직인다)
-  const moved = reach2.pts.some(
-    (p, i) => Math.abs(p.x - sortie1.pts[i]!.x) + Math.abs(p.z - sortie1.pts[i]!.z) > 0.5,
-  );
-  expect(moved, `정지 지점 ${JSON.stringify(sortie1.pts)} → ${JSON.stringify(reach2.pts)}`).toBe(true);
-  // 현재 성능 줄과 다음 레벨 미리보기 줄 둘 다에 출격 거리가 있다.
-  // (패널 문자열은 rAF 폴링으로 갱신되므로 재시도 어서션을 쓴다 — 한 번 읽고 끝내면
-  //  결제 직후 한 프레임을 앞질러 읽어 옛 값을 보는 경합이 생긴다)
-  await expect(panel.locator('.tp-sub--stats')).toContainText(`출격거리 ${reach2.now.toFixed(1)}`);
-  await expect(panel.locator('.tp-sub').nth(1)).toContainText(/출격거리 \d/);
+  expect(cap2.now, `Lv2 정원 (Lv1은 ${cap1})`).toBeGreaterThan(cap1);
+  expect(cap2.next, 'Lv2는 만렙이 아니므로 미리보기가 있다').not.toBeNull();
+  expect(cap2.next!.allyCap, '미리보기 정원은 지금보다 크다').toBeGreaterThan(cap2.now);
+  await expect
+    .poll(() => tailNumber(panel.locator('.tp-sub--stats')), {
+      message: '현재 성능 줄에 지금 정원이 없다',
+    })
+    .toBe(cap2.now);
+  await expect
+    .poll(() => tailNumber(panel.locator('.tp-sub').nth(1)), {
+      message: '미리보기 줄이 다음 레벨 정원을 띄우지 않는다',
+    })
+    .toBe(cap2.next!.allyCap);
 
   // --- HP 정책: 누적 피해 절대량 보존 (레벨업은 회복 수단이 아니다) --------
   const hp = await page.evaluate(() => {
@@ -763,6 +1191,20 @@ test('홈타운: 기지가 쏜다 · 레벨업 2단 확인 · 골드/최대레�
  * 구성: 후반 웨이브를 불러 동시 생존을 최대로(스테이지1 웨이브 49 = 56마리) 채우고,
  * 종을 전 종으로 흩어 메시 수를 최대화하고, 만렙 T5 타워 12기 + 마을 만렙 + 아군 정원,
  * 전부 반피로 깎아 오버레이까지 켠 뒤 얼린다.
+ *
+ * ── 9단계(자유 이동 · 영구 아군) 뒤 재확인 ────────────────────────────────
+ * 아군이 맵 어디로든 갈 수 있게 됐으니 **흩어진 부대가 새 최악 프레임 아닌가**를 먼저
+ * 의심해야 한다. 같은 레시피(desktop 1280×800 · swiftshader · 타워 12기 · 적 56마리)로
+ * 재면 아니다:
+ *   집결 지점에 6명   **74콜 / 138,031삼각형**  (예산 90 / 150,000의 82% · 92%)
+ *   판 전체로 흩뿌림   60콜 / 124,347           (아래로 내려간다)
+ * 흩어짐이 예산을 사지 않는 이유는 아군이 애초에 절두체 컬링을 끄고 언제나 그려지고
+ * (render/views/enemyview.ts) 인스턴스 개수도 그대로이기 때문이다 — 위치만 바뀐다.
+ * 적 0·타워 0으로 통제한 깨끗한 A/B에서도 **0콜 / +156삼각형**이었다
+ * (아래 '아군 이동 명령' 테스트 ④의 실측). 곧 이 개정으로 넘친 예산은 없다.
+ * ⚠ 다만 흩어진 쪽 60콜은 **더 낮다고 믿을 수 있는 수가 아니다**: 걸어가는 900틱 동안
+ * 습격대가 타워 몇 기를 부수므로(타워 1기당 약 3콜) 같은 구성이 아니다. 두 수의 비교가
+ * 아니라 "흩어져도 74를 넘지 않는다"만 읽어야 한다.
  */
 test('최악 프레임 예산 — 삼각형 150,000 / 드로우콜 상한', async ({ page }) => {
   /*

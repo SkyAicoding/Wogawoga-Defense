@@ -418,6 +418,12 @@ export function updateAllies(ctx: SimCtx): void {
  * 아예 없을 때만** 켜진다. 두 규칙이 같은 틱에 겹쳐 두 대를 맞는 일은 없다.
  */
 function brushTarget(ctx: SimCtx, e: EnemySim): AllySim | null {
+  // **지상 적만 스친다.** 규칙 5가 "공중 적은 날아서 지나간다 — 아군은 대공 대책이 아니다"
+  // 라고 못박았고, 그 문장은 양방향이어야 한다. 공중에게도 팔이 닿게 두면 몽둥이꾼·파수꾼은
+  // 애초에 공중을 때릴 수 없으므로(canTargetAir false) **반격 수단이 0인 채로 맞기만 한다** —
+  // 규칙이 아니라 벌금이다. (검증에서 실측으로 잡혔다: 공중 랩터가 지나가며 2대를 때렸다)
+  // 불멸 구멍은 지상 적만으로 충분히 막힌다 — 웨이브의 대부분이 지상이다.
+  if (e.flying) return null;
   const r2 = BRAWL_BRUSH_RANGE * BRAWL_BRUSH_RANGE;
   let best: AllySim | null = null;
   let bestD2 = Infinity;

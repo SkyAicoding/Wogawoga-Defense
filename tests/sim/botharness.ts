@@ -46,18 +46,16 @@
  *
  *  · **U 유닛**   `{ towerReserve: 600, allies: { minNear: 3 } }`
  *    방어선이 다 선 뒤부터 잔고 600을 타워가 손대지 못하게 남기고, 0.5초마다
- *    "출격 한계선 앞 감시 창(= 한계선 + 6타일) 안에 지상 적이 밀도 3 이상"이면
+ *    "마을 앞 감시 창(ALLY_WATCH_WINDOW = 12타일) 안에 적이 밀도 3 이상"이면
  *    정원까지 출동시킨다. 문턱 3의 근거는 minNear 주석 — 문턱 1(매 웨이브 균일 출동)은
  *    골드의 20%를 태우고 승수를 6까지 떨어뜨린다.
- *    이 봇은 마을을 올리지 않으므로 한계선이 Lv1 6.0에 머물고, 창은 언제나 12다.
  *
  *  · **AB 부족(아군+마을)**  `{ towerReserve: 600, allies: { minNear: 3 }, base: { reserve: 200 } }`
- *    7단계에서 추가한 갈래. **"마을을 올리면 부족원이 더 멀리 나간다"를 아는 봇**이다
- *    (data/hometown.ts의 sortie 열). U와 H를 따로 재면 이 상호작용이 통째로 빠지는데,
- *    그게 6단계에서 추가한 상품의 값어치 그 자체다. 마을 예비비 200은 "유닛 몫을 남기고
- *    남는 돈으로만 올린다" — 실측에서 자연히 Lv3(한계선 10.0) 언저리에 자리 잡는다.
- *    실측(스테이지1 시드 40): 36/40승 · 여유 31.0% · 가동률 5.45% — 타워 몰빵
- *    (36/40 · 33.3%)과 **승수는 같고 여유는 아래**다. 곧 "견줄 만하되 지배하지 않는다".
+ *    7단계에서 추가한 갈래. **"마을을 올리면 부족원이 늘어난다"를 아는 봇**이다
+ *    (data/hometown.ts의 allyCap 열 — 9단계 전에는 같은 칸이 sortie였다). U와 H를 따로
+ *    재면 이 상호작용이 통째로 빠지는데, 그게 6단계에서 추가한 상품의 값어치 그 자체다.
+ *    마을 예비비 200은 "유닛 몫을 남기고 남는 돈으로만 올린다" — 실측에서 자연히
+ *    Lv3(정원 4명) 언저리에 자리 잡는다.
  *
  *  · **H 기지**   `{ towerReserve: 600, base: {} }`
  *    같은 예비비를 마을 레벨업에 쓴다. 레벨업은 **웨이브 사이의 결정**이라 외곽 루프에
@@ -94,7 +92,7 @@
 import { createBattle } from '@/sim/battle';
 import { buildPath, buildStraight } from '@/sim/path';
 import { ALLY_DEFS, BASE_LEVELS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
-import { ALLY_SORTIE_RANGE, SIEGE_ENGAGE_RANGE } from '@/data/balance';
+import { SIEGE_ENGAGE_RANGE } from '@/data/balance';
 import type {
   AllyDef,
   AllyId,
@@ -158,55 +156,57 @@ const COVER_MARGIN = 0.3;
 const PATH_SAMPLE_STEP = 0.05;
 
 /**
- * 아군 출동 판정 주기 (틱). 외곽 루프(120틱 = 4초)로는 수명 20초짜리 소모품을 제때 못 낸다 —
- * 적이 마을 앞에 닿는 순간과 최대 4초가 어긋나면 이미 늦다. 0.5초마다 본다.
+ * 아군 출동 판정 주기 (틱 = 0.5초). 외곽 루프(120틱 = 4초)에 두지 않는 이유.
+ *
+ * ⚠ **9단계에서 근거가 통째로 바뀌었다** (값 15는 그대로다). 8단계까지의 근거는
+ * "수명 20초짜리 소모품을 4초 늦게 내면 이미 늦다"였는데 **수명이 삭제됐다**
+ * (src/sim/allies.ts 규칙 3). 미리 뽑아 둔 부족원은 이제 사라지지 않으므로
+ * "제때"라는 개념 자체가 약해졌다. 그래도 0.5초를 유지하는 이유는 둘이다:
+ *  · **한 번의 판정이 한 명만 뽑는다.** 정원이 최대 6명인데 외곽 루프에 두면 정원을
+ *    채우는 데 6웨이브가 걸린다 — 그러면 minNear(위급 판정)가 재는 것이 "위급했는가"가
+ *    아니라 "몇 번째 웨이브인가"가 된다. 0.5초면 한 웨이브 안에서 정원이 찬다.
+ *  · 값을 바꾸면 이미 커밋된 팔들의 숫자가 전부 움직인다. 근거가 바뀌었다고 값까지
+ *    흔들면 이 단계의 변경분과 그 흔들림을 나중에 분리할 수 없다.
  */
 const ALLY_DECIDE_INTERVAL = 15;
 /**
- * 기본 출동 트리거의 **여유분** — 감시 창의 길이 = 지금의 출격 한계선 + 이 값.
+ * **감시 창의 길이** (타일) — 기지에서 이만큼 안으로 들어온 적을 "마을 앞에 왔다"로 센다.
  *
- * 근거: 아군이 한계선까지 걸어 나가는 동안 적도 다가온다. 적이 대체로 1.0타일/초이므로
- * 한계선보다 6타일 앞에서 뽑으면 적이 한계선에 닿기까지 6초이고, 그동안 아군은
- * clubber(1.15타일/초) 기준 6.9타일을 걷는다 — 둘이 거의 동시에 한계선에 닿는다.
- * 더 일찍 뽑으면 수명 20초 중 상당분을 걸어가는 데 쓰고, 더 늦게 뽑으면 마을 문턱에서 만난다.
+ * ── 9단계: 유도값에서 다시 상수로 돌아왔다 (출격 한계선이 삭제됐다) ─────────
+ * 8단계까지 이 값은 `sim.allySortieRange() + 6`이었다. 아군이 한계선까지 걸어 나가는
+ * 동안 적도 다가오므로 "걸어가는 시간"만큼 앞에서 뽑아야 했고, 한계선이 마을 레벨의
+ * 함수라 창도 같이 자라야 했다. **셋 다 없어졌다** — 한계선도, 줄도, 걸어 나가는
+ * 전제도(부족원은 홈타운 **앞**에서 태어나 명령이 없으면 거기 선다, 규칙 1).
+ * 그래서 이 값은 이제 순수한 **위급 판정 자**다: "마을 문턱 12타일 안에 몇 마리인가".
  *
- * ── 7단계: 상수 12에서 **유도값**으로 바꿨다 (봇이 마을 투자를 쓸 줄 알게 한다) ──
- * 예전 값 12는 "한계선 6.0 + 여유 6"을 손으로 더해 박아 둔 값이었다. 한계선이 마을
- * 레벨의 함수가 된 지금(Lv1 6.0 → Lv5 12.0, data/hometown.ts) 그 상수를 그대로 두면
- * **마을을 만렙으로 올린 봇이 한계선(12.0)과 같은 거리에서 뽑는다** — 적이 이미 줄에
- * 닿아 있을 때 기지에서 출발하므로 아군은 내내 뒤를 따라가기만 하고, 마을이 사 준
- * 자리를 한 번도 못 쓴다.
- * Lv1에서는 6.0 + 6 = 12로 예전 값과 **정확히 같다** — 마을을 올리지 않는 봇
- * (봉투 7·8번의 유닛 갈래)의 행동은 한 틱도 바뀌지 않는다.
+ * 왜 하필 12인가 — **8단계 Lv1의 창(6.0 + 6)과 정확히 같은 값**이다. 그 시절 봉투에서
+ * 마을을 올리지 않는 팔(7·8번의 유닛 갈래 U)의 창이 언제나 12였으므로, 이 값을 고르면
+ * 그 팔들의 출동 시점이 **한 틱도 바뀌지 않는다.** 아군 규칙이 통째로 바뀐 단계에서
+ * 봇의 판정 문턱까지 같이 움직이면 "게임이 바뀐 몫"과 "봇이 바뀐 몫"을 분리할 수 없다.
+ *
+ * minNear의 단위가 "12타일 창 안의 마릿수"인 것도 그대로다(아래 minNear 주석).
+ * 창이 상수가 된 지금 밀도 보정 비율은 언제나 정확히 1이라, 8단계의 보정식은
+ * 항등식이 되어 사라졌다 — 뜻은 같고 계산만 없어진 것이다.
  */
-const ALLY_TRIGGER_MARGIN = 6;
-/**
- * minNear가 기준으로 삼는 **감시 창의 표준 길이** (타일). Lv1의 창(6.0 + 6)이다.
- *
- * 왜 이게 필요한가: minNear는 "창 안의 마릿수"인데, 창이 한계선과 함께 넓어지면
- * 같은 밀도의 웨이브가 더 많은 마릿수로 세어져 **문턱이 저절로 헐거워진다**.
- * 그러면 봇은 마을을 올릴수록 더 자주 뽑고, 늘어난 지출이 곡선의 효과를 덮어 버린다.
- * 실측(스테이지1 시드 40, AB 아군+마을 봇, 창만 넓히고 문턱은 3 고정):
- *   곡선 평탄6 → 31승·아군골드 7.7% / +1.5 → 29승·8.9% / +2.0 → 29승·8.3% /
- *   +3.0 → 28승·8.6%  — 마을을 올릴수록 나빠진다.
- * 문턱을 창 길이에 비례해 올려 **밀도를 보존**하면:
- *   평탄6 → 31승·7.7% / +1.5 → 32승·6.0% / +2.0 → 36승·6.3% / +3.0 → 34승·7.4%
- * 즉 minNear의 뜻을 "마릿수"에서 "12타일당 마릿수"로 바꾼 것이고, Lv1에서는
- * 비율이 정확히 1이라 예전 봇과 완전히 같다.
- *
- * ⚠ **위 두 표의 승수는 한 시드 표본(시작점 1000)의 값이다** — 8단계에서 시작점을 옮긴
- * 독립 표본 10벌(각 40시드)로 다시 재면 유도 창과 고정 창(12)의 승수 합은 308 대 309로
- * **사실상 같다**(개별 36/31/31/31/27/31/30/31/29/31 대 29/32/33/32/27/31/30/30/30/35).
- * 즉 유도 창이 고정 창보다 낫다는 근거는 승수에 없다. 그래도 유도로 두는 이유는
- * **정의**다 — "마을이 사 준 자리를 쓸 줄 아는 봇"이어야 sortie 열의 A/B가 성립하고,
- * 상수로 두면 만렙 봇이 한계선과 같은 거리에서 뽑아 그 자리를 한 번도 못 쓴다.
- * (밀도 보존 쪽은 다르다 — 그게 없으면 창만 넓어져 지출이 늘고, 그건 승수와 무관하게
- *  "곡선의 효과"와 "더 뽑은 효과"를 섞어 버리는 측정상의 오염이다)
- */
-const ALLY_TRIGGER_REF = ALLY_SORTIE_RANGE + ALLY_TRIGGER_MARGIN;
+const ALLY_WATCH_WINDOW = 12;
 
 /** 아군 출동 정책 — 어떤 종을 어떤 순서로 뽑는가 */
 export type AllyPick = AllyId | 'rotate';
+
+/**
+ * **아군을 어디에 세우는가** (9단계 신설). 자유 이동(moveAlly)이 생겨 처음으로
+ * "자리"가 봇의 결정이 됐다 — 8단계까지 아군의 위치는 출격 한계선이 강제하는 값이라
+ * 봇에게 손잡이가 없었다.
+ *
+ *  · `'home'` — 기본. **moveAlly를 한 번도 쓰지 않는다.** 부족원은 태어난 자리
+ *    (홈타운 앞 집결 지점, allies.ts 규칙 1)에 그대로 선다. 이 값에서는 아군 관련
+ *    코드 경로가 8단계와 한 커맨드도 다르지 않다 — 커밋된 모든 아군 팔의 기준선이다.
+ *  · `'front'` — 뽑을 때마다 **살아 있는 전원**(allyId −1)에게 적 스폰 셀을 찍는다.
+ *    곧 "입구에서 요격한다"는 전략 그 자체이고, 봉투 12번이 이 팔로 그 전략의 값을
+ *    잰다. 경로를 따라가지 않고 **직선**으로 가로지르므로(규칙 2) 중간에 경로를
+ *    가로지르는 지점에서 웨이브와 먼저 만난다 — 그것까지 포함해 "앞에 세운 대가"다.
+ */
+export type AllyStance = 'home' | 'front';
 
 /**
  * 배치 정책 — **0등급(안전 + 커버) 안쪽의 순위만** 바꾼다.
@@ -284,27 +284,46 @@ export interface BotOptions {
     /** 뽑을 종. 'rotate'는 clubber→slinger→guardian 순환 */
     pick?: AllyPick;
     /**
-     * 감시 창의 길이를 **고정**한다 (타일). 지정하지 않으면 `출격 한계선 + 6`으로
-     * 매 판정마다 유도한다 — 통제 실험에서 창을 못 박고 싶을 때만 쓴다.
+     * 감시 창의 길이를 **고정**한다 (타일). 지정하지 않으면 ALLY_WATCH_WINDOW(12).
+     *
+     * ⚠ 9단계 전에는 기본값이 `출격 한계선 + 6`이라 마을 레벨에 따라 자랐고, 이 옵션은
+     * 그 유도를 못 박는 통제 장치였다. 한계선이 삭제돼 기본값이 이미 상수이므로 지금
+     * 이 옵션은 **창의 크기 자체를 A/B하는** 용도로만 남는다.
      */
     trigger?: number;
     /**
-     * **위급 판정 문턱** — 창 안의 지상 적이 이 수 이상일 때만 출동한다(기본 1).
-     * 단위는 **12타일 창 기준 마릿수**다 — 창이 넓어지면 문턱도 비례로 올라간다
-     * (ALLY_TRIGGER_REF 주석). 그래서 이 값은 "몇 마리"가 아니라 **밀도**를 뜻한다.
+     * **위급 판정 문턱** — 창 안의 적이 이 수 이상일 때만 출동한다(기본 1).
+     * 단위는 **12타일 창 기준 마릿수**다(ALLY_WATCH_WINDOW 주석) — 창을 넓히면 문턱도
+     * 비례로 올라간다. 그래서 이 값은 "몇 마리"가 아니라 **밀도**를 뜻한다.
      *
-     * 왜 필요한가: 아군은 수명 20초짜리 긴급 자원인데, 문턱이 1이면 봇은 방어선이
-     * 멀쩡한 웨이브에도 매번 뽑아 50웨이브 내내 균일하게 골드를 태운다. 실측에서
-     * 그렇게 쓴 골드 11%는 위약(효과 0) 대비 +3승어치 일을 했지만, 그 11%를 타워에서
-     * 뺀 손해가 그보다 커서 순증은 −1승이었다. **효과가 없는 게 아니라 쓸 자리가
-     * 아닌 곳에 썼다.** 문턱을 올리면 "타워가 감당 못 해 여러 마리가 마을 앞까지
-     * 밀려온 웨이브"에만 지출이 몰린다.
+     * 왜 필요한가: 문턱이 1이면 봇은 방어선이 멀쩡한 웨이브에도 매번 뽑아 50웨이브
+     * 내내 균일하게 골드를 태운다. 실측에서 그렇게 쓴 골드 11%는 위약(효과 0) 대비
+     * +3승어치 일을 했지만, 그 11%를 타워에서 뺀 손해가 그보다 커서 순증은 −1승이었다.
+     * **효과가 없는 게 아니라 쓸 자리가 아닌 곳에 썼다.** 문턱을 올리면 "타워가 감당
+     * 못 해 여러 마리가 마을 앞까지 밀려온 웨이브"에만 지출이 몰린다.
+     *
+     * ⚠ 9단계 정정 — 8단계까지 이 주석은 근거를 "아군은 수명 20초짜리 긴급 자원"으로
+     * 들었다. 수명이 없어졌으므로 그 문장은 폐기한다. 문턱이 여전히 필요한 이유는
+     * **가격**으로 옮겨갔다: 부족원은 이제 영구 유닛이라 값이 올랐고(clubber 40 → 90),
+     * 비용 지수(ALLY_COST_GROWTH)도 인원이 안 줄면 안 내려간다. 곧 "아무 때나 뽑는다"의
+     * 대가가 8단계보다 **크다**.
      */
     minNear?: number;
     /** 이만큼의 골드는 타워 몫으로 남긴다 (기본 0 = 몰빵) */
     reserve?: number;
-    /** 동시 유지 인원 상한 (기본 sim의 allyCap) */
+    /**
+     * 동시 유지 인원 상한 (기본 = 지금 마을이 허용하는 정원 `sim.allyCap()`).
+     *
+     * ⚠ `sim.state.allyCap`이 아니라 **메서드**를 읽는다. 공개 상태 쪽 필드는 전투 생성
+     * 시각의 ALLY_MAX_ACTIVE(6)에서 갱신되지 않아(src/sim/battle.ts) 마을 레벨을 따라가지
+     * 않는다 — 그 값을 읽으면 봇의 정원이 언제나 6이 되어 봉투 11번이 재려는 축
+     * (마을 레벨 = 머릿수)이 봇 쪽에서 통째로 지워진다.
+     */
     max?: number;
+    /**
+     * **어디에 세우는가** (기본 'home' = moveAlly를 쓰지 않는다). AllyStance 주석 참조.
+     */
+    stance?: AllyStance;
   };
   /**
    * 홈타운 레벨업 정책. 지정하지 않으면 봇은 **레벨업하지 않는다**(Lv1 고정).
@@ -386,13 +405,23 @@ export interface BotResult {
   /**
    * 봉쇄가 일어난 지점 중 **스폰에 가장 가까웠던 거리** (타일, 경로 호장. 봉쇄 0이면 Infinity).
    *
-   * 왜 이 지표인가: 출격 한계선(allies.ts 규칙 2)이 막으려는 것은 단 하나,
-   * **"아군이 적 스폰 지점까지 걸어가 웨이브를 입구에서 요격해 타워가 무의미해지는 것"**이다.
-   * 한계선 값(타일)은 절대치인데 경로 길이는 스테이지마다 두 배 넘게 차이 나므로
-   * (s4 17.59 ~ s1 36.19), 값만 봐서는 그 붕괴가 일어났는지 알 수 없다.
-   * 이 지표는 결과 쪽에서 직접 잰다 — 작을수록 입구에 가깝다.
+   * 왜 이 지표인가: 8단계까지 이 값은 **출격 한계선이 지켜지는지**를 결과 쪽에서 검산하는
+   * 자였다("아군이 적 스폰까지 걸어가 웨이브를 입구에서 요격하는 것"을 막는 규칙, 옛 규칙 2-c).
+   * **9단계에 그 규칙이 사용자 지시로 폐기됐고**(반경 제한 없이 맵 어디든), 그래서 이 지표의
+   * 뜻이 "규칙이 지켜졌는가"에서 **"봇이 실제로 어디서 싸웠는가"**로 바뀌었다.
+   * 값 자체는 한 줄도 안 바뀌었고, 지금은 봉투 12번이 두 팔(home/front)의 자리를 가르는
+   * 데 쓴다 — front 팔에서 이 값이 크게 떨어지지 않으면 그 팔은 아무것도 안 한 것이다.
    */
   allyBlockMinDist: number;
+  /**
+   * 이 판에서 **쓰러진 부족원 수** (allyDied 이벤트. 9단계 신설).
+   *
+   * 왜 필요해졌는가: 8단계에는 부족원이 사라지는 길이 둘이었고(수명 만료·전사) 그중
+   * 대부분이 수명이라 사망 수가 "얼마나 위험한 자리에 있었나"를 재지 못했다. 수명이
+   * 삭제되면서 **사라지는 길이 전사 하나뿐**이 됐다(allies.ts 규칙 3) — 곧 이 수는
+   * 이제 자리 선택의 대가를 직접 잰다. 봉투 12번의 판별력이 여기서 나온다.
+   */
+  allyDeaths: number;
   /** 홈타운이 쏜 화살 수 — "마을 방어 기능이 실제로 작동하는가"의 직접 지표 */
   baseShots: number;
   /** 홈타운 화살이 넣은 누적 피해 */
@@ -862,6 +891,7 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
   let goldAllies = 0;
   let goldBase = 0;
   let alliesTrained = 0;
+  let allyDeaths = 0;
   let allyTicks = 0;
   let allyBlockTicks = 0;
   let enemyBlockedTicks = 0;
@@ -896,17 +926,32 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       : stage.paths.map((wp) => buildStraight(wp[0] ?? stage.baseCell, stage.baseCell).totalLength);
   const allyPolicy = opts.allies;
   /**
-   * 지금의 출동 트리거 거리. 고정하지 않고 **매 판정마다 다시 읽는다** —
-   * 한계선이 마을 레벨과 함께 자라므로(sim.allySortieRange) 여기도 같이 자라야
-   * 봇이 마을에 낸 값을 실제로 쓴다 (ALLY_TRIGGER_MARGIN 주석).
+   * 감시 창의 길이. 9단계에 출격 한계선이 삭제되면서 **판정마다 다시 읽을 이유가
+   * 없어졌다**(마을 레벨을 따라 자라던 값이 사라졌다) — 이제 판 내내 상수다.
    */
-  const allyTriggerNow = (): number =>
-    allyPolicy?.trigger ?? sim.allySortieRange() + ALLY_TRIGGER_MARGIN;
+  const allyTrigger = allyPolicy?.trigger ?? ALLY_WATCH_WINDOW;
   const allyMinNear = Math.max(1, allyPolicy?.minNear ?? 1);
-  /** 밀도 보존 — 창이 넓어지면 문턱도 같은 비율로 올린다 (ALLY_TRIGGER_REF 주석) */
-  const allyMinNearNow = (trigger: number): number =>
-    Math.max(1, Math.round((allyMinNear * trigger) / ALLY_TRIGGER_REF));
+  /**
+   * 밀도 보존 — 창을 넓히면 문턱도 같은 비율로 올린다 (ALLY_WATCH_WINDOW 주석).
+   * 기본 창에서는 비율이 정확히 1이라 minNear가 그대로 쓰인다.
+   */
+  const allyMinNearNow = Math.max(1, Math.round((allyMinNear * allyTrigger) / ALLY_WATCH_WINDOW));
   const allyReserve = allyPolicy?.reserve ?? 0;
+  const allyStance: AllyStance = allyPolicy?.stance ?? 'home';
+  /**
+   * 'front' 팔이 찍는 셀 = **지상 경로의 첫 웨이포인트 = 적 스폰 셀**.
+   * "입구 요격"을 문자 그대로 재려면 목표를 여기보다 뒤로 물릴 이유가 없다 —
+   * 규칙 2가 스폰 지점도 찍을 수 있다고 명시하므로 이 셀은 유효한 명령이다.
+   * (격자 밖 좌표는 moveAlly가 거부하므로 여기서 한 번 더 자른다 — 명령이 조용히
+   *  씹히면 'front' 팔이 사실은 'home' 팔이 되어 봉투 12번이 공허해진다)
+   */
+  const frontCell: { x: number; z: number } = (() => {
+    const wp = stage.paths[0]?.[0] ?? stage.baseCell;
+    return {
+      x: Math.min(stage.gridW - 1, Math.max(0, wp.x)),
+      z: Math.min(stage.gridH - 1, Math.max(0, wp.z)),
+    };
+  })();
   const allyOrder: AllyId[] =
     allyPolicy === undefined || allyPolicy.pick === undefined || allyPolicy.pick === 'rotate'
       ? ['clubber', 'slinger', 'guardian']
@@ -944,19 +989,20 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     if (!allyPolicy) return;
     const st = sim.state;
     if (st.phase !== 'wave') return;
-    const max = allyPolicy.max ?? st.allyCap;
+    // 9단계: 정원은 **마을 레벨의 함수**다 — 공개 상태의 allyCap 필드는 갱신되지 않으므로
+    // 반드시 메서드를 읽는다 (BotOptions.allies.max 주석의 ⚠).
+    const max = allyPolicy.max ?? sim.allyCap();
     if (st.allies.length >= max) return;
-    const trigger = allyTriggerNow();
     let near = 0;
     let air = 0;
     for (const e of st.enemies) {
       const lens = e.flying ? airLens : pathLens;
       const len = lens[e.pathIndex] ?? lens[0] ?? 0;
-      if (len - e.dist > trigger) continue;
+      if (len - e.dist > allyTrigger) continue;
       near++;
       if (e.flying) air++;
     }
-    if (near < allyMinNearNow(trigger)) return;
+    if (near < allyMinNearNow) return;
     const order = air > 0 && allyAntiAir.length > 0 ? allyAntiAir : allyOrder;
     const defId = order[allyTurn % order.length] as AllyId;
     const cost = sim.allyCost(defId);
@@ -966,6 +1012,22 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       goldAllies += cost;
       alliesTrained++;
       allyTurn++;
+      /*
+       * 자리 명령은 **출동 직후에만** 낸다 (9단계).
+       * 매 판정마다 내지 않는 이유: moveAlly는 목표를 덮어쓰기만 하는 커맨드라 같은 셀을
+       * 반복해 찍어도 결과가 같고, 그러면 이벤트만 수백 번 쌓인다. 새로 태어난 부족원은
+       * 집결 지점을 목표로 갖고 나오므로(규칙 1) 그 한 명을 위해 한 번 내면 충분하다.
+       * 대상을 −1(전원)로 두는 이유는 그게 사람이 실제로 누르는 버튼이기 때문이다 —
+       * 여섯을 한 명씩 찍게 하면 급할 때 여섯 번을 눌러야 한다(규칙 2).
+       */
+      if (allyStance === 'front') {
+        sim.applyCommand({
+          type: 'moveAlly',
+          allyId: -1,
+          cellX: frontCell.x,
+          cellZ: frontCell.z,
+        });
+      }
     }
   };
 
@@ -1109,6 +1171,8 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       leaks++;
     } else if (ev.type === 'baseFired') {
       baseShots++;
+    } else if (ev.type === 'allyDied') {
+      allyDeaths++;
     } else if (ev.type === 'enemyDamaged') {
       if (ev.source === 'hometown') baseDamage += ev.amount;
       lastHit.set(ev.enemyId, ev.source);
@@ -1166,8 +1230,8 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
         }
         allyBlockTicks += engaged.size;
       }
-      // 아군만 외곽 루프가 아니라 틱 루프 안에서 본다 — 수명 20초짜리 긴급 자원이라
-      // 4초 늦으면 이미 늦다 (ALLY_DECIDE_INTERVAL 주석)
+      // 아군만 외곽 루프가 아니라 틱 루프 안에서 본다 — 한 판정이 한 명만 뽑으므로
+      // 4초마다 보면 정원을 채우는 데 여러 웨이브가 걸린다 (ALLY_DECIDE_INTERVAL 주석)
       if (allyPolicy && i % ALLY_DECIDE_INTERVAL === 0) stepAllies();
       // 계측 훅이 있을 때만 **매 틱** 비운다 — 웨이브 번호를 사건과 같은 틱에서 읽어야
       // "몇 번째 웨이브에서 맞았나"가 성립하기 때문이다. 훅이 없으면 한 줄도 안 돈다.
@@ -1194,6 +1258,7 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     baseHpMax: sim.state.baseHpMax,
     baseLevel: sim.state.baseLevel,
     alliesTrained,
+    allyDeaths,
     allyTicks,
     allyBlockTicks,
     enemyBlockedTicks,

@@ -48,22 +48,47 @@ import { VARIANT_ATTR } from '@/render/meshlib/gait';
 const cellToWorld = (x: number, z: number, out?: THREE.Vector3): THREE.Vector3 =>
   (out ?? new THREE.Vector3()).set(x, 0, z);
 
+const TAU = Math.PI * 2;
+
+/**
+ * 두 보행 위상 사이에 **앞으로 돈 각도** (0 이상 2π 미만).
+ * 위상은 wrapGait로 [0,2π)에 접혀 있어 단순 뺄셈이 주기 경계에서 음수로 튄다 —
+ * 그대로 크기 비교를 하면 "거꾸로 돌았다"와 "한 바퀴 감겼다"를 구분하지 못한다.
+ * 한 걸음이 반 주기(π) 미만인 동안은 이 값이 곧 전진량이고, π를 넘으면 후진이다.
+ */
+const advance = (from: number, to: number): number => (((to - from) % TAU) + TAU) % TAU;
+
+/**
+ * 위상 테스트가 쓰는 한 걸음 (타일).
+ *
+ * 실측: allyRig().gaitPerDist = 17.989 rad/타일, 즉 보행 **한 주기가 0.349타일**이다
+ * (보폭이 짧다 — 로우폴리 부족원은 종종걸음으로 걷는다). 그래서 반 주기가 0.175타일뿐이라
+ * 한 걸음을 그보다 크게 잡으면 "앞으로 0.2타일"과 "뒤로 0.15타일"이 접힌 위상에서
+ * 구분되지 않아 잠금이 무의미해진다. 0.05타일은 그 절반 아래이면서(0.899 rad)
+ * 실제 한 틱치 이동과도 맞다 — 곤봉잡이 1.15타일/초 ÷ 30틱 = 0.038타일/틱.
+ */
+const STEP = 0.05;
+
+/**
+ * 9단계) 경로 4필드(dist·pathIndex·slot·holdDist)와 수명(lifeLeft)이 AllyState에서
+ * 통째로 사라지고 목표 좌표(tgtX/tgtZ)와 걸은 거리(walked)가 들어왔다.
+ * 기본값은 "홈타운 앞 집결 지점에 막 태어나 아직 한 걸음도 안 뗀 부족원"이다 —
+ * walked 0, 목표 = 지금 자리. 걷는 장면은 그것을 재는 테스트가 직접 흔든다.
+ */
 function ally(o: Partial<AllyState> = {}): AllyState {
   return {
     id: 101,
     defId: 'clubber',
     hp: 100,
     maxHp: 100,
-    dist: 8,
-    pathIndex: 0,
-    slot: 0,
-    holdDist: 3,
     x: 8,
     z: 2,
     prevX: 8,
     prevZ: 2,
+    tgtX: 8,
+    tgtZ: 2,
+    walked: 0,
     heading: Math.PI,
-    lifeLeft: 600,
     attackCdLeft: 0,
     targetId: -1,
     alive: true,
@@ -240,19 +265,68 @@ describe('아군 유닛 렌더 — 메시 하나로 모인다', () => {
     view.dispose();
   });
 
-  it('역주행해도 보행 위상이 앞으로 돈다 (다리가 거꾸로 돌지 않는다)', () => {
+  /**
+   * ── 9단계: 보행 위상의 출처가 경로 호장에서 **걸은 거리**로 옮겨졌다 ──────────
+   * 8단계까지 아군은 경로를 거꾸로 걸었고(dist가 줄어든다) 뷰는 부호를 뒤집은 `-dist`를
+   * 이동거리로 썼다. 그래서 이 자리의 회귀 잠금은 "dist 8 → 7.7이면 gait가 증가한다"였다.
+   *
+   * 자유 이동에는 그런 단조 진행량이 **아예 없다** — 아군이 앞뒤로 오가면 어떤 좌표를
+   * 써도 늘었다 줄었다 하고, 위상을 좌표에서 뽑으면 되돌아오는 구간에서 다리가 거꾸로 돈다.
+   * 그래서 sim이 태어나서 걸은 총 거리 AllyState.walked를 따로 누적하고
+   * (src/sim/allies.ts moveAllies), 뷰는 그 값만 본다(src/render/views/enemyview.ts
+   * updateAllies: `travel = a.walked − step × (1−alpha)`).
+   *
+   * 아래 둘이 그 계약을 나눠 잠근다:
+   *  ① walked가 늘면 위상이 앞으로 돈다 (= 예전 dist 잠금이 옮겨 앉은 자리)
+   *  ② **왕복해도 절대 거꾸로 돌지 않는다** — walked를 새로 도입한 이유가 정확히 이것이라,
+   *     ①만으로는 좌표 기반 구현도 그대로 통과해 버린다.
+   */
+  it('walked가 늘면 보행 위상이 앞으로 돈다', () => {
     const scene = new THREE.Scene();
     const view = new EnemyView(scene);
     const gaits = (view as unknown as { gaitAttrs: Map<string, THREE.BufferAttribute> }).gaitAttrs;
     const read = (): number => gaits.get(allyGeoKey())!.getX(0);
 
-    // dist가 줄어드는 것이 곧 전진이다 (기지 → 적 방향)
-    view.update([], 1, cellToWorld, 0.016, [ally({ id: 101, dist: 8, x: 8, prevX: 8 })]);
+    // alpha=1이라 보간분(step × (1−alpha))이 0이다 — 위상이 walked만의 함수가 된다
+    view.update([], 1, cellToWorld, 0.016, [ally({ id: 101, x: 8, prevX: 8, walked: 0 })]);
     const g0 = read();
-    view.update([], 1, cellToWorld, 0.016, [ally({ id: 101, dist: 7.7, x: 7.7, prevX: 8 })]);
+    view.update([], 1, cellToWorld, 0.016, [ally({ id: 101, x: 7.95, prevX: 8, walked: STEP })]);
     const g1 = read();
-    // wrapGait로 감기므로 큰 차이가 아니라 '증가'만 본다 (0.3타일 이동은 한 주기 미만)
-    expect(g1).toBeGreaterThan(g0);
+    // wrapGait로 [0,2π)에 접히므로 뺄셈이 아니라 '앞으로 돈 각도'로 본다
+    expect(advance(g0, g1)).toBeGreaterThan(0);
+    expect(advance(g0, g1)).toBeLessThan(Math.PI);
+    view.dispose();
+  });
+
+  it('앞뒤로 오가도 보행 위상이 거꾸로 돌지 않는다 (walked를 도입한 이유)', () => {
+    const scene = new THREE.Scene();
+    const view = new EnemyView(scene);
+    const gaits = (view as unknown as { gaitAttrs: Map<string, THREE.BufferAttribute> }).gaitAttrs;
+    const read = (): number => gaits.get(allyGeoKey())!.getX(0);
+
+    // 명령을 두 번 받아 왔다 갔다 한 부족원: x가 8 → 7.95 → 8.0 → 7.95로 **제자리로 돌아온다**.
+    // 좌표(또는 옛 dist)에서 위상을 뽑으면 되돌아오는 2번째 걸음(7.95 → 8.0)에서 부호가
+    // 뒤집혀 다리가 거꾸로 돈다. walked는 방향과 무관하게 STEP씩 계속 쌓이므로
+    // 세 걸음 모두 같은 방향으로 돌아야 한다.
+    const walk: { x: number; walked: number }[] = [
+      { x: 8.0, walked: 0 },
+      { x: 7.95, walked: STEP },
+      { x: 8.0, walked: STEP * 2 },
+      { x: 7.95, walked: STEP * 3 },
+    ];
+    let prevX = 8;
+    let prev = NaN;
+    for (const [i, s] of walk.entries()) {
+      view.update([], 1, cellToWorld, 0.016, [ally({ id: 101, x: s.x, prevX, walked: s.walked })]);
+      const g = read();
+      if (i > 0) {
+        const label = `${i}번째 걸음 (x ${prevX} → ${s.x})`;
+        expect(advance(prev, g), label).toBeGreaterThan(0);
+        expect(advance(prev, g), label).toBeLessThan(Math.PI);
+      }
+      prev = g;
+      prevX = s.x;
+    }
     view.dispose();
   });
 });

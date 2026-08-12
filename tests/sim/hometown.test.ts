@@ -7,7 +7,7 @@ import type { BaseLevelDef, BattleSim, SimEvent, TowerTier } from '@/data/types'
 import { TICK_RATE } from '@/data/types';
 import { createBattle } from '@/sim/battle';
 import { BASE_LEVELS } from '@/data/hometown';
-import { ALLY_SORTIE_RANGE } from '@/data/balance';
+import { ALLY_MAX_ACTIVE } from '@/data/balance';
 import { ALLY_DEFS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
 import { baseLevels, enemyDefs, eventsOf, options, runTicks, stageDef, wave } from './fixtures';
 
@@ -227,7 +227,7 @@ describe('홈타운 레벨업', () => {
 });
 
 describe('실제 밸런스 데이터', () => {
-  it('레벨 곡선이 단조 증가한다 (비용·HP·사거리·DPS)', () => {
+  it('레벨 곡선이 단조 증가한다 (비용·HP·사거리·DPS·정원)', () => {
     expect(BASE_LEVELS.length).toBeGreaterThanOrEqual(2);
     expect(BASE_LEVELS[0]?.cost).toBe(0); // Lv1은 시작 상태라 값을 치르지 않는다
     for (let i = 1; i < BASE_LEVELS.length; i++) {
@@ -239,7 +239,25 @@ describe('실제 밸런스 데이터', () => {
       expect(cur.dmg / cur.cooldownTicks, `Lv${i + 1} DPS`).toBeGreaterThan(
         prev.dmg / prev.cooldownTicks,
       );
+      /**
+       * 9단계) 정원(allyCap)이 예전 출격 한계선(sortie)이 서 있던 칸을 물려받았다.
+       * **엄격 증가**를 따로 잠그는 이유: 아군을 어디로든 보낼 수 있게 된 뒤로 마을이
+       * 파는 손잡이가 이 하나뿐이라, 두 레벨이 같은 정원을 팔면 그 사이 칸은
+       * **HP·화력만 남고 이 열은 0을 파는 칸**이 된다(8단계 sortie가 짧은 스테이지에서
+       * 겪은 바로 그 함정 — src/data/hometown.ts "자르기에서 곡선 압축으로").
+       */
+      expect(cur.allyCap, `Lv${i + 1} 정원`).toBeGreaterThan(prev.allyCap);
     }
+  });
+
+  it('정원은 1명 이상에서 시작해 만렙에서 절대 상한과 만난다', () => {
+    const lv1 = BASE_LEVELS[0] as BaseLevelDef;
+    const max = BASE_LEVELS[BASE_LEVELS.length - 1] as BaseLevelDef;
+    // Lv1이 0이면 이 상품이 시작 시점에 통째로 존재하지 않는다 (뽑기 버튼이 늘 회색)
+    expect(lv1.allyCap).toBeGreaterThanOrEqual(1);
+    // 만렙 정원 = ALLY_MAX_ACTIVE. 두 숫자가 갈리면 표의 마지막 칸이 조용히 사라지거나
+    // (표 < 상한) 렌더 정원을 넘겨 인스턴스 버퍼가 잘린다 (표 > 상한, allyCapFor의 min).
+    expect(max.allyCap).toBe(ALLY_MAX_ACTIVE);
   });
 
   it('Lv1 사거리는 쏘는 타워 전부보다 짧다 (홈타운이 타워를 대체하지 못한다)', () => {
@@ -313,23 +331,28 @@ describe('실제 밸런스 데이터', () => {
 });
 
 describe('다음 레벨 미리보기 (비가역 결제 전 정보)', () => {
-  it('다음 레벨의 최대HP·공격력·사거리·출격 한계선을 sim이 확정한 값으로 준다', () => {
-    const sim = armedSim({ gold: 1000, baseHp: 10 });
-    // 목 테이블: Lv2 = hpMul 2 · dmg 20 · range 3 · sortie는 목 기본값(6.0)
-    expect(sim.baseNextStats()).toEqual({
-      hpMax: 20,
-      dmg: 20,
-      range: 3,
-      sortie: ALLY_SORTIE_RANGE,
+  /**
+   * 9단계) 미리보기의 넷째 칸이 출격 한계선(sortie)에서 **정원(allyCap)**으로 바뀌었다.
+   * 정원을 레벨마다 다르게 준 목 테이블을 쓰는 이유: 목 기본값(전 레벨 동일)으로 재면
+   * "다음 레벨을 읽는가"와 "지금 레벨을 읽는가"와 "상수를 그대로 뱉는가"가 전부
+   * 같은 숫자를 내서 셋을 구분하지 못한다. 2/3/5로 벌려 두면 그 셋이 갈린다.
+   */
+  it('다음 레벨의 최대HP·공격력·사거리·정원을 sim이 확정한 값으로 준다', () => {
+    const sim = armedSim({
+      gold: 1000,
+      baseHp: 10,
+      levels: [
+        { dmg: 5, cooldownTicks: 30, range: 2, allyCap: 2 },
+        { dmg: 20, cooldownTicks: 30, range: 3, allyCap: 3 },
+        { dmg: 40, cooldownTicks: 30, range: 4, allyCap: 5 },
+      ],
     });
+    // 목 테이블: Lv2 = hpMul 2 · dmg 20 · range 3 · 정원 3 (지금 레벨의 2가 아니다)
+    expect(sim.baseNextStats()).toEqual({ hpMax: 20, dmg: 20, range: 3, allyCap: 3 });
     expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
-    // Lv3 = hpMul 3 · dmg 40 · range 4
-    expect(sim.baseNextStats()).toEqual({
-      hpMax: 30,
-      dmg: 40,
-      range: 4,
-      sortie: ALLY_SORTIE_RANGE,
-    });
+    // 결제 뒤 지금 정원이 미리보기와 같아지고, 미리보기는 다시 한 칸 앞(Lv3 = 5)을 본다
+    expect(sim.allyCap()).toBe(3);
+    expect(sim.baseNextStats()).toEqual({ hpMax: 30, dmg: 40, range: 4, allyCap: 5 });
   });
 
   it('미리보기 최대HP가 실제 레벨업 결과와 정확히 일치한다 (반올림이 갈리지 않는다)', () => {
@@ -353,17 +376,46 @@ describe('다음 레벨 미리보기 (비가역 결제 전 정보)', () => {
 /**
  * 아군과 함께 쓸 때의 사거리 관계 — 5단계 검증에서 나온 결함의 회귀 잠금.
  *
- * 아군은 기지에서 ALLY_SORTIE_RANGE(6.0타일) 앞에 줄을 서서 적을 붙잡아 죽인다.
- * 홈타운 Lv1의 사거리는 2.0이라 **그 줄을 넘어오는 적이 없으면 한 발도 못 쏜다** —
- * 4단계 문서가 "세 겹(타워 → 아군 6.0 → 홈타운 ≤3.0)"이라고 쓴 것은 겹을 더한 게
- * 아니라 한 겹을 가린 것이었다(실측: 6,000틱 baseFired = 0).
+ * ── 9단계: 가리는 것이 **한계선에서 집결 지점**으로 바뀌었다 (기전만 바뀌고 결함은 같다) ──
+ * 5단계의 진단은 "아군이 기지에서 ALLY_SORTIE_RANGE(6.0타일) 앞에 줄을 서서 다 잡아 버려
+ * 사거리 2.0짜리 Lv1 마을은 한 발도 못 쏜다"였다. 한계선은 사라졌지만 **결함은 그대로
+ * 살아 있다** — 아군은 이제 홈타운 앞 ALLY_MUSTER_FORWARD(1.4타일)에 태어나 명령이 없으면
+ * 거기 서 있고, 곤봉잡이 사거리가 1.0이라 적을 **기지에서 약 2.4타일**에서 붙잡는다.
+ * 그 자리는 Lv1 사거리 2.0의 **바깥**이다. 즉 줄이 앞으로 나가서가 아니라 줄이 가까워도
+ * 봉쇄 지점이 문턱 밖이라 가려진다. 잠글 것이 달라지지 않는 이유가 이것이다.
  *
- * 그래서 잠그는 것은 "**레벨을 올리면 그 상황에서도 마을이 싸운다**"이다.
- * Lv1이 0이라는 사실 자체는 어서션하지 않는다 — 출격 한계선을 줄이면 개선되는
- * 방향이고, 그 개선을 이 테스트가 막아서는 안 된다.
+ * 실측 (스테이지1·타워 0기·기지 무적·6,000틱, 53틱마다 곤봉잡이 출동 시도):
+ *   Lv1 고정  baseFired **0**  (누적 출동 3명 · 동시 최대 2명 = Lv1 정원)
+ *   만렙까지  baseFired **39** (누적 출동 6명 · 동시 최대 6명 = Lv5 정원)
+ * 8단계 같은 실험의 21발에서 39발로 늘었는데, 이건 마을이 세진 게 아니라 **아군이
+ * 문 앞에 서게 되어 적이 마을 사거리 안에서 오래 머문다**는 뜻이다.
+ *
+ * 그래서 잠그는 것은 8단계와 같다: "**레벨을 올리면 그 상황에서도 마을이 싸운다**".
+ * Lv1이 0이라는 사실 자체는 어서션하지 않는다 — 집결 지점을 당기거나 Lv1 사거리를
+ * 늘리면 개선되는 방향이고, 그 개선을 이 테스트가 막아서는 안 된다.
  */
 describe('아군과 함께 있을 때의 홈타운 사격', () => {
-  function noTowerRun(upgradeToMax: boolean): { fired: number; trained: number } {
+  /**
+   * 관측값이 trained(누적 출동 수)에서 **peakAlive(동시에 나가 있던 최대 인원)**로 바뀌었다.
+   *
+   * 8단계는 `trained > 10`으로 "아군이 실제로 나가 있었다"를 확인했다. 그 임계값이
+   * 성립했던 이유는 **수명 20초**였다 — 6,000틱이면 아군이 열 번 넘게 죽고 다시 나므로
+   * 누적 수가 자연히 커졌다. 9단계에서 아군이 영구가 되면서 누적 출동 수는 곧
+   * **정원 + 사망 보충 횟수**로 줄었고(실측 6), 임계값을 6까지 내리면 그 숫자는
+   * "정원이 몇이냐"만 말하게 되어 판별력이 사라진다.
+   *
+   * 그래서 임계값을 내리는 대신 재 보는 것을 바꿨다. 이 실험이 성립하려면 필요한 사실은
+   * "많이 뽑았다"가 아니라 **"재는 내내 판 위에 아군이 서 있었다"**이므로, 그것을 직접 센다:
+   *  · peakAlive  — 정원이 실제로 찼는가 (한 명도 못 뽑는 실험으로 조용히 바뀌지 않는다)
+   *  · allyTicks  — 아군이 서 있던 틱 수 (전멸한 채로 6,000틱을 돌지 않았다)
+   * 둘 다 수명이 없어져도 뜻이 변하지 않고, 아군이 사라지면 즉시 빨개진다.
+   */
+  function noTowerRun(upgradeToMax: boolean): {
+    fired: number;
+    trained: number;
+    peakAlive: number;
+    allyTicks: number;
+  } {
     const stage = stageById(1);
     if (!stage) throw new Error('no stage 1');
     const sim = createBattle({
@@ -381,6 +433,8 @@ describe('아군과 함께 있을 때의 홈타운 사격', () => {
     const mut = sim.state as unknown as { baseHp: number; gold: number };
     let fired = 0;
     let trained = 0;
+    let peakAlive = 0;
+    let allyTicks = 0;
     for (let i = 0; i < 6000; i++) {
       // 타워 0기로 6,000틱을 버티게 하려면 기지를 계속 되돌려야 한다 (사격만 재는 실험)
       mut.baseHp = sim.state.baseHpMax;
@@ -389,14 +443,25 @@ describe('아군과 함께 있을 때의 홈타운 사격', () => {
       if (i % 53 === 0 && sim.applyCommand({ type: 'trainAlly', defId: 'clubber' })) trained++;
       if (upgradeToMax && i % 601 === 0) sim.applyCommand({ type: 'upgradeBase' });
       sim.tick();
+      // 이동 명령은 일부러 한 번도 내리지 않는다 — 명령이 없는 아군은 집결 지점에
+      // 그대로 서 있으므로, 이 실험이 재는 것은 **플레이어가 아무것도 안 했을 때의 기본 배치**다
+      const alive = sim.state.allies.length;
+      if (alive > peakAlive) peakAlive = alive;
+      if (alive > 0) allyTicks++;
       for (const ev of sim.drainEvents()) if (ev.type === 'baseFired') fired++;
     }
-    return { fired, trained };
+    return { fired, trained, peakAlive, allyTicks };
   }
 
   it('만렙 마을은 아군이 길목을 잡고 있어도 화살을 쏜다', () => {
     const maxed = noTowerRun(true);
-    expect(maxed.trained, '아군이 실제로 나가 있어야 실험이 성립한다').toBeGreaterThan(10);
-    expect(maxed.fired, `만렙 마을 발사 수: ${JSON.stringify(maxed)}`).toBeGreaterThan(0);
+    const info = JSON.stringify(maxed);
+    // 실험 성립 조건 — 정원이 실제로 찼고(만렙 6명), 재는 내내 아군이 서 있었다.
+    // 실측: peakAlive 6 · allyTicks 6,000/6,000 (첫 출동이 i=0이라 빈 틱이 하나도 없다).
+    // allyTicks 임계값을 6,000이 아니라 5,000으로 두는 이유: 전멸 없이 돌았다는 것만
+    // 확인하면 되는 자리라, 사망·보충 타이밍이 몇 틱 흔들렸다고 빨개질 이유가 없다
+    expect(maxed.peakAlive, `정원이 실제로 찼어야 한다: ${info}`).toBe(ALLY_MAX_ACTIVE);
+    expect(maxed.allyTicks, `아군이 판에 서 있던 틱: ${info}`).toBeGreaterThan(5000);
+    expect(maxed.fired, `만렙 마을 발사 수: ${info}`).toBeGreaterThan(0);
   }, 60_000);
 });

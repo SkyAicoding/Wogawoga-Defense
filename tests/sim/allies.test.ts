@@ -1,16 +1,42 @@
 /**
- * 아군 부족 유닛 — 마을에서 골드로 뽑아 내보내는 소모품 전력 (src/sim/allies.ts 규칙 1~8).
- * 경제(비용/상한) · 역주행/출격 한계선 · 수명 · 봉쇄(충돌 없는 발 묶기) · 반격 · 타게팅.
+ * 아군 부족 유닛 — 마을에서 골드로 뽑아 판 위에 세우는 **영구** 전력 (src/sim/allies.ts 규칙 1~7).
+ * 경제(비용/정원) · 집결과 자유 이동 · "수명으로는 죽지 않는다" · 봉쇄 · 스치는 타격 · 반격 · 타게팅.
  *
- * 목 스테이지: 경로는 z=2 가로줄(x 0→9, 길이 9), 기지 (9,2).
- * ALLY_SORTIE_RANGE 6.0이라 아군의 출격 한계선은 dist 3 = 셀 (3,2)이다.
+ * ══ 9단계에서 이 파일의 절반이 다시 쓰였다 ═════════════════════════════════
+ * 사용자가 부족을 다시 정의하면서 8단계의 뼈대 셋(**경로 역주행 · 출격 한계선 · 20초 수명**)이
+ * 통째로 없어졌다. 그것들을 잠그던 항목을 **지우지 않고 같은 층위의 새 선언으로 갈아 끼웠다** —
+ * 규칙이 폐기됐다고 판별력까지 반납하면, 그 자리에 무엇이 잘못 들어와도 아무도 모른다.
+ *  · 한계선 12건 → **자유 이동의 성질**: 집결 위치 / 목표 확정 / 직선 / 도착 정지 / 전원 이동 /
+ *    격자 밖 거부 / 교전 중 정지 / **맵 어디든 간다**(사용자 지시 ④ — 이건 반드시 빨개져야 한다).
+ *  · 수명 2건   → **대우 명제**: 빈 판에서 수천 틱을 살아 있고, 사라지는 길은 난투 하나뿐이다.
+ *  · 상한 판정  → ALLY_MAX_ACTIVE 상수가 아니라 **마을 레벨의 함수**(hometown.allyCapFor).
+ * 그리고 규칙 5-c(스치는 타격)를 재는 묶음이 통째로 새로 생겼다 — 아래 그 묶음 머리말 참조.
+ *
+ * ── 목 스테이지의 기하 (아래 전부의 출발점) ────────────────────────────────
+ * 경로는 z=2 가로줄(x 0→9, 길이 9), 기지 (9,2), 격자 10×5.
+ * 집결 지점 = 기지에서 **경로를 거슬러**(=적이 오는 -x 쪽) ALLY_MUSTER_FORWARD(1.4)만큼
+ * 나온 자리 + 3열×2줄 대열(간격 0.6). 실측 좌표는 이렇다:
+ *     1번 (7.6, 2.6) · 2번 (7.6, 2.0) · 3번 (7.6, 1.4)
+ *     4번 (8.2, 2.6) · 5번 (8.2, 2.0) · 6번 (8.2, 1.4)
+ * 아군은 **명령을 받기 전에는 여기서 한 걸음도 움직이지 않는다**. 그래서 교전을 재는 항목은
+ * 대부분 "적이 집결 지점까지 걸어온다"를 기다린다 — 속도 1이면 실측 206틱에 봉쇄가 선다.
  */
 import { describe, expect, it } from 'vitest';
-import type { AllyId, BattleSim, EnemyDef, TowerAttackSpec } from '@/data/types';
+import type {
+  AllyId,
+  AllyState,
+  BattleSim,
+  EnemyDef,
+  EnemyState,
+  SimEvent,
+  TowerAttackSpec,
+} from '@/data/types';
 import {
   ALLY_BLOCK_CAPACITY,
-  ALLY_MAX_ACTIVE,
-  ALLY_SORTIE_RANGE,
+  ALLY_MUSTER_COLS,
+  ALLY_MUSTER_FORWARD,
+  ALLY_MUSTER_SPACING,
+  BRAWL_BRUSH_RANGE,
   allyCostFor,
   enemyBrawlDmgFor,
 } from '@/data/balance';
@@ -27,10 +53,19 @@ import {
   wave,
 } from './fixtures';
 
+/** 규칙 5-c 묶음은 **틱 단위로** 피격을 세야 해서(한 틱에 두 대인지) 손으로 모은다 */
+type AllyDamagedEvent = Extract<SimEvent, { type: 'allyDamaged' }>;
+
 /** 적을 죽이지 못하는 타워 — 관찰 대상(공성/봉쇄)만 남기려고 화력을 지운다 */
 function tinyTier(): { dmg: number; cooldownTicks: number; range: number; cost: number } {
   return { dmg: 0.0001, cooldownTicks: 600, range: 0.2, cost: 50 };
 }
+
+/**
+ * "적이 없는 판"을 만드는 스폰 지연. prep은 150틱이면 저절로 끝나므로, 이게 없으면
+ * 걷는 거리를 재는 도중에 적이 나와 아군이 교전에 들어가고 무엇을 쟀는지 알 수 없어진다.
+ */
+const NO_ENEMIES = 100_000;
 
 interface Opts {
   /** 적 정의 덮어쓰기 (raptor 하나만 쓴다) */
@@ -40,6 +75,13 @@ interface Opts {
   /** 아군 정의 덮어쓰기 */
   ally?: Partial<Parameters<typeof allyDefs>[0]>;
   gold?: number;
+  /** 1번 웨이브 스폰 지연 틱 — NO_ENEMIES면 판이 계속 비어 있다 */
+  delay?: number;
+  /**
+   * 마을 레벨별 **부족원 정원**. 목 표의 기본값은 전 레벨 절대 상한이라(fixtures.ts 주석),
+   * 정원 자체를 재는 항목만 여기서 흔든다.
+   */
+  caps?: number[];
 }
 
 function allySim(o: Opts = {}): BattleSim {
@@ -50,8 +92,11 @@ function allySim(o: Opts = {}): BattleSim {
       enemyDefs: enemyDefs({ raptor: { hp: 1_000_000, ...o.enemy } }),
       towerDefs: towerDefs({ spear: { tiers: Array.from({ length: 5 }, () => tinyTier()) } }),
       allyDefs: allyDefs(o.ally),
+      ...(o.caps ? { baseLevels: baseLevels(o.caps.map((c) => ({ allyCap: c }))) } : {}),
       waves: [
-        wave([{ enemyId: 'raptor', count: o.count ?? 1, intervalTicks: 0 }]),
+        wave([
+          { enemyId: 'raptor', count: o.count ?? 1, intervalTicks: 0, delayTicks: o.delay ?? 0 },
+        ]),
         wave([{ enemyId: 'raptor', count: 1, intervalTicks: 0 }]),
       ],
     }),
@@ -62,6 +107,21 @@ function train(sim: BattleSim, defId: AllyId = 'clubber'): boolean {
   return sim.applyCommand({ type: 'trainAlly', defId });
 }
 
+/** 이동 명령 — 기본은 살아 있는 **전원**(allyId -1) */
+function order(sim: BattleSim, cellX: number, cellZ: number, allyId = -1): boolean {
+  return sim.applyCommand({ type: 'moveAlly', allyId, cellX, cellZ });
+}
+
+/**
+ * 아군 하나를 그 자리에서 쓰러뜨린다 (회수는 다음 틱의 사망 처리 단계가 한다).
+ * 9단계에는 인원이 줄어드는 길이 **죽음뿐**이라, 8단계에 수명 만료로 만들던 상황을
+ * 이제 이걸로 만든다. 난투로 진짜 죽이는 경로는 따로 잠근다('수명이 없다' 묶음).
+ */
+function kill(a: AllyState): void {
+  a.hp = 0;
+  a.alive = false;
+}
+
 /** 목 스테이지의 소품이 걸리면 먼저 치우고 배치 */
 function place(sim: BattleSim, x: number, z: number, handIndex = 0): void {
   if (sim.hasScenery(x, z)) {
@@ -70,9 +130,12 @@ function place(sim: BattleSim, x: number, z: number, handIndex = 0): void {
   expect(sim.applyCommand({ type: 'placeTower', handIndex, cellX: x, cellZ: z })).toBe(true);
 }
 
+/** 좌표 비교용 반올림 (부동소수 꼬리 제거) */
+const r3 = (n: number): number => Math.round(n * 1000) / 1000;
+
 // ---------------------------------------------------------------------------
 describe('출동 경제 (규칙 4·8)', () => {
-  it('골드가 실제로 빠지고 allyTrained가 나간다', () => {
+  it('골드가 실제로 빠지고 allyTrained가 집결 지점에서 나간다', () => {
     const sim = allySim({ gold: 1000 });
     const before = sim.state.gold;
     const cost = sim.allyCost('clubber');
@@ -83,6 +146,10 @@ describe('출동 경제 (규칙 4·8)', () => {
     expect(ev).toHaveLength(1);
     expect(ev[0]!.defId).toBe('clubber');
     expect(ev[0]!.cost).toBe(cost);
+    // 이벤트가 실어 보내는 좌표가 곧 홈타운 앞 집결 지점이다 — 연출이 기지 셀이 아니라
+    // 마을 문 앞에서 터져야 하고, 그 값의 출처가 시뮬레이션 하나뿐이어야 한다
+    expect(ev[0]!.x).toBeCloseTo(7.6, 5);
+    expect(ev[0]!.z).toBeCloseTo(2.6, 5);
     expect(sim.state.allies).toHaveLength(1);
   });
 
@@ -95,37 +162,71 @@ describe('출동 경제 (규칙 4·8)', () => {
   });
 
   it('비용은 나가 있는 인원 수에 따라 오르고, 줄면 되돌아온다', () => {
-    const sim = allySim();
+    const sim = allySim({ delay: NO_ENEMIES });
     const base = sim.allyCost('clubber');
     expect(train(sim)).toBe(true);
     expect(sim.allyCost('clubber')).toBe(allyCostFor(base, 1));
     expect(sim.allyCost('clubber')).toBeGreaterThan(base);
     expect(train(sim)).toBe(true);
     expect(sim.allyCost('clubber')).toBe(allyCostFor(base, 2));
-    // 인원이 줄면(수명 만료) 비용도 되돌아온다 — 소모품다운 경제
-    runTicks(sim, 700);
-    expect(sim.state.allies).toHaveLength(0);
-    expect(sim.allyCost('clubber')).toBe(base);
+    // 인원이 줄면 비용도 되돌아온다. 8단계에는 그 계기가 수명 만료였는데 이제는
+    // **죽음뿐**이다 — 비용 곡선이 "지금 나가 있는 인원"만 보는 성질 자체는 그대로다
+    kill(sim.state.allies[0]!);
+    runTicks(sim, 1);
+    expect(sim.state.allies).toHaveLength(1);
+    expect(sim.allyCost('clubber')).toBe(allyCostFor(base, 1));
   });
 
-  it('동시 상한에서 생산이 막힌다 (골드가 남아도)', () => {
-    const sim = allySim();
-    for (let i = 0; i < ALLY_MAX_ACTIVE; i++) expect(train(sim)).toBe(true);
-    expect(sim.state.allies).toHaveLength(ALLY_MAX_ACTIVE);
-    expect(sim.state.allyCap).toBe(ALLY_MAX_ACTIVE);
+  /**
+   * 규칙 4) **정원이 마을 레벨의 함수다** — 9단계에 상한 판정이 통째로 옮겨간 자리다.
+   * 8단계에는 ALLY_MAX_ACTIVE 상수 하나였고, 마을 레벨은 출격 한계선을 팔고 있었다.
+   * 한계선이 없어지면서 그 칸을 정원이 물려받았으므로(BaseLevelDef.allyCap),
+   * 여기서는 **레벨 표를 흔들면 상한이 따라 흔들리는가**를 본다.
+   */
+  it('정원은 마을 레벨이 정한다 (골드가 남아도 그 수에서 막힌다)', () => {
+    const sim = allySim({ caps: [2, 4, 4] });
+    expect(sim.allyCap()).toBe(2);
+    expect(train(sim)).toBe(true);
+    expect(train(sim)).toBe(true);
+    expect(sim.state.allies).toHaveLength(2);
     expect(sim.state.gold).toBeGreaterThan(sim.allyCost('clubber')); // 돈은 남아 있다
     expect(sim.canTrainAlly('clubber')).toBe(false);
     expect(train(sim)).toBe(false);
-    expect(sim.state.allies).toHaveLength(ALLY_MAX_ACTIVE);
+    expect(sim.state.allies).toHaveLength(2);
   });
 
-  it('상한이 풀리면 (한 명이 돌아가면) 다시 뽑을 수 있다', () => {
-    const sim = allySim({ ally: { clubber: { lifeTicks: 60 } } });
-    for (let i = 0; i < ALLY_MAX_ACTIVE; i++) expect(train(sim)).toBe(true);
-    expect(train(sim)).toBe(false);
-    runTicks(sim, 61);
-    expect(sim.state.allies).toHaveLength(0);
+  it('마을을 올리면 정원이 늘어 한 명 더 나간다 (한계선이 서 있던 칸)', () => {
+    const sim = allySim({ caps: [2, 4, 4] });
+    // 비가역 결제라 **사기 전에** 무엇이 늘어나는지 화면에 있어야 한다
+    expect(sim.baseNextStats()!.allyCap).toBe(4);
     expect(train(sim)).toBe(true);
+    expect(train(sim)).toBe(true);
+    expect(train(sim)).toBe(false);
+    expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
+    expect(sim.allyCap()).toBe(4);
+    expect(sim.canTrainAlly('clubber')).toBe(true);
+    expect(train(sim)).toBe(true);
+    expect(sim.state.allies).toHaveLength(3);
+  });
+
+  /**
+   * 8단계에는 "수명이 다해 한 명이 돌아가면 자리가 난다"였다. 영구화로 그 계기가
+   * 사라졌으므로 **자리를 비우는 유일한 길**을 대신 잠근다 — 죽는 것.
+   * 이게 없으면 정원이 곧 영구 벽이 되고, 규칙 3의 "정원이 수명을 대신한다"가 거짓말이 된다.
+   */
+  it('정원이 차도 한 명이 쓰러지면 그 자리가 열린다', () => {
+    const sim = allySim({
+      caps: [1, 1, 1],
+      enemy: { speed: 1, brawl: { dmg: 500, cooldownTicks: 10 } },
+      ally: { clubber: { hp: 60 } },
+    });
+    expect(train(sim)).toBe(true);
+    expect(sim.canTrainAlly('clubber')).toBe(false); // 정원 1이 찼다
+    sim.applyCommand({ type: 'callWave' });
+    const evs = runTicks(sim, 300); // 적이 집결 지점까지 걸어와 난투로 쓰러뜨린다
+    expect(eventsOf(evs, 'allyDied')).toHaveLength(1);
+    expect(sim.state.allies).toHaveLength(0);
+    expect(sim.canTrainAlly('clubber')).toBe(true);
   });
 
   it('전투가 끝나면 출동할 수 없다', () => {
@@ -137,295 +238,256 @@ describe('출동 경제 (규칙 4·8)', () => {
 });
 
 // ---------------------------------------------------------------------------
-describe('역주행과 출격 한계선 (규칙 1·2)', () => {
-  it('기지에서 스폰해 경로를 거꾸로 걷는다', () => {
-    const sim = allySim();
-    train(sim);
-    const a0 = sim.state.allies[0]!;
-    // 기지 = (9,2) = 경로 끝
-    expect(a0.x).toBeCloseTo(9, 5);
-    expect(a0.z).toBeCloseTo(2, 5);
-    const start = a0.dist;
-    runTicks(sim, 60);
-    const a1 = sim.state.allies[0]!;
-    expect(a1.dist).toBeLessThan(start); // 거꾸로
-    expect(a1.x).toBeLessThan(9);
-    expect(a1.z).toBeCloseTo(2, 5); // 경로 위를 벗어나지 않는다
-  });
-
-  it('출격 한계선에서 멈춰 선다 (적 스폰까지 걸어가지 않는다)', () => {
-    const sim = allySim();
-    train(sim);
-    const total = 9; // 목 경로 길이
-    runTicks(sim, 400); // 6타일을 걷는 데 180틱이면 충분하고도 남는다
+/**
+ * 규칙 1·2) **홈타운 앞 집결 + 자유 이동.**
+ *
+ * 8단계에는 이 자리에 '역주행과 출격 한계선' 12건이 있었다. 규칙이 폐기됐다고 그 12건을
+ * 지우면 이 기능에서 가장 크게 바뀐 부분이 **무주공산**이 된다. 그래서 같은 층위의 질문으로
+ * 갈아 끼웠다: 어디서 태어나는가 / 명령이 목표를 박는가 / 어떻게 가는가 / 도착하면 무엇을
+ * 하는가 / 누구에게 가는가 / 무엇을 거부하는가 / 언제 안 움직이는가 / **어디까지 갈 수 있는가**.
+ *
+ * 마지막 항목("맵 어디든")은 사용자가 명시적으로 지시한 것이라 특히 못 박아 둔다 —
+ * 반경 제한은 이 게임에서 두 번 사라진 적이 없고, 다시 들어오면 여기가 빨개져야 한다.
+ */
+describe('홈타운 앞 집결과 자유 이동 (규칙 1·2)', () => {
+  it('기지 셀이 아니라 그 앞에서 태어나고, 명령 전에는 그 자리를 지킨다', () => {
+    const sim = allySim({ delay: NO_ENEMIES });
+    expect(train(sim)).toBe(true);
     const a = sim.state.allies[0]!;
-    expect(a.dist).toBeCloseTo(total - ALLY_SORTIE_RANGE, 5);
-    expect(a.holdDist).toBeCloseTo(total - ALLY_SORTIE_RANGE, 5);
-    expect(a.x).toBeCloseTo(3, 5);
+    // 경로가 +x라 "앞"은 -x다. 그 방향을 경로에서 뽑는다는 것이 규칙 1의 핵심 —
+    // 기지 셀 좌표만으로는 어느 쪽이 적이 오는 쪽인지 알 수 없다
+    expect(a.x).toBeLessThan(9);
+    expect(9 - a.x).toBeCloseTo(ALLY_MUSTER_FORWARD, 5);
+    expect(a.z - 2).toBeCloseTo(ALLY_MUSTER_SPACING, 5); // 3열 대열의 한쪽 끝
+    expect(Math.cos(a.heading)).toBeCloseTo(-1, 5); // 적이 오는 쪽을 본다
+    // 태어난 자리가 곧 목표다 — 8단계처럼 저절로 걸어 나가지 않는다
+    expect(a.tgtX).toBeCloseTo(a.x, 5);
+    expect(a.tgtZ).toBeCloseTo(a.z, 5);
+    runTicks(sim, 300);
+    expect(a.walked).toBe(0);
+    expect(a.x).toBeCloseTo(7.6, 5);
+    expect(a.z).toBeCloseTo(2.6, 5);
   });
 
-  it('여럿이 나가면 한 점에 겹치지 않고 줄을 선다 (충돌 없는 게임의 대안)', () => {
-    const sim = allySim();
-    for (let i = 0; i < ALLY_MAX_ACTIVE; i++) expect(train(sim)).toBe(true);
-    // 슬롯은 0..cap-1이 정확히 한 번씩
-    expect(sim.state.allies.map((a) => a.slot).sort((p, q) => p - q)).toEqual(
-      Array.from({ length: ALLY_MAX_ACTIVE }, (_, i) => i),
-    );
-    runTicks(sim, 400);
-    const xs = sim.state.allies.map((a) => Math.round(a.x * 1000) / 1000);
-    expect(new Set(xs).size).toBe(ALLY_MAX_ACTIVE); // 좌표가 전부 다르다
-    // 맨 앞은 한계선, 뒤로 갈수록 기지 쪽 (경로가 +x 방향이라 x가 커진다)
-    const sorted = [...sim.state.allies].sort((p, q) => p.slot - q.slot);
-    expect(sorted[0]!.holdDist).toBeCloseTo(9 - ALLY_SORTIE_RANGE, 5);
-    for (let i = 1; i < sorted.length; i++) {
-      expect(sorted[i]!.holdDist).toBeGreaterThan(sorted[i - 1]!.holdDist);
+  it('여섯이 3열×2줄로 벌려 선다 (충돌이 없어 안 벌리면 한 점에 겹친다)', () => {
+    const sim = allySim({ delay: NO_ENEMIES, caps: [6, 6, 6] });
+    for (let i = 0; i < 6; i++) expect(train(sim)).toBe(true);
+    const spots = sim.state.allies.map((a) => [r3(a.x), r3(a.z)]);
+    // 실측 좌표 — 헤더의 표와 같은 값이고, 대열 규칙이 바뀌면 여기가 먼저 빨개진다
+    expect(spots).toEqual([
+      [7.6, 2.6],
+      [7.6, 2],
+      [7.6, 1.4],
+      [8.2, 2.6],
+      [8.2, 2],
+      [8.2, 1.4],
+    ]);
+    // 줄(=기지에서의 거리)은 둘, 열은 ALLY_MUSTER_COLS개, 그리고 겹치는 자리는 없다
+    expect(new Set(spots.map((s) => s[0])).size).toBe(2);
+    expect(new Set(spots.map((s) => s[1])).size).toBe(ALLY_MUSTER_COLS);
+    expect(new Set(spots.map((s) => s.join(','))).size).toBe(6);
+  });
+
+  it('moveAlly가 목표를 셀 중심에 박고 allyOrdered가 나간다', () => {
+    const sim = allySim({ delay: NO_ENEMIES });
+    for (let i = 0; i < 3; i++) expect(train(sim)).toBe(true);
+    sim.drainEvents();
+    expect(order(sim, 4, 1)).toBe(true);
+    const ev = eventsOf(sim.drainEvents(), 'allyOrdered');
+    expect(ev).toHaveLength(1);
+    // allyId -1 = 살아 있는 전원. 여섯을 한 명씩 찍게 하면 급할 때 여섯 번을 눌러야 한다
+    expect(ev[0]!.count).toBe(3);
+    expect(ev[0]!.cellX).toBe(4);
+    expect(ev[0]!.cellZ).toBe(1);
+    for (const a of sim.state.allies) {
+      expect(a.tgtX).toBe(4);
+      expect(a.tgtZ).toBe(1);
     }
+  });
+
+  it('allyId를 찍으면 그 한 명만 움직인다', () => {
+    const sim = allySim({ delay: NO_ENEMIES });
+    expect(train(sim)).toBe(true);
+    expect(train(sim)).toBe(true);
+    const [a, b] = sim.state.allies;
+    sim.drainEvents();
+    expect(order(sim, 0, 0, a!.id)).toBe(true);
+    expect(eventsOf(sim.drainEvents(), 'allyOrdered')[0]!.count).toBe(1);
+    runTicks(sim, 400);
+    expect(a!.x).toBeCloseTo(0, 5);
+    expect(a!.z).toBeCloseTo(0, 5);
+    expect(b!.walked).toBe(0); // 나머지는 제자리
+  });
+
+  it('찍은 셀까지 직선으로 간다 (경로를 따라가지 않는다)', () => {
+    const sim = allySim({ delay: NO_ENEMIES });
+    expect(train(sim)).toBe(true);
+    const a = sim.state.allies[0]!;
+    const sx = a.x;
+    const sz = a.z;
+    expect(order(sim, 1, 0)).toBe(true);
+    // 매 틱 위치가 출발점→목표 선분 위에 있는가(외적 0). 경로(z=2)를 탔거나 축별로
+    // 움직였다면 곧바로 벌어진다. 실측 최대 이탈 8.9e-14 = 부동소수 잡음뿐
+    for (let t = 0; t < 250; t++) {
+      runTicks(sim, 1);
+      const cross = (a.x - sx) * (0 - sz) - (a.z - sz) * (1 - sx);
+      expect(Math.abs(cross)).toBeLessThan(1e-9);
+    }
+    expect(a.x).toBeCloseTo(1, 5);
+    expect(a.z).toBeCloseTo(0, 5);
+    // 걸은 거리가 곧 직선 길이다 — 돌아가지도, 지나쳤다 되돌아오지도 않았다
+    expect(a.walked).toBeCloseTo(Math.hypot(sx - 1, sz - 0), 5);
+  });
+
+  it('도착하면 선다 (목표 주위를 진동하지 않는다)', () => {
+    const sim = allySim({ delay: NO_ENEMIES });
+    expect(train(sim)).toBe(true);
+    expect(order(sim, 1, 0)).toBe(true);
+    runTicks(sim, 250);
+    const a = sim.state.allies[0]!;
+    const at = { x: a.x, z: a.z, walked: a.walked };
+    runTicks(sim, 120);
+    // 한 걸음도 더 걷지 않는다. walked까지 보는 이유: 좌표만 보면 목표를 사이에 두고
+    // ±ε로 왕복해도 "같은 자리"로 보인다 (ARRIVE_EPS2가 사려는 것이 정확히 그것이다)
+    expect(a.x).toBe(at.x);
+    expect(a.z).toBe(at.z);
+    expect(a.walked).toBe(at.walked);
+    expect(a.prevX).toBe(a.x);
+    expect(a.prevZ).toBe(a.z);
   });
 
   /**
-   * 규칙 2) 한계선은 마을 레벨의 함수다 — 이 묶음이 **6단계에서 산 것**을 잠근다.
-   * 목 테이블의 sortie를 Lv1 6.0 / Lv2 8.0으로 두고 잰다 (실제 곡선 값과 무관하게
-   * "레벨이 올라가면 더 나간다"만 본다 — 곡선의 실제 다섯 숫자는 여기 박지 않는다).
-   *
-   * 경로를 20타일로 늘린 이유(기본 픽스처는 9타일): 규칙 2-c의 경로 길이 상한이
-   * `max(6.0, 경로×0.5)`라 9타일 경로에서는 상한이 6.0에 걸려 Lv2의 8.0이 6.0으로 깎인다.
-   * 그러면 이 묶음이 재려던 "레벨업하면 더 나간다"가 아니라 상한 규칙을 재게 된다.
-   * 20타일이면 상한이 10.0이라 6.0도 8.0도 깎이지 않는다 — 상한 자체는 아래
-   * '경로가 짧으면…' 항목에서 따로 잰다.
+   * **사용자 재정의 ④ — 반경 제한 없이 맵 어디든.**
+   * 8단계라면 이 아군은 dist 3(=셀 (3,2))에서 멈춰 섰다. 지금은 적이 스폰하는 칸까지 간다.
+   * 건설 불가 셀(경로)을 목표로 받는다는 것도 여기서 함께 잠근다 — 두 판정이 서로 다른
+   * 질문("여기 지을 수 있나" 대 "여기로 갈 수 있나")이라는 것이 규칙 2의 명시적 결정이다.
    */
-  const LEVEL_PATH_LEN = 20;
-
-  function levelSim(spawnDelay = 100000): BattleSim {
-    return createBattle(
-      options({
-        deck: ['spear'],
-        stage: stageDef({
-          startGold: 100000,
-          baseHp: 9999,
-          waveCount: 3,
-          gridW: LEVEL_PATH_LEN + 1,
-          layout: Array.from({ length: 5 }, () => 'o'.repeat(LEVEL_PATH_LEN + 1)),
-          paths: [[{ x: 0, z: 2 }, { x: LEVEL_PATH_LEN, z: 2 }]],
-          baseCell: { x: LEVEL_PATH_LEN, z: 2 },
-        }),
-        enemyDefs: enemyDefs({ raptor: { hp: 1_000_000 } }),
-        towerDefs: towerDefs({ spear: { tiers: Array.from({ length: 5 }, () => tinyTier()) } }),
-        allyDefs: allyDefs(),
-        baseLevels: baseLevels([{ sortie: 6 }, { sortie: 8 }, { sortie: 8 }]),
-        // 기본은 적을 내보내지 않는다(delay가 크다) — 걷는 거리만 재는 실험이라
-        // prep이 저절로 끝나 스폰된 적이 아군을 붙잡으면 무엇을 쟀는지 알 수 없어진다
-        waves: [
-          wave([{ enemyId: 'raptor', count: 1, intervalTicks: 0, delayTicks: spawnDelay }]),
-        ],
-      }),
-    );
-  }
-
-  it('마을 레벨이 오르면 한계선이 멀어진다 (다음 출동)', () => {
-    const sim = levelSim();
-    expect(sim.allySortieRange()).toBe(6);
-    expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
-    expect(sim.allySortieRange()).toBe(8);
-    train(sim);
-    runTicks(sim, 300); // 8타일 = 240틱 (수명 600틱 안)
-    // 목 경로 길이 20 — Lv2면 dist 12 = 셀 (12,2)까지 나간다 (Lv1이면 14)
-    expect(sim.state.allies[0]!.dist).toBeCloseTo(LEVEL_PATH_LEN - 8, 5);
-    expect(sim.state.allies[0]!.x).toBeCloseTo(12, 5);
-  });
-
-  it('규칙 2-b) 이미 나가 있는 아군도 레벨업 즉시 더 나아간다', () => {
-    const sim = levelSim();
-    train(sim);
-    runTicks(sim, 200);
+  it('맵 어디든 간다 — 적 스폰 칸도, 타워를 못 짓는 칸도 찍힌다', () => {
+    const sim = allySim({ delay: NO_ENEMIES });
+    expect(train(sim)).toBe(true);
+    expect(sim.canPlaceAt(0, 2)).toBe(false); // 경로 셀 = 건설 불가
+    expect(order(sim, 0, 2)).toBe(true); // 그래도 갈 수는 있다
+    runTicks(sim, 400);
     const a = sim.state.allies[0]!;
-    expect(a.dist).toBeCloseTo(LEVEL_PATH_LEN - 6, 5); // Lv1 한계선에 멈춰 있다
-    expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
-    // 레벨업 그 틱에 목표가 갱신되고(유도값), 이후 계속 걸어 나간다
-    runTicks(sim, 1);
-    expect(sim.state.allies[0]!.holdDist).toBeCloseTo(LEVEL_PATH_LEN - 8, 5);
-    runTicks(sim, 100);
-    expect(sim.state.allies[0]!.dist).toBeCloseTo(LEVEL_PATH_LEN - 8, 5);
-    expect(sim.state.allies[0]!.x).toBeCloseTo(12, 5);
+    expect(a.x).toBeCloseTo(0, 5);
+    expect(a.z).toBeCloseTo(2, 5);
+    expect(a.walked).toBeCloseTo(Math.hypot(7.6, 0.6), 5);
   });
 
-  it('규칙 2-b) 대기 슬롯 간격은 새 한계선을 기준으로 다시 깔린다', () => {
-    const sim = levelSim();
-    for (let i = 0; i < ALLY_MAX_ACTIVE; i++) expect(train(sim)).toBe(true);
-    runTicks(sim, 200);
-    expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
-    runTicks(sim, 100);
-    const sorted = [...sim.state.allies].sort((p, q) => p.slot - q.slot);
-    // 줄 전체가 통째로 앞으로 옮겨졌고, 줄 모양(0.5타일 간격)은 그대로다
-    expect(sorted[0]!.dist).toBeCloseTo(LEVEL_PATH_LEN - 8, 5);
-    for (let i = 1; i < sorted.length; i++) {
-      expect(sorted[i]!.dist - (sorted[i - 1] as { dist: number }).dist).toBeCloseTo(0.5, 5);
-    }
+  it('격자 밖은 거부한다 (판 밖은 자리가 아니라 없는 칸이다)', () => {
+    const sim = allySim({ delay: NO_ENEMIES });
+    expect(train(sim)).toBe(true);
+    const a = sim.state.allies[0]!;
+    const tgt = { x: a.tgtX, z: a.tgtZ };
+    sim.drainEvents();
+    expect(order(sim, 10, 2)).toBe(false); // gridW 10 → x는 9까지
+    expect(order(sim, -1, 2)).toBe(false);
+    expect(order(sim, 3, 5)).toBe(false); // gridH 5 → z는 4까지
+    expect(order(sim, Number.NaN, 2)).toBe(false);
+    expect(eventsOf(sim.drainEvents(), 'allyOrdered')).toHaveLength(0);
+    expect(a.tgtX).toBe(tgt.x); // 거부는 상태를 하나도 건드리지 않는다
+    expect(a.tgtZ).toBe(tgt.z);
+    expect(order(sim, 9, 4)).toBe(true); // 가장자리 셀은 통과 (경계 = 격자 그대로)
   });
 
-  it('교전 중인 근접 아군은 레벨업으로도 앞으로 가지 않는다 (붙잡은 적을 놓지 않는다)', () => {
-    const sim = levelSim(0);
+  it('대상이 하나도 없으면 거부한다 (연출도 안 난다)', () => {
+    const sim = allySim({ delay: NO_ENEMIES });
+    expect(order(sim, 3, 3)).toBe(false); // 아직 아무도 안 나갔다
+    expect(train(sim)).toBe(true);
+    sim.drainEvents();
+    expect(order(sim, 3, 3, 999)).toBe(false); // 없는 id
+    expect(eventsOf(sim.drainEvents(), 'allyOrdered')).toHaveLength(0);
+  });
+
+  it('교전 중인 근접 아군은 명령을 받아도 그 자리에 선다 (붙잡은 적을 놓지 않는다)', () => {
+    const sim = allySim({ enemy: { speed: 1 } });
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    train(sim);
-    runTicks(sim, 400); // 한계선에서 적을 붙잡고 교전 중
+    runTicks(sim, 250); // 실측 206틱에 봉쇄가 선다
     const a = sim.state.allies[0]!;
     expect(a.targetId).toBeGreaterThanOrEqual(0);
-    const held = a.dist;
-    expect(sim.applyCommand({ type: 'upgradeBase' })).toBe(true);
+    expect(sim.state.enemies[0]!.blockerAllyId).toBe(a.id);
+    const held = { x: a.x, z: a.z };
+    // 명령 자체는 **받는다** — 거부하면 "왜 안 가지"를 화면에서 설명할 방법이 없다.
+    // 목표만 갈아 끼우고, 교전이 끝나면 그때 걷기 시작한다
+    expect(order(sim, 0, 2)).toBe(true);
+    expect(a.tgtX).toBe(0);
     runTicks(sim, 60);
-    const after = sim.state.allies[0]!;
-    expect(after.targetId).toBeGreaterThanOrEqual(0);
-    expect(after.dist).toBeCloseTo(held, 5); // 그 자리에 그대로 서 있다
+    expect(a.x).toBe(held.x);
+    expect(a.z).toBe(held.z);
+    expect(a.walked).toBe(0);
   });
 
-  it('출격 지점 조회가 경로마다 실제 정지 지점을 준다 (화면 표식의 출처)', () => {
-    const sim = levelSim();
-    const p0 = sim.allySortiePoints();
-    expect(p0).toHaveLength(1);
-    expect(p0[0]!.x).toBeCloseTo(LEVEL_PATH_LEN - 6, 5);
-    expect(p0[0]!.z).toBeCloseTo(2, 5);
-    sim.applyCommand({ type: 'upgradeBase' });
-    expect(sim.allySortiePoints()[0]!.x).toBeCloseTo(LEVEL_PATH_LEN - 8, 5);
-    // 실제로 걸어간 아군이 그 지점에 선다 — 표식과 규칙이 같은 출처를 쓴다
-    train(sim);
-    runTicks(sim, 300);
-    expect(sim.state.allies[0]!.x).toBeCloseTo(sim.allySortiePoints()[0]!.x, 5);
-  });
-
-  /**
-   * 규칙 2-c) 경로가 짧으면 표의 값을 다 쓰지 못한다 (balance.ALLY_SORTIE_PATH_LIMIT).
-   * 표의 값이 절대 타일 수라, 상한이 없으면 짧은 경로에서 만렙 아군이 스폰 앞까지 걸어가
-   * 규칙 2가 막으려던 입구 요격이 그대로 일어난다.
-   */
-  function limitSim(pathLen: number, sortie: number): BattleSim {
-    return createBattle(
-      options({
-        deck: ['spear'],
-        stage: stageDef({
-          startGold: 100000,
-          baseHp: 9999,
-          waveCount: 3,
-          gridW: pathLen + 1,
-          layout: Array.from({ length: 5 }, () => 'o'.repeat(pathLen + 1)),
-          paths: [[{ x: 0, z: 2 }, { x: pathLen, z: 2 }]],
-          baseCell: { x: pathLen, z: 2 },
-        }),
-        enemyDefs: enemyDefs({ raptor: { hp: 1_000_000 } }),
-        towerDefs: towerDefs({ spear: { tiers: Array.from({ length: 5 }, () => tinyTier()) } }),
-        allyDefs: allyDefs(),
-        baseLevels: baseLevels([{ sortie }, { sortie }, { sortie }]),
-        waves: [wave([{ enemyId: 'raptor', count: 1, intervalTicks: 0, delayTicks: 100000 }])],
-      }),
-    );
-  }
-
-  it('규칙 2-c) 경로가 짧으면 한계선이 경로 절반으로 깎인다 (입구 요격 금지)', () => {
-    // 경로 24 → 상한 12.0이라 표의 20이 12로 깎인다. 아군은 경로의 마을 쪽 절반 안에 선다
-    const sim = limitSim(24, 20);
-    expect(sim.allySortieRange()).toBeCloseTo(12, 5);
-    train(sim);
-    runTicks(sim, 500); // 12타일 = 313틱 (수명 600틱 안)
-    const a = sim.state.allies[0]!;
-    expect(a.dist).toBeCloseTo(12, 5); // 스폰까지 절반이 남는다
-    // 표식도 같은 값을 쓴다 — 화면과 규칙이 갈라질 자리가 없다
-    expect(sim.allySortiePoints()[0]!.x).toBeCloseTo(12, 5);
-  });
-
-  it('규칙 2-c) 상한은 표의 값보다 크면 아무 일도 하지 않는다', () => {
-    // 경로 40 → 상한 20.0. 표의 12는 그대로 나간다 (긴 경로 스테이지)
-    const sim = limitSim(40, 12);
-    expect(sim.allySortieRange()).toBeCloseTo(12, 5);
-  });
-
-  it('규칙 2-c) Lv1 6.0은 어떤 경로에서도 깎이지 않는다 (모든 기준선의 원점)', () => {
-    // 경로 9 → 절반은 4.5지만 하한 ALLY_SORTIE_RANGE가 6.0을 지킨다
-    const sim = limitSim(9, ALLY_SORTIE_RANGE);
-    expect(sim.allySortieRange()).toBeCloseTo(ALLY_SORTIE_RANGE, 5);
-  });
-
-  it('앞줄이 빠지면 다음 출동이 그 자리를 메운다 (줄에 구멍이 남지 않는다)', () => {
-    const sim = allySim();
-    for (let i = 0; i < 3; i++) expect(train(sim)).toBe(true);
-    const front = sim.state.allies.find((a) => a.slot === 0)!;
-    (front as { hp: number }).hp = 0;
-    (front as { alive: boolean }).alive = false;
-    runTicks(sim, 1); // 사망 회수
-    expect(sim.state.allies.some((a) => a.slot === 0)).toBe(false);
+  it('걸은 거리는 앞뒤로 오가도 줄지 않는다 (보행 위상의 출처)', () => {
+    const sim = allySim({ delay: NO_ENEMIES });
     expect(train(sim)).toBe(true);
-    expect(sim.state.allies.filter((a) => a.slot === 0)).toHaveLength(1);
+    const a = sim.state.allies[0]!;
+    expect(order(sim, 2, 2)).toBe(true);
+    runTicks(sim, 200);
+    const out = a.walked;
+    expect(out).toBeGreaterThan(5);
+    // 왔던 길을 되짚는다. 8단계의 경로 호장 dist였다면 여기서 값이 **줄어들어**
+    // 렌더의 다리가 거꾸로 돌았다 — walked는 방향과 무관하게 언제나 는다
+    expect(order(sim, 8, 2)).toBe(true);
+    runTicks(sim, 200);
+    expect(a.walked).toBeGreaterThan(out);
+    expect(a.x).toBeCloseTo(8, 5);
   });
 
-  it('진행 방향(heading)이 적과 반대다', () => {
-    const sim = allySim();
-    train(sim);
+  it('바라보는 방향이 실제 이동 방향을 따라 돈다', () => {
+    const sim = allySim({ delay: NO_ENEMIES });
+    expect(train(sim)).toBe(true);
+    const a = sim.state.allies[0]!;
+    expect(Math.cos(a.heading)).toBeCloseTo(-1, 5); // 태어날 때는 적이 오는 쪽
+    expect(order(sim, 2, 2)).toBe(true);
+    runTicks(sim, 200);
+    expect(Math.cos(a.heading)).toBeLessThan(0); // 아직 -x 쪽으로 갔다
+    expect(order(sim, 8, 2)).toBe(true); // 마을 쪽으로 되돌린다
     runTicks(sim, 30);
-    const a = sim.state.allies[0]!;
-    // 경로는 +x 방향(heading 0)이라 아군은 π를 본다
-    expect(Math.cos(a.heading)).toBeCloseTo(-1, 5);
-  });
-
-  it('경로가 여럿이면 기지에 가장 가까운 적이 있는 쪽으로 나간다', () => {
-    const sim = createBattle(
-      options({
-        deck: ['spear'],
-        stage: stageDef({
-          startGold: 100000,
-          baseHp: 9999,
-          paths: [
-            [
-              { x: 0, z: 1 },
-              { x: 9, z: 1 },
-            ],
-            [
-              { x: 0, z: 3 },
-              { x: 9, z: 3 },
-            ],
-          ],
-        }),
-        enemyDefs: enemyDefs({ raptor: { hp: 1_000_000, speed: 1 } }),
-        towerDefs: towerDefs({ spear: { tiers: Array.from({ length: 5 }, () => tinyTier()) } }),
-        // 1번 경로 적이 먼저(delay 0), 0번 경로 적은 한참 뒤에 나온다 → 1번이 더 급하다
-        waves: [
-          wave([
-            { enemyId: 'raptor', count: 1, intervalTicks: 0, pathIndex: 1 },
-            { enemyId: 'raptor', count: 1, intervalTicks: 0, pathIndex: 0, delayTicks: 600 },
-          ]),
-        ],
-      }),
-    );
-    sim.applyCommand({ type: 'callWave' });
-    runTicks(sim, 60);
-    expect(train(sim)).toBe(true);
-    expect(sim.state.allies[0]!.pathIndex).toBe(1);
-  });
-
-  it('경로를 명시하면 그 경로로 나간다', () => {
-    const sim = allySim();
-    expect(sim.applyCommand({ type: 'trainAlly', defId: 'clubber', pathIndex: 0 })).toBe(true);
-    expect(sim.state.allies[0]!.pathIndex).toBe(0);
+    expect(Math.cos(a.heading)).toBeCloseTo(1, 5); // 그대로 뒤를 본다
   });
 });
 
 // ---------------------------------------------------------------------------
-describe('수명 (규칙 3)', () => {
-  it('수명이 다하면 마을로 돌아간다 (allyRetired, 사망 아님)', () => {
-    const sim = allySim({ ally: { clubber: { lifeTicks: 45 } } });
-    train(sim);
-    const evs = runTicks(sim, 60);
-    const retired = eventsOf(evs, 'allyRetired');
-    expect(retired).toHaveLength(1);
-    expect(retired[0]!.defId).toBe('clubber');
+/**
+ * 규칙 3) **수명은 없다.**
+ *
+ * 8단계에는 여기에 "수명이 다하면 마을로 돌아간다(allyRetired)" 2건이 있었다. 사용자가
+ * "자동으로 죽는 로직은 없애줘"로 규칙을 걷어냈으므로 그 2건을 **대우로 뒤집었다**:
+ * 시간으로는 절대 안 사라지고, 사라지는 길은 hp가 0이 되는 것 하나뿐이다.
+ * 이 두 항목이 없으면 수명이 다른 이름으로 되살아나도(자동 소멸·감쇠·비용 회수 타이머)
+ * 아무 데서도 빨개지지 않는다.
+ */
+describe('수명이 없다 — HP가 다할 때만 죽는다 (규칙 3)', () => {
+  it('빈 판에서 수천 틱을 돌려도 아무도 사라지지 않는다', () => {
+    const sim = allySim({ delay: NO_ENEMIES, caps: [3, 3, 3] });
+    const base = sim.allyCost('clubber');
+    for (let i = 0; i < 3; i++) expect(train(sim)).toBe(true);
+    const evs = runTicks(sim, 5000); // 8단계 수명(600틱)의 8배가 넘는다
+    expect(sim.state.allies).toHaveLength(3);
+    for (const a of sim.state.allies) expect(a.hp).toBe(a.maxHp);
     expect(eventsOf(evs, 'allyDied')).toHaveLength(0);
-    expect(sim.state.allies).toHaveLength(0);
+    // 비용도 그대로 = 인원이 한 명도 안 줄었다는 같은 사실의 다른 창구
+    expect(sim.allyCost('clubber')).toBe(allyCostFor(base, 3));
   });
 
-  it('수명은 prep에서도 흐른다 (미리 쟁여 둘 수 없다)', () => {
-    const sim = allySim();
-    train(sim);
-    expect(sim.state.phase).toBe('prep');
-    const life0 = sim.state.allies[0]!.lifeLeft;
-    runTicks(sim, 30);
-    expect(sim.state.phase).toBe('prep');
-    expect(sim.state.allies[0]!.lifeLeft).toBe(life0 - 30);
+  it('사라지는 길은 난투 하나뿐이다 (그래서 봉쇄가 영원히 굳지 않는다)', () => {
+    const sim = allySim({
+      enemy: { speed: 1, brawl: { dmg: 30, cooldownTicks: 15 } },
+      ally: { clubber: { hp: 60 } },
+    });
+    expect(train(sim)).toBe(true);
+    sim.applyCommand({ type: 'callWave' });
+    const evs = runTicks(sim, 300);
+    const died = eventsOf(evs, 'allyDied');
+    expect(died).toHaveLength(1);
+    expect(died[0]!.defId).toBe('clubber');
+    expect(sim.state.allies).toHaveLength(0);
+    // 죽기까지 받은 피해가 전부 난투다 — hp가 유일한 목숨이라는 헤더의 스톨 안전성 논거가
+    // 실제로 성립한다(난투 피해 ≥ 1이고 회복 수단이 없으므로 유한 시간에 반드시 풀린다)
+    const hurt = eventsOf(evs, 'allyDamaged');
+    expect(hurt.length).toBeGreaterThan(0);
+    for (const h of hurt) expect(h.amount).toBe(30);
   });
 });
 
@@ -433,24 +495,27 @@ describe('수명 (규칙 3)', () => {
 describe('봉쇄 — 충돌 없이 발을 묶는다 (규칙 5)', () => {
   it('근접 아군이 적의 전진을 멈춘다', () => {
     const sim = allySim({ enemy: { speed: 1 } });
-    train(sim);
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    runTicks(sim, 200); // 두 유닛이 마주쳐 교전에 들어가고도 남는 시간
+    runTicks(sim, 250); // 적이 집결 지점까지 걸어온다 (실측 206틱에 봉쇄)
     const e = sim.state.enemies[0]!;
-    expect(e.blockerAllyId).toBeGreaterThanOrEqual(0);
+    expect(e.blockerAllyId).toBe(sim.state.allies[0]!.id);
     const stuckAt = e.dist;
     runTicks(sim, 60);
     expect(sim.state.enemies[0]!.dist).toBe(stuckAt); // 2초가 지나도 그 자리
   });
 
-  it('아군이 사라지면 봉쇄가 풀리고 적이 다시 전진한다', () => {
-    const sim = allySim({ enemy: { speed: 1 }, ally: { clubber: { lifeTicks: 240 } } });
-    train(sim);
+  it('아군이 쓰러지면 봉쇄가 풀리고 적이 다시 전진한다', () => {
+    const sim = allySim({
+      enemy: { speed: 1, brawl: { dmg: 30, cooldownTicks: 15 } },
+      ally: { clubber: { hp: 60 } },
+    });
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    runTicks(sim, 200);
+    runTicks(sim, 210);
     expect(sim.state.enemies[0]!.blockerAllyId).toBeGreaterThanOrEqual(0);
     const stuckAt = sim.state.enemies[0]!.dist;
-    runTicks(sim, 120); // 수명 만료
+    runTicks(sim, 40); // 난투 두 대면 hp 60이 바닥난다
     expect(sim.state.allies).toHaveLength(0);
     expect(sim.state.enemies[0]!.blockerAllyId).toBe(-1);
     expect(sim.state.enemies[0]!.dist).toBeGreaterThan(stuckAt);
@@ -461,23 +526,28 @@ describe('봉쇄 — 충돌 없이 발을 묶는다 (규칙 5)', () => {
       enemy: { speed: 1 },
       ally: { slinger: { blocks: false, range: 3, dmg: 1 } },
     });
-    train(sim, 'slinger');
+    expect(train(sim, 'slinger')).toBe(true);
+    expect(order(sim, 2, 2)).toBe(true); // 적 쪽으로 마중 나가면서 쏜다
     sim.applyCommand({ type: 'callWave' });
     const evs = runTicks(sim, 200);
-    expect(eventsOf(evs, 'allyAttacked').length).toBeGreaterThan(0);
+    const hits = eventsOf(evs, 'allyAttacked');
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0]!.ranged).toBe(true);
+    // 타격 위치가 서로 다르다 = 쏘는 동안에도 걸었다 (근접형이면 첫 타격에서 멈춘다)
+    expect(new Set(hits.map((h) => r3(h.x))).size).toBeGreaterThan(1);
     const e = sim.state.enemies[0]!;
     expect(e.blockerAllyId).toBe(-1);
     const d0 = e.dist;
     runTicks(sim, 30);
-    expect(sim.state.enemies[0]!.dist).toBeGreaterThan(d0); // 계속 전진한다
+    expect(sim.state.enemies[0]!.dist).toBeGreaterThan(d0); // 적도 계속 전진한다
   });
 
   it('공중 적은 봉쇄되지 않는다 (근접 아군은 아예 조준도 못 한다)', () => {
     const sim = allySim({ enemy: { speed: 1, flying: true } });
-    train(sim);
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    runTicks(sim, 250);
-    // 공중 레인은 스폰→기지 직선이라 경로 위를 그대로 지난다 — 그래도 잡히지 않아야 한다
+    runTicks(sim, 240); // 공중 레인은 스폰→기지 직선이라 이 틱에 아직 판 위에 있다
+    expect(sim.state.enemies.length).toBeGreaterThan(0);
     for (const e of sim.state.enemies) expect(e.blockerAllyId).toBe(-1);
     expect(sim.state.allies[0]!.targetId).toBe(-1);
   });
@@ -492,9 +562,9 @@ describe('봉쇄 — 충돌 없이 발을 묶는다 (규칙 5)', () => {
     // hp를 크게 준다 — 정원만큼 붙잡으면 그만큼 난투를 겹쳐 맞아 기본 체력으로는
     // 관측 전에 쓰러진다(그 자체가 규칙 5-b의 대가이고, 아래 별도 항목으로 잠근다)
     const sim = allySim({ enemy: { speed: 1 }, count: over, ally: { clubber: { hp: 1_000_000 } } });
-    train(sim);
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    runTicks(sim, 200);
+    runTicks(sim, 260);
     const id = sim.state.allies[0]!.id;
     const held = sim.state.enemies.filter((e) => e.blockerAllyId === id).length;
     expect(held).toBe(ALLY_BLOCK_CAPACITY);
@@ -509,10 +579,10 @@ describe('봉쇄 — 충돌 없이 발을 묶는다 (규칙 5)', () => {
    */
   it('아군 둘은 서로 다른 적을 맡는다 (겹쳐 잡지 않는다)', () => {
     const sim = allySim({ enemy: { speed: 1 }, count: 4, ally: { clubber: { hp: 1_000_000 } } });
-    train(sim);
-    train(sim);
+    expect(train(sim)).toBe(true);
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    runTicks(sim, 200);
+    runTicks(sim, 260);
     const ids = sim.state.allies.map((a) => a.id);
     expect(ids).toHaveLength(2);
     const held = ids.map((id) => sim.state.enemies.filter((e) => e.blockerAllyId === id).length);
@@ -530,25 +600,174 @@ describe('봉쇄 — 충돌 없이 발을 묶는다 (규칙 5)', () => {
   it('많이 붙잡을수록 난투를 겹쳐 맞아 빨리 쓰러진다', () => {
     const hpAfter = (count: number): number => {
       const sim = allySim({ enemy: { speed: 1 }, count, ally: { clubber: { hp: 1_000_000 } } });
-      train(sim);
+      expect(train(sim)).toBe(true);
       sim.applyCommand({ type: 'callWave' });
-      runTicks(sim, 400);
+      runTicks(sim, 500);
       return sim.state.allies[0]!.hp;
     };
-    // 정원(3)만큼 붙으면 한 마리일 때보다 확실히 더 깎여 있다
+    // 정원(3)만큼 붙으면 한 마리일 때보다 확실히 더 깎여 있다 (실측 20 대 60)
     expect(1_000_000 - hpAfter(ALLY_BLOCK_CAPACITY)).toBeGreaterThan(1_000_000 - hpAfter(1));
   });
 
-  it('여럿이 붙어도 반격 대상은 가장 낮은 id 하나뿐이다', () => {
+  /**
+   * 규칙 5) 반격은 **가장 낮은 id 하나**만 받는다.
+   * 8단계에는 대기 줄이 "누가 앞이냐"를 정해 줘서 이 성질이 저절로 드러났다. 자유 이동에서는
+   * 둘을 **같은 칸에 세워야** 같은 적에 동시에 닿는 상황이 만들어지고, 그때 비로소
+   * pickOrder(=아군 id 오름차순)가 답을 정한다. 이게 흔들리면 아군을 여럿 붙일수록
+   * 손해가 되어(전원 반격) 정원이라는 손잡이 자체가 무의미해진다.
+   */
+  it('둘이 같은 칸에 서면 낮은 id가 붙잡고, 반격도 그 하나만 받는다', () => {
     const sim = allySim({ enemy: { speed: 1 } });
-    train(sim);
-    train(sim);
+    expect(train(sim)).toBe(true);
+    expect(train(sim)).toBe(true);
+    expect(order(sim, 6, 2)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    runTicks(sim, 220);
+    const evs = runTicks(sim, 260);
     const e = sim.state.enemies[0]!;
-    expect(e.blockerAllyId).toBeGreaterThanOrEqual(0);
     const ids = sim.state.allies.map((a) => a.id).sort((p, q) => p - q);
+    expect(ids).toHaveLength(2);
     expect(e.blockerAllyId).toBe(ids[0]);
+    const hurt = eventsOf(evs, 'allyDamaged');
+    expect(hurt.length).toBeGreaterThan(0);
+    expect(new Set(hurt.map((h) => h.allyId))).toEqual(new Set([ids[0]]));
+  });
+});
+
+// ---------------------------------------------------------------------------
+/**
+ * 규칙 5-c) **스치는 타격** — 9단계 신설. **이번 변경에서 가장 중요한 묶음이다.**
+ *
+ * 8단계까지 적이 아군을 때리는 경로는 봉쇄 반격 하나뿐이었고, 봉쇄는 근접형(blocks:true)만
+ * 건다. 즉 원거리형 무릿매는 **어떤 적도 때릴 수 없는 유닛**이었고, 20초 수명이 그 사실을
+ * 가리고 있었다. 영구화가 그 뚜껑을 열었다 — 규칙 5-c가 없으면 무릿매는 골드로 사는
+ * **불멸의 포탑**이 되고, 정원만큼 쌓이는 순간 게임이 끝난다.
+ *
+ * 그래서 이 묶음은 넷을 함께 잠근다. 하나만 빠져도 규칙이 조용히 반대 방향으로 샌다:
+ *  · 맞는다 (없으면 불멸)                       · 죽는다 (맞기만 하고 안 죽으면 같은 얘기다)
+ *  · 비켜 세우면 안 맞는다 (안 그러면 위치가 판단이 아니게 된다)
+ *  · 봉쇄가 있으면 안 켜진다 (겹치면 한 틱에 두 대 → 근접형이 조용히 두 배로 아파진다)
+ *  · 적을 멈추지 않는다 (멈추면 그건 탐색이고, 아군 하나로 웨이브를 낚아 세울 수 있다)
+ */
+describe('스치는 타격 — 봉쇄가 없어도 코앞의 아군은 맞는다 (규칙 5-c)', () => {
+  it('원거리 아군도 맞는다 — 이 규칙이 없으면 무릿매는 불멸이다', () => {
+    const sim = allySim({
+      enemy: { speed: 1, cost: 20 },
+      ally: { slinger: { blocks: false, range: 3, dmg: 1 } },
+    });
+    expect(train(sim, 'slinger')).toBe(true);
+    expect(order(sim, 5, 2)).toBe(true); // 길 한복판에 세운다
+    sim.applyCommand({ type: 'callWave' });
+    const hurt: AllyDamagedEvent[] = [];
+    let everBlocked = false;
+    for (let t = 0; t < 400; t++) {
+      sim.tick();
+      hurt.push(...eventsOf(sim.drainEvents(), 'allyDamaged'));
+      if (sim.state.enemies.some((e) => e.blockerAllyId >= 0)) everBlocked = true;
+    }
+    // 아무도 봉쇄하지 않았는데 맞았다 = 맞은 경로가 반격이 아니라 스치는 타격이다
+    expect(everBlocked).toBe(false);
+    expect(hurt.length).toBeGreaterThan(0);
+    for (const h of hurt) expect(h.defId).toBe('slinger');
+    expect(hurt[0]!.amount).toBe(enemyBrawlDmgFor(20)); // 난투와 같은 유도값을 쓴다
+    expect(hurt[0]!.attackerDefId).toBe('raptor');
+    const a = sim.state.allies[0]!;
+    expect(a.hp).toBeLessThan(a.maxHp);
+  });
+
+  it('무릿매도 죽는다 (불멸이 실제로 없어졌다)', () => {
+    const sim = allySim({
+      enemy: { speed: 1, brawl: { dmg: 40, cooldownTicks: 30 } },
+      count: 2,
+      ally: { slinger: { blocks: false, range: 3, dmg: 1 } },
+    });
+    expect(train(sim, 'slinger')).toBe(true);
+    expect(order(sim, 4, 2)).toBe(true);
+    sim.applyCommand({ type: 'callWave' });
+    const evs = runTicks(sim, 600);
+    // 지나가는 적에게 세 대를 스쳐 맞고 쓰러진다 (hp 100, 40씩)
+    expect(eventsOf(evs, 'allyDamaged').length).toBeGreaterThanOrEqual(3);
+    expect(eventsOf(evs, 'allyDied')).toHaveLength(1);
+    expect(sim.state.allies).toHaveLength(0);
+  });
+
+  /**
+   * **위치가 처음으로 판단이 된다.** 8단계 아군은 어디에 설지 고를 수 없었고(줄을 섰다),
+   * 지금은 고를 수 있다. 길에 세우면 맞고 비켜 세우면 안 맞는다는 이 대비가
+   * 자유 이동이 산 것의 값을 실제로 만든다 — 없으면 "아무 데나 세워도 같다"가 된다.
+   */
+  it('길에서 비켜 세우면 스치지 않는다', () => {
+    const hitsAt = (cellZ: number): number => {
+      const sim = allySim({
+        enemy: { speed: 1, cost: 20 },
+        ally: { slinger: { blocks: false, range: 3, dmg: 1 } },
+      });
+      expect(train(sim, 'slinger')).toBe(true);
+      expect(order(sim, 5, cellZ)).toBe(true);
+      sim.applyCommand({ type: 'callWave' });
+      return eventsOf(runTicks(sim, 400), 'allyDamaged').length;
+    };
+    expect(hitsAt(2)).toBeGreaterThan(0); // 경로 위 (거리 0)
+    // z=0은 경로(z=2)에서 2타일 — 이 실험이 성립하는 전제가 그 2타일이 팔 길이 밖이라는 것이다.
+    // 사거리 3짜리 무릿매라 그 자리에서도 **쏘기는 그대로 쏜다**: 안전한 자리가 실제로 존재한다
+    expect(BRAWL_BRUSH_RANGE).toBeLessThan(2);
+    expect(hitsAt(0)).toBe(0);
+  });
+
+  it('봉쇄자가 있으면 스치는 타격은 켜지지 않는다 (한 틱에 두 대는 없다)', () => {
+    const sim = allySim({
+      enemy: { speed: 1, cost: 20 },
+      ally: {
+        clubber: { hp: 100_000 }, // 관측 창이 닫히지 않게 오래 버티게 한다
+        slinger: { blocks: false, range: 3, dmg: 1 },
+      },
+    });
+    expect(train(sim, 'clubber')).toBe(true);
+    expect(train(sim, 'slinger')).toBe(true);
+    expect(order(sim, 5, 2)).toBe(true); // 둘을 **같은 칸**에 세운다 (무릿매도 팔 길이 안)
+    sim.applyCommand({ type: 'callWave' });
+    const hurt: AllyDamagedEvent[] = [];
+    let maxPerTick = 0;
+    for (let t = 0; t < 400; t++) {
+      sim.tick();
+      const h = eventsOf(sim.drainEvents(), 'allyDamaged');
+      maxPerTick = Math.max(maxPerTick, h.length);
+      hurt.push(...h);
+    }
+    expect(hurt.length).toBeGreaterThan(0);
+    // 맞은 것은 봉쇄자뿐 — 무릿매는 코앞에 서 있는데도 한 대도 안 맞았다
+    expect(new Set(hurt.map((h) => h.defId))).toEqual(new Set(['clubber']));
+    expect(sim.state.allies.find((a) => a.defId === 'slinger')!.hp).toBe(100);
+    // 적 하나가 한 틱에 두 번 때리지 않는다 (반격과 스치기가 겹치지 않는다)
+    expect(maxPerTick).toBe(1);
+  });
+
+  it('적은 스치는 타격 때문에 멈추지 않는다 (탐색이 아니다)', () => {
+    const sim = allySim({
+      enemy: { speed: 1, cost: 20 },
+      ally: { slinger: { blocks: false, range: 3, dmg: 1 } },
+    });
+    expect(train(sim, 'slinger')).toBe(true);
+    expect(order(sim, 4, 2)).toBe(true);
+    sim.applyCommand({ type: 'callWave' });
+    let prev = 0;
+    let brushTicks = 0;
+    for (let t = 0; t < 300; t++) {
+      sim.tick();
+      const hurt = eventsOf(sim.drainEvents(), 'allyDamaged');
+      const e = sim.state.enemies[0];
+      if (!e) {
+        prev = 0;
+        continue;
+      }
+      if (hurt.length > 0) {
+        brushTicks++;
+        // 때린 그 틱에도 적은 걸었고, 방향도 안 바꿨다(전진 = dist 증가)
+        expect(e.blockerAllyId).toBe(-1);
+        expect(e.dist).toBeGreaterThan(prev);
+      }
+      prev = e.dist;
+    }
+    expect(brushTicks).toBeGreaterThanOrEqual(2); // 지나가며 실측 2대
   });
 });
 
@@ -556,9 +775,9 @@ describe('봉쇄 — 충돌 없이 발을 묶는다 (규칙 5)', () => {
 describe('전투 (규칙 5·6)', () => {
   it('아군이 적을 때리고 enemyDamaged의 출처가 아군 종이다', () => {
     const sim = allySim({ enemy: { speed: 1 } });
-    train(sim);
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    const evs = runTicks(sim, 220);
+    const evs = runTicks(sim, 300);
     const hits = eventsOf(evs, 'allyAttacked');
     expect(hits.length).toBeGreaterThan(0);
     expect(hits[0]!.ranged).toBe(false);
@@ -568,9 +787,9 @@ describe('전투 (규칙 5·6)', () => {
 
   it('발이 묶인 적은 아군을 반격한다 (난투)', () => {
     const sim = allySim({ enemy: { speed: 1, cost: 20 } });
-    train(sim);
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    const evs = runTicks(sim, 260);
+    const evs = runTicks(sim, 300);
     const hurt = eventsOf(evs, 'allyDamaged');
     expect(hurt.length).toBeGreaterThan(0);
     expect(hurt[0]!.amount).toBe(enemyBrawlDmgFor(20));
@@ -580,23 +799,24 @@ describe('전투 (규칙 5·6)', () => {
 
   it('EnemyDef.brawl이 있으면 유도값 대신 그 수치를 쓴다', () => {
     const sim = allySim({ enemy: { speed: 1, brawl: { dmg: 7, cooldownTicks: 30 } } });
-    train(sim);
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    const hurt = eventsOf(runTicks(sim, 260), 'allyDamaged');
+    const hurt = eventsOf(runTicks(sim, 300), 'allyDamaged');
     expect(hurt.length).toBeGreaterThan(0);
     for (const h of hurt) expect(h.amount).toBe(7);
   });
 
-  it('아군은 죽을 수 있다 (allyDied → 회수 → 상한 복구)', () => {
+  it('아군은 죽을 수 있다 (allyDied → 회수)', () => {
     const sim = allySim({
       enemy: { speed: 1, brawl: { dmg: 500, cooldownTicks: 10 } },
       ally: { clubber: { hp: 60 } },
     });
-    train(sim);
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
     const evs = runTicks(sim, 300);
-    expect(eventsOf(evs, 'allyDied')).toHaveLength(1);
-    expect(eventsOf(evs, 'allyRetired')).toHaveLength(0);
+    const died = eventsOf(evs, 'allyDied');
+    expect(died).toHaveLength(1);
+    expect(died[0]!.defId).toBe('clubber');
     expect(sim.state.allies).toHaveLength(0);
   });
 
@@ -605,9 +825,9 @@ describe('전투 (규칙 5·6)', () => {
       enemy: { speed: 1, brawl: { dmg: 10, cooldownTicks: 30 } },
       ally: { clubber: { armor: 4 } },
     });
-    train(sim);
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    const hurt = eventsOf(runTicks(sim, 260), 'allyDamaged');
+    const hurt = eventsOf(runTicks(sim, 300), 'allyDamaged');
     expect(hurt.length).toBeGreaterThan(0);
     for (const h of hurt) expect(h.amount).toBe(6);
   });
@@ -638,11 +858,13 @@ describe('전투 (규칙 5·6)', () => {
       }),
     );
     place(sim, 5, 0);
-    train(sim);
-    sim.applyCommand({ type: 'callWave' });
-    // 스턴 때문에 적이 전진하지 못하므로 아군이 걸어와 붙는다
+    expect(train(sim)).toBe(true);
+    // 적이 스턴으로 스폰 근처에 굳어 있으므로 **이쪽이 걸어가야** 붙는다.
+    // (8단계에는 아군이 저절로 역주행해서 이 명령이 필요 없었다)
+    expect(order(sim, 1, 2)).toBe(true);
     const evs = runTicks(sim, 400);
-    expect(eventsOf(evs, 'allyDamaged')).toHaveLength(0);
+    expect(sim.state.enemies[0]!.blockerAllyId).toBe(sim.state.allies[0]!.id); // 붙잡긴 했다
+    expect(eventsOf(evs, 'allyDamaged')).toHaveLength(0); // 그런데 한 대도 못 친다
   });
 });
 
@@ -667,18 +889,34 @@ describe('봉쇄된 적은 타워를 때리지 않는다 (siege.ts 규칙 1-b)',
   /**
    * 아군을 낼지 말지만 다른 통제 실험.
    * total = 타워가 받은 총 피해, whileBlocked = **봉쇄가 서 있던 틱에** 받은 피해,
-   * blockedTicks = 봉쇄가 유지된 틱 수.
+   * beforeBlock = 봉쇄가 서기 **전에** 받은 피해, blockedTicks = 봉쇄가 유지된 틱 수.
+   *
+   * 아군은 타워 바로 앞 경로 칸으로 보낸다. 9단계에는 이 한 줄이 실험의 절반이다 —
+   * 아군은 스스로 걷지 않으므로(규칙 1) 명령이 없으면 마을 앞에 서서 아무것도 안 한다.
+   * 그리고 그 칸을 고르는 것이 **beforeBlock > 0**을 만든다: 적이 먼저 타워를 때리기
+   * 시작하고 그 뒤에 봉쇄가 서므로, whileBlocked == 0이 "사거리 밖이라 못 때린 것"이
+   * 아니라 **붙잡혀서 못 때린 것**임이 한 판 안에서 증명된다.
    */
   function towerDamageWith(
     useAlly: boolean,
     towerX: number,
-  ): { total: number; whileBlocked: number; blockedTicks: number; destroyTick: number } {
+  ): {
+    total: number;
+    whileBlocked: number;
+    beforeBlock: number;
+    blockedTicks: number;
+    destroyTick: number;
+  } {
     const sim = allySim({ enemy: { speed: 0.2, towerAttack: RAID, cost: 20 } });
     place(sim, towerX, 1);
-    if (useAlly) expect(train(sim)).toBe(true);
+    if (useAlly) {
+      expect(train(sim)).toBe(true);
+      expect(order(sim, towerX, 2)).toBe(true);
+    }
     sim.applyCommand({ type: 'callWave' });
     let total = 0;
     let whileBlocked = 0;
+    let beforeBlock = 0;
     let blockedTicks = 0;
     let destroyTick = -1;
     for (let i = 0; i < 2400; i++) {
@@ -694,15 +932,16 @@ describe('봉쇄된 적은 타워를 때리지 않는다 (siege.ts 규칙 1-b)',
       if (sim.state.enemies.some((e) => e.blockerAllyId >= 0)) {
         blockedTicks++;
         whileBlocked += tickDmg;
-      }
+      } else if (blockedTicks === 0) beforeBlock += tickDmg;
     }
-    return { total, whileBlocked, blockedTicks, destroyTick };
+    return { total, whileBlocked, beforeBlock, blockedTicks, destroyTick };
   }
 
   it('봉쇄가 서 있는 동안 타워는 한 대도 맞지 않는다', () => {
     const guarded = towerDamageWith(true, 5);
     expect(guarded.blockedTicks).toBeGreaterThan(30); // 봉쇄가 실제로 성립했다
-    expect(guarded.whileBlocked).toBe(0); // 그동안 타워는 정확히 무사하다
+    expect(guarded.beforeBlock).toBeGreaterThan(0); // 그 전까지는 때리고 있었다
+    expect(guarded.whileBlocked).toBe(0); // 붙잡힌 뒤로는 정확히 무사하다
   });
 
   /**
@@ -715,7 +954,7 @@ describe('봉쇄된 적은 타워를 때리지 않는다 (siege.ts 규칙 1-b)',
     const guarded = towerDamageWith(true, 5);
     expect(alone.destroyTick).toBeGreaterThan(0); // 통제군은 실제로 타워를 부순다
     expect(guarded.destroyTick).toBeGreaterThan(alone.destroyTick);
-    // 목 아군(hp 100) 하나가 난투(11/1초)에 버티는 시간만큼이 그대로 이득이다
+    // 목 아군(hp 100) 하나가 난투(11/1초)에 버티는 시간만큼이 그대로 이득이다 (실측 +262틱)
     expect(guarded.destroyTick - alone.destroyTick).toBeGreaterThan(200);
   });
 
@@ -731,36 +970,51 @@ describe('봉쇄된 적은 타워를 때리지 않는다 (siege.ts 규칙 1-b)',
   });
 
   /**
-   * 출격 한계선(규칙 2)의 대가를 명시적으로 잠근다.
-   * 경로 초입에 지은 타워는 아군이 **닿지 못하는** 곳에서 두들겨 맞는다.
-   * 이건 버그가 아니라 규칙 2가 사려는 것의 뒷면이다 — 아군은 마을 앞을 지키는 전력이지
-   * 맵 전체의 소방수가 아니고, 그래야 "타워를 어디에 짓는가"가 계속 의미를 갖는다.
+   * **사용자 재정의 ④의 뒷면 — 이 항목은 8단계에서 부호가 뒤집혔다.**
+   * 8단계에는 여기에 "출격 한계선 밖(경로 초입)의 타워는 아군이 구하지 못한다"가 있었고,
+   * 그것이 한계선이 사려던 것의 대가였다(아군은 마을 앞 전력이지 맵 전체의 소방수가 아니다).
+   * 한계선이 사용자 지시로 없어졌으므로 그 명제도 **반대가 되어야 맞다**: 경로 초입,
+   * 즉 적 스폰 코앞의 타워도 부족원이 걸어가 구한다. 반경 제한이 어떤 형태로든 되살아나면
+   * (표식·비용·경로 길이 어느 쪽이든) 이 항목이 가장 먼저 빨개진다.
    */
-  it('출격 한계선 밖(경로 초입)의 타워는 아군이 구하지 못한다', () => {
+  it('경로 초입의 타워도 아군이 구한다 (한계선이 없어졌다)', () => {
     const alone = towerDamageWith(false, 1);
     const guarded = towerDamageWith(true, 1);
-    expect(alone.total).toBeGreaterThan(0);
-    expect(guarded.total).toBe(alone.total); // 아군이 있으나 없으나 똑같이 맞는다
+    expect(alone.destroyTick).toBeGreaterThan(0);
+    // 마을 앞(x 7.6)에서 스폰 코앞(x 1)까지 6.6타일을 걸어가 붙잡는다
+    expect(guarded.blockedTicks).toBeGreaterThan(30);
+    expect(guarded.whileBlocked).toBe(0);
+    expect(guarded.destroyTick - alone.destroyTick).toBeGreaterThan(200); // 실측 +264틱
   });
 
   it('봉쇄 중에는 towerTargetId가 풀린다', () => {
-    const sim = allySim({ enemy: { speed: 1, towerAttack: RAID, cost: 20 } });
-    place(sim, 4, 1);
-    train(sim);
+    const sim = allySim({ enemy: { speed: 0.2, towerAttack: RAID, cost: 20 } });
+    place(sim, 5, 1);
+    expect(train(sim)).toBe(true);
+    expect(order(sim, 5, 2)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    runTicks(sim, 220);
-    const e = sim.state.enemies[0]!;
-    expect(e.blockerAllyId).toBeGreaterThanOrEqual(0);
-    expect(e.towerTargetId).toBe(-1);
+    let blocked: EnemyState | null = null;
+    for (let t = 0; t < 1200 && !blocked; t++) {
+      sim.tick();
+      sim.drainEvents();
+      const e = sim.state.enemies[0];
+      if (e && e.blockerAllyId >= 0) blocked = e;
+    }
+    expect(blocked).not.toBeNull();
+    expect(blocked!.towerTargetId).toBe(-1);
+    // 붙잡힌 자리가 타워 사거리 **안**이다 — 못 때리는 이유가 거리가 아니라 봉쇄임을
+    // 이 한 줄이 못 박는다 (실측 거리 1.414 < 1.6)
+    expect(Math.hypot(blocked!.x - 5, blocked!.z - 1)).toBeLessThan(RAID.range);
   });
 });
 
 // ---------------------------------------------------------------------------
 describe('해시 반영', () => {
-  it('아군 상태가 hash()에 들어간다 (체력·수명·타깃 각각)', () => {
+  it('아군 상태가 hash()에 들어간다 (체력·걸은 거리·목표·타깃 각각)', () => {
     const mk = (): BattleSim => {
-      const s = allySim();
+      const s = allySim({ delay: NO_ENEMIES });
       expect(s.applyCommand({ type: 'trainAlly', defId: 'clubber' })).toBe(true);
+      expect(order(s, 3, 2)).toBe(true);
       runTicks(s, 30);
       return s;
     };
@@ -768,13 +1022,23 @@ describe('해시 반영', () => {
     const b = mk();
     expect(a.hash()).toBe(b.hash());
 
-    const mutate = (fn: (x: { hp: number; lifeLeft: number; targetId: number }) => void): number => {
+    /*
+     * 9단계에 흔들 항목이 바뀌었다: lifeLeft가 사라진 자리에 walked와 tgtX/tgtZ가 들어왔다.
+     * 셋 다 각각 다른 발산을 잡는다 —
+     *  · walked : 도착해 멈춘 뒤에도 남는 유일한 값(위치만으로는 구별되지 않는 이력)
+     *  · tgtX/Z : 명령만 바꾸고 아직 한 걸음도 안 걸은 틱은 x/z가 완전히 같다
+     */
+    const mutate = (
+      fn: (x: { hp: number; walked: number; tgtX: number; tgtZ: number; targetId: number }) => void,
+    ): number => {
       const s = mk();
-      fn(s.state.allies[0] as unknown as { hp: number; lifeLeft: number; targetId: number });
+      fn(s.state.allies[0] as AllyState);
       return s.hash();
     };
     expect(mutate((x) => (x.hp -= 1))).not.toBe(a.hash());
-    expect(mutate((x) => (x.lifeLeft -= 1))).not.toBe(a.hash());
+    expect(mutate((x) => (x.walked -= 0.5))).not.toBe(a.hash());
+    expect(mutate((x) => (x.tgtX += 1))).not.toBe(a.hash());
+    expect(mutate((x) => (x.tgtZ += 1))).not.toBe(a.hash());
     expect(mutate((x) => (x.targetId = 99))).not.toBe(a.hash());
   });
 
@@ -791,6 +1055,8 @@ describe('해시 반영', () => {
 // ---------------------------------------------------------------------------
 /**
  * 급소 열기 🟫🔓 (`AllyDef.sunder`, docs/counter-plan.md 단계 3).
+ * (9단계 전에는 이 묶음이 "규칙 5-c"로 불렸다. 그 번호는 이제 **스치는 타격**이 쓴다 —
+ *  급소 열기는 규칙 번호가 아니라 필드 이름으로 부른다.)
  *
  * 이 규칙이 봉투 16번(아군의 한계 가치)에 얼마를 넣는지는 **스테이지1에서 거의 0**이다
  * (가죽을 가진 종이 boar 하나뿐이고, 640시드에서 가죽 축 전체가 +7판이다 —
@@ -798,16 +1064,16 @@ describe('해시 반영', () => {
  * 투여량이 0인 것과 규칙이 안 도는 것은 다르고, 단계 5·6이 가죽 종을 늘리면
  * 그때 이 테스트가 그 늘어난 값을 지킨다.
  */
-describe('급소 열기 — 파수꾼이 붙잡은 적은 가죽이 열린다 (규칙 5-c)', () => {
+describe('급소 열기 — 파수꾼이 붙잡은 적은 가죽이 열린다 (AllyDef.sunder)', () => {
   /** 상한 10(= round(100000 × 0.0001))인 적을 40으로 때린다 — 열렸는지가 한눈에 갈린다 */
   const hitsOf = (sunder: boolean, extra?: Partial<EnemyDef>): number[] => {
     const sim = allySim({
       enemy: { speed: 1, hp: 100_000, hide: 0.0001, ...extra },
       ally: { clubber: { dmg: 40, sunder } },
     });
-    train(sim);
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    const evs = runTicks(sim, 260);
+    const evs = runTicks(sim, 300);
     return eventsOf(evs, 'enemyDamaged')
       .filter((d) => d.source === 'clubber')
       .map((d) => d.amount);
@@ -837,20 +1103,30 @@ describe('급소 열기 — 파수꾼이 붙잡은 적은 가죽이 열린다 (�
 
   /**
    * 판정이 **매 틱의 봉쇄 상태**를 읽으므로 파수꾼이 사라지면 같은 틱에 가죽이 닫힌다.
-   * (`blockerAllyId`는 tickAllies가 매 틱 처음에 전부 지우고 다시 채운다)
+   * (`blockerAllyId`는 updateAllies가 매 틱 처음에 전부 지우고 다시 채운다)
    * 그래서 이 규칙은 새 상태를 하나도 안 들고, hash()에 더할 것도 없다.
+   *
+   * 9단계 전에는 파수꾼을 **수명으로** 퇴장시켰다. 이제 퇴장의 길이 죽음뿐이므로
+   * 체력을 낮춰 난투에 쓰러뜨리고, 그 뒤를 sunder 없는 아군이 잇는다.
    */
-  it('파수꾼이 사라지면 가죽이 다시 닫힌다', () => {
+  it('파수꾼이 쓰러지면 가죽이 다시 닫힌다', () => {
     const sim = allySim({
-      enemy: { speed: 1, hp: 100_000, hide: 0.0001 },
-      // 수명이 짧은 파수꾼 → 도중에 사라진다. 그 뒤를 타워가 아니라 다음 아군이 잇는다
-      ally: { clubber: { dmg: 40, sunder: true, lifeTicks: 240 }, guardian: { dmg: 40 } },
+      enemy: { speed: 1, hp: 100_000, hide: 0.0001, brawl: { dmg: 15, cooldownTicks: 30 } },
+      ally: { clubber: { dmg: 40, sunder: true, hp: 30 }, guardian: { dmg: 40 } },
     });
-    train(sim);
+    expect(train(sim)).toBe(true);
     sim.applyCommand({ type: 'callWave' });
-    runTicks(sim, 200);
-    expect(sim.state.enemies[0]!.blockerAllyId).toBeGreaterThanOrEqual(0);
-    train(sim, 'guardian'); // sunder가 없는 아군
+    const early = runTicks(sim, 400);
+    // 붙잡고 있는 동안에는 상한이 없었다 (대조군과 같은 값)
+    const opened = eventsOf(early, 'enemyDamaged')
+      .filter((d) => d.source === 'clubber')
+      .map((d) => d.amount);
+    expect(opened.length).toBeGreaterThan(0);
+    for (const a of opened) expect(a).toBe(40);
+    expect(eventsOf(early, 'allyDied')).toHaveLength(1);
+    expect(sim.state.allies).toHaveLength(0);
+
+    expect(train(sim, 'guardian')).toBe(true); // sunder가 없는 아군이 뒤를 잇는다
     const evs = runTicks(sim, 400);
     expect(sim.state.allies.every((a) => a.defId === 'guardian')).toBe(true);
     const late = eventsOf(evs, 'enemyDamaged')

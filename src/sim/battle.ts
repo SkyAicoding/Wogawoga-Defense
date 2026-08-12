@@ -1,7 +1,7 @@
 /**
  * createBattle — BattleSim 구현. 틱 순서:
  * 웨이브 스폰(+prep 수리) → **아군 교전/봉쇄(+적의 난투 반격)** → 적의 타워 공격(+저주)
- * → 부서진 타워 회수 → 적 이동/누수 → **아군 이동/수명** → 상태이상
+ * → 부서진 타워 회수 → 적 이동/누수 → **아군 이동** → 상태이상
  * → 버프 재계산(5틱마다) → 타워 조준/발사(침묵 감소) → **홈타운 조준/발사**
  * → 투사체 이동/명중 → 사망 처리(적·아군) → 승패 판정.
  *
@@ -141,6 +141,9 @@ class Battle implements BattleSim {
       towers: world.towers.items,
       projectiles: world.projectiles.items,
       allies: world.allies.items,
+      // 자리만 잡아 두는 값 — 진짜 Lv1 정원은 ctx 조립 직후 allyCapFor로 덮어쓴다.
+      // 갱신 지점이 **둘**이다: 생성(아래)과 레벨업(cmd 'upgradeBase'). 둘 중 하나라도
+      // 빠지면 HUD 부족 칩의 분모가 규칙과 갈라진다.
       allyCap: ALLY_MAX_ACTIVE,
       amberEarned: 0,
       endless: opts.endless,
@@ -157,6 +160,11 @@ class Battle implements BattleSim {
     };
     this.pathCells = rasterizePathCells(stage);
     this.scenery = sceneryCells(stage, this.pathCells);
+    // 정원은 마을 레벨의 함수라 **시작 시점에도** 표에서 읽어야 한다. 위 리터럴의
+    // ALLY_MAX_ACTIVE는 그저 형태를 맞추는 값이고, 진짜 Lv1 값은 여기서 들어온다
+    // (ctx가 조립되기 전에는 allyCapFor를 부를 수 없어 두 줄로 나뉜다).
+    // ⚠ 9단계 검증에서 이 줄이 없어 HUD가 Lv1에서 '0/6'을 띄웠다 — 커맨드는 2에서 거부하는데.
+    view.allyCap = allyCapFor(this.ctx);
     this.economy.fillHand(this.ctx);
   }
 
@@ -186,7 +194,7 @@ class Battle implements BattleSim {
       this.economy.recalcCosts(ctx); // 타워 수 감소 → 핸드 실비용 하락
       recomputeBuffs(ctx); // drum이 부서졌을 수 있다 — 5틱 주기를 기다리지 않는다
     }
-    // 4) 적 이동/누수 → 아군 이동/수명 (같은 스냅샷으로 양쪽을 움직인다)
+    // 4) 적 이동/누수 → 아군 이동 (같은 스냅샷으로 양쪽을 움직인다)
     this.moveEnemies();
     moveAllies(ctx);
     // 5) 상태이상 틱 + 힐 오라
@@ -316,8 +324,12 @@ class Battle implements BattleSim {
         return trainAlly(this.ctx, cmd.defId);
       case 'moveAlly':
         return moveAlly(this.ctx, cmd.allyId, cmd.cellX, cmd.cellZ);
-      case 'upgradeBase':
-        return upgradeBase(this.ctx);
+      case 'upgradeBase': {
+        if (!upgradeBase(this.ctx)) return false;
+        // 정원은 마을 레벨의 함수라 레벨이 오르는 **그 자리에서** 공개 상태도 따라가야 한다
+        this.ctx.view.allyCap = allyCapFor(this.ctx);
+        return true;
+      }
       case 'callWave': {
         // 이미 호출됨(카운트다운 0)이면 중복 호출 거부
         if (v.phase !== 'prep' || v.prepTicksLeft <= 0) return false;
@@ -457,8 +469,8 @@ class Battle implements BattleSim {
       h = mix(h, e.blockerAllyId);
       h = mix(h, e.brawlCdLeft);
     }
-    // 아군 부족원 — 위치/체력/수명/쿨다운/타깃 전부. 하나라도 빠지면
-    // "언제 누가 죽고 언제 돌아가는가"의 발산을 해시가 놓친다.
+    // 아군 부족원 — 위치/걸은 거리/목표/체력/쿨다운/타깃 전부. 하나라도 빠지면
+    // "언제 누가 어디서 죽는가"의 발산을 해시가 놓친다.
     // (walked는 x/z에서 유도되지만 **목표에 도착해 멈춘 뒤에도 값이 남는** 유일한 항목이라
     //  따로 넣는다 — 9단계 전에는 같은 역할을 경로 호장 dist가 했다. 목표 tgtX/tgtZ도 넣는다:
     //  명령만 바꾸고 아직 한 걸음도 안 걸은 틱을 x/z만으로는 구별할 수 없다)
