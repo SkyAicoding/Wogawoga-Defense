@@ -268,33 +268,36 @@ export function createBattleHud(): Screen<GameFacade> {
             h('span', { class: 'pill-ico', html: goldSvg }), goldNum),
           h('div', { class: 'pill pill--amber hud-item' },
             h('span', { class: 'pill-ico', html: amberSvg }), amberNum),
-          /*
-           * 부족 칩 — 나가 있는 인원 n/6 + **마을 패널로 가는 상시 입구**.
-           *
-           * 6단계에서 상시 출동 바를 걷어내면서 인원 표시까지 패널 안으로 들어갔다.
-           * 그 대가가 "탭 하나 더"가 아니라 **기능의 발견 가능성 0**이었다(8단계 검증):
-           * 기본 HUD에 아군의 존재를 알리는 요소가 하나도 없고, 유일한 입구인 판 위의
-           * 움막 한 칸에는 배지도 글로우도 없다. 웨이브 중 몇 명이 나가 있는지도
-           * 화면 어디에도 없었다.
-           *
-           * 이건 출동 바가 아니다 — 종도 가격도 없고 **아무도 출동시키지 않는다**.
-           * 바로 옆 타워 수 칩과 같은 종류(상태 표시)이고, 누르면 판 위의 움막을 탭한
-           * 것과 같은 경로로 마을을 고른다(api.selectBase). 그래서 "급할 때 첫 한 명"의
-           * 동선이 2탭으로 돌아온다 — 출동 버튼 자체는 여전히 패널 안에만 있다.
-           *
-           * ⚠ HP 줄이 사라지면서 **첫 줄 맨 오른쪽(호박 칩 뒤)** 으로 옮겨 왔다.
-           * 사용자가 "가장 오른쪽 동전 옆"이라 했고 그 자리면 골드·호박 어느 쪽으로
-           * 읽어도 옆이다. 옮기면서 **기능은 그대로다** — 여전히 button이고 여전히
-           * api.selectBase()를 부른다. 죽이면 마을 패널로 가는 상시 입구가 다시 0이 된다.
-           */
-          (allyPill = h('button', {
-            class: 'pill pill--ally hud-item',
-            attrs: { type: 'button', 'aria-label': t('battle.ally.pillHint'), title: t('battle.ally.pillHint') },
-            onClick: () => api(facade)?.selectBase?.(),
-          },
-            h('span', { class: 'pill-ico', html: ALLY_ICON_SVG.clubber }), allyPillNum) as HTMLButtonElement),
         ),
       );
+
+      /*
+       * 부족 칩 — 나가 있는 인원 n/6 + **마을 패널로 가는 상시 입구**.
+       *
+       * 6단계에서 상시 출동 바를 걷어내면서 인원 표시까지 패널 안으로 들어갔다.
+       * 그 대가가 "탭 하나 더"가 아니라 **기능의 발견 가능성 0**이었다(8단계 검증):
+       * 기본 HUD에 아군의 존재를 알리는 요소가 하나도 없고, 유일한 입구인 판 위의
+       * 움막 한 칸에는 배지도 글로우도 없다. 웨이브 중 몇 명이 나가 있는지도
+       * 화면 어디에도 없었다.
+       *
+       * 이건 출동 바가 아니다 — 종도 가격도 없고 **아무도 출동시키지 않는다**.
+       * 누르면 판 위의 움막을 탭한 것과 같은 경로로 마을을 고른다(api.selectBase).
+       * 그래서 "급할 때 첫 한 명"의 동선이 2탭으로 돌아온다 — 출동 버튼 자체는
+       * 여전히 패널 안에만 있다.
+       *
+       * ⚠ 자리 이력: HP 줄(2줄) → 첫 줄 맨 오른쪽 → **지금은 우측 토글 기둥의 맨 위**.
+       * 사용자 요청("맨 위에 인원수, x1, 자동 순서로 우측에 세로로"). 상태 표시라
+       * 토글 둘과 성격이 달라서 아래 간격을 두 배로 벌리고(.hud-side .pill--ally의
+       * margin-bottom) 알약 모양·한랭색을 유지해 사각 토글과 갈리게 뒀다.
+       * 옮겨도 **기능은 그대로다** — 여전히 button이고 여전히 api.selectBase()를
+       * 부른다. 죽이면 마을 패널로 가는 상시 입구가 다시 0이 된다.
+       */
+      allyPill = h('button', {
+        class: 'pill pill--ally hud-item',
+        attrs: { type: 'button', 'aria-label': t('battle.ally.pillHint'), title: t('battle.ally.pillHint') },
+        onClick: () => api(facade)?.selectBase?.(),
+      },
+        h('span', { class: 'pill-ico', html: ALLY_ICON_SVG.clubber }), allyPillNum) as HTMLButtonElement;
 
       // --- 우측 토글 -------------------------------------------------------
       speedBtn = h('button', {
@@ -314,7 +317,8 @@ export function createBattleHud(): Screen<GameFacade> {
           if (bb) bb.autoWave = !bb.autoWave;
         },
       });
-      const side = h('div', { class: 'hud-side' }, speedBtn, autoBtn);
+      // 순서 = 화면에 보이는 순서(위→아래): 인원수 · 배속 · 자동
+      const side = h('div', { class: 'hud-side' }, allyPill, speedBtn, autoBtn);
 
       // --- 배너 레이어 -----------------------------------------------------
       bannerHost = h('div', { class: 'banner-host' });
