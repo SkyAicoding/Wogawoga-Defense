@@ -773,18 +773,11 @@ export class FxRouter {
           audio.play('enemyDie');
           break;
         }
-        case 'allyRetired': {
-          // 죽은 게 아니라 **돌아간** 것 — 폭발이 아니라 위로 흩어지는 먼지 한 줌으로
-          // 구분한다. 소리를 주지 않는 이유도 같다(손실이 아니므로 경보가 아니다)
-          const w = s3.cellToWorld(ev.x, ev.z, this.v);
-          s3.particles.burst(w.x, 0.45, w.z, 0xd8c7a4, 5, 0.7, 0.05, 0.8, {
-            gravity: -0.8,
-            drag: 1.8,
-            upBias: 1,
-            sizeVar: 0.4,
-          });
-          break;
-        }
+        /*
+         * ── 'allyRetired' 연출은 삭제됐다 (9단계) ──────────────────────────
+         * 수명이 없어져 "돌아가는" 사건 자체가 없다. 부족원이 사라지는 길은 이제
+         * allyDied 하나뿐이고, 그쪽은 이미 자기 연출을 갖고 있다.
+         */
         case 'statusApplied': {
           const e = this.stage3d.enemies; // 히트 플래시로 대체 표시
           e.setHitFlash(ev.enemyId);

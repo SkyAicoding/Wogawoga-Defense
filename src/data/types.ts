@@ -260,7 +260,7 @@ export interface AllyDef {
   nameKey: string;
   descKey: string;
   hp: number;
-  /** 타일/초 — 경로를 **역주행**하는 속도 */
+  /** 타일/초 — 지정한 목표 지점으로 **직선 이동**하는 속도 */
   speed: number;
   /** 타격당 고정 피해 감소 */
   armor: number;
@@ -268,8 +268,6 @@ export interface AllyDef {
   radius: number;
   /** 기본 출동 비용 — 실비용은 balance.allyCostFor(base, 생존 수)가 올린다 */
   cost: number;
-  /** 수명 틱 (다 되면 마을로 돌아간다 = allyRetired). 영구 유닛은 존재하지 않는다 */
-  lifeTicks: number;
   dmg: number;
   cooldownTicks: number;
   /** 타격 사거리 (타일) */
@@ -317,12 +315,19 @@ export interface BaseLevelDef {
   /** 사거리 (타일) — 기지 셀 중심 ↔ 적 중심 */
   range: number;
   /**
-   * **아군 부족원 출격 한계선** (타일, 경로 호장 기준) — 기지에서 이만큼 앞까지만 나간다.
-   * 마을이 파는 네 번째 물건이다: 체력·공격력·사거리는 마을 자신을 키우지만
-   * 이 값은 **마을 밖으로 나가는 부족원**을 키운다 (src/sim/allies.ts 규칙 2).
-   * 왜 이 표에 있는지는 src/data/hometown.ts, 소비처는 src/sim/allies.ts.
+   * **부족원 정원** — 이 마을이 동시에 내보낼 수 있는 사람 수.
+   *
+   * 9단계까지 이 자리에는 출격 한계선(sortie)이 있었다. 사용자가 "반경 제한 없이 맵 어디든"
+   * 으로 재정의하면서 그 값이 팔 것이 없어졌고, 마을이 파는 네 번째 물건 자리를 정원이 받았다.
+   * 바꿔 끼운 것이지 없앤 것이 아니다 — 이유는 셋이다:
+   *  · **없앨 수 없다.** 한계선이 하던 억제(아군이 맵 전체를 덮지 못하게)를 무엇이든 대신해야
+   *    한다. 자리를 어디든 고를 수 있게 된 순간 **몇 명이냐**가 유일하게 남은 손잡이다.
+   *  · **마을 레벨이 계속 무언가를 판다.** 안 그러면 Lv4→5가 2,400골드에 +3 HP와 +0.4 사거리만
+   *    파는 죽은 칸이 된다.
+   *  · **말이 된다.** 마을이 커지면 사람이 많아진다 — 설명이 필요 없다.
+   * 소비처는 src/sim/hometown.ts allyCapFor(), 수치 근거는 src/data/hometown.ts.
    */
-  sortie: number;
+  allyCap: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -567,34 +572,38 @@ export interface EnemyState {
 }
 
 /**
- * 아군 유닛 상태. 경로 파라미터화는 적과 **완전히 동일**하고(dist 0 = 스폰, totalLength = 기지)
- * 아군만 dist가 감소한다 — 즉 같은 폴리라인을 거꾸로 걷는다.
+ * 아군 유닛 상태.
+ *
+ * **9단계에서 경로 구속을 걷어냈다** (사용자 재정의). 아군은 더 이상 폴리라인 위를 걷지 않고
+ * 판 위 아무 셀로나 직선으로 간다. 그래서 경로 4필드(dist·pathIndex·slot·holdDist)와
+ * 수명(lifeLeft)이 통째로 사라지고, 그 자리를 **목표 좌표 + 걸은 거리** 둘이 대신한다.
+ * 규칙 전문은 src/sim/allies.ts 헤더.
  */
 export interface AllyState {
   id: number;
   defId: AllyId;
   hp: number;
   maxHp: number;
-  /** 경로 진행 거리 (기지 = totalLength에서 출발해 감소) */
-  dist: number;
-  /** 어느 지상 경로로 나갔는가 (StageDef.paths 인덱스) */
-  pathIndex: number;
-  /**
-   * 같은 경로 위 대기 줄에서의 자리 (0 = 맨 앞).
-   * 유닛 충돌이 없어 한계선을 공유하면 전원이 한 점에 겹치므로, 슬롯만큼 뒤로 물려 세운다.
-   * 비어 있는 가장 작은 번호를 받는다 — 앞줄이 죽으면 다음 출동이 그 자리를 메운다.
-   */
-  slot: number;
-  /** 이 유닛이 더 나아갈 수 없는 하한 dist (출격 한계선 + 슬롯 간격 — allies.ts 규칙 2) */
-  holdDist: number;
   x: number;
   z: number;
   prevX: number;
   prevZ: number;
-  /** 진행 방향 라디안 (경로 진행 방향의 반대) */
+  /**
+   * 이동 명령의 목표 (연속 셀 좌표). 스폰 직후에는 홈타운 앞 집결 지점이고,
+   * 플레이어가 셀을 찍으면 그 셀 중심으로 바뀐다. 도착하면 x/z와 같아진다.
+   */
+  tgtX: number;
+  tgtZ: number;
+  /**
+   * 태어나서 지금까지 **걸은 총 거리** (타일). 렌더의 보행 위상이 이 값에서 나온다.
+   *
+   * 예전에는 경로 호장 `dist`가 그 일을 했는데(역주행이라 부호를 뒤집어 썼다), 자유 이동에는
+   * 단조 증가하는 진행량이 없다 — 앞뒤로 오가면 dist가 늘었다 줄었다 해서 다리가 얼거나
+   * 거꾸로 돈다. 걸은 거리는 방향과 무관하게 **언제나 증가**하므로 그 문제가 없다.
+   */
+  walked: number;
+  /** 바라보는 방향 라디안 = 실제 이동 방향 atan2(dz, dx) */
   heading: number;
-  /** 남은 수명 틱. 0이 되면 마을로 귀환(allyRetired) */
-  lifeLeft: number;
   /** 타격 쿨다운 잔여 틱 */
   attackCdLeft: number;
   /** 교전 중인 적 id (-1 = 없음). 렌더가 공격 모션에 쓴다 */
@@ -728,15 +737,28 @@ export type BattleCommand =
   | { type: 'clearScenery'; cellX: number; cellZ: number } // 골드로 나무/바위 치우기
   | {
       /**
-       * 마을에서 부족원 한 명을 출동시킨다 (골드 소모, 동시 상한 있음).
-       * pathIndex 생략 시 sim이 **결정론적으로** 고른다 — 기지에 가장 가까운 적이
-       * 있는 지상 경로, 동점/적 없음이면 0번 (src/sim/allies.ts 규칙 1).
-       * UI가 경로를 고르게 하지 않는 이유: 탭 하나로 즉시 나가야 하는 긴급 자원이라
-       * 선택지를 늘리면 반응 속도만 깎인다.
+       * 마을에서 부족원 한 명을 뽑는다 (골드 소모, 정원 상한 있음).
+       * 홈타운 **바로 앞** 집결 지점에 선다 — 어디로 보낼지는 moveAlly가 따로 정한다.
+       * (9단계까지 있던 pathIndex는 사라졌다: 아군이 더 이상 경로 위를 걷지 않는다.)
        */
       type: 'trainAlly';
       defId: AllyId;
-      pathIndex?: number;
+    }
+  | {
+      /**
+       * 부족원에게 갈 곳을 지정한다 — 찍은 셀까지 **직선으로** 걸어가고,
+       * 가는 길에 사거리에 든 적과 교전한다 (src/sim/allies.ts 규칙 2).
+       *
+       * allyId가 -1이면 **살아 있는 전원**에게 같은 목표를 준다. 정원이 6명이라
+       * 한 명씩 찍게 하면 급할 때 여섯 번을 눌러야 해서, 전원 이동이 기본 동선이다.
+       *
+       * 셀 범위 밖이거나 그런 아군이 없으면 false. **찍을 수 있는 칸에 제한은 없다** —
+       * 건설 불가 셀도, 경로 셀도, 적 스폰 지점도 지정할 수 있다(사용자 재정의).
+       */
+      type: 'moveAlly';
+      allyId: number;
+      cellX: number;
+      cellZ: number;
     }
   | {
       /**
@@ -913,16 +935,24 @@ export type SimEvent =
     }
   // --- 아군 부족원 (src/sim/allies.ts) ---------------------------------------
   | {
-      /** 마을에서 부족원이 출동했다 — 기지에서 스폰 */
+      /** 마을에서 부족원이 나왔다 — 홈타운 바로 앞 집결 지점에서 스폰 */
       type: 'allyTrained';
       allyId: number;
       defId: AllyId;
       /** 실제로 지불한 골드 */
       cost: number;
-      pathIndex: number;
-      /** 스폰 위치 (= 기지 셀) */
+      /** 스폰 위치 (= 홈타운 앞 집결 지점) */
       x: number;
       z: number;
+    }
+  | {
+      /** 부족원에게 갈 곳을 지정했다 — 목표 표식 연출용 */
+      type: 'allyOrdered';
+      /** 명령을 받은 인원 수 (전원 이동이면 2 이상일 수 있다) */
+      count: number;
+      /** 목표 셀 */
+      cellX: number;
+      cellZ: number;
     }
   | {
       /** 아군이 적을 때렸다 — 타격 연출/사운드. 적 피해 자체는 enemyDamaged가 따로 나간다 */
@@ -961,19 +991,12 @@ export type SimEvent =
       x: number;
       z: number;
     }
-  | {
-      /** 수명이 다해 마을로 돌아갔다 — 사망과 구분한다(연출/사운드가 달라야 한다) */
-      type: 'allyRetired';
-      allyId: number;
-      defId: AllyId;
-      x: number;
-      z: number;
-      /**
-       * 귀환 환급 골드 (balance.ALLY_RETIRE_REFUND × def.cost, 내림 없는 반올림).
-       * 쓰러진 아군(allyDied)에는 없다 — 살아 돌아온 사람만 삯을 되돌려준다.
-       */
-      refund: number;
-    }
+  /*
+   * ── allyRetired 는 삭제됐다 (9단계) ────────────────────────────────────────
+   * 수명이 사라져 "돌아가는" 사건 자체가 없다. 부족원이 사라지는 길은 이제 하나뿐이다:
+   * 맞아 죽는 것(allyDied). 귀환 환급(ALLY_RETIRE_REFUND)도 같이 없어졌다 —
+   * 돌아오지 않는 사람에게 삯을 돌려줄 수 없다.
+   */
   // --- 홈타운 (src/sim/hometown.ts) ------------------------------------------
   | {
       /**
@@ -1117,19 +1140,17 @@ export interface BattleSim {
   canUpgradeBase(): boolean;
   /** 현재 홈타운 사거리 (타일) — 선택 시 사거리 링 표시용 */
   baseRange(): number;
-  /** 현재 마을 레벨의 아군 출격 한계선 (타일) — 마을 패널 표기용 */
-  allySortieRange(): number;
   /**
-   * 지금 아군이 멈춰 서는 지점 (지상 경로마다 하나, 셀 연속 좌표).
-   * 한계선은 **경로 호장** 기준이라 기지 중심의 원이 아니다 — 화면 표식은 반드시
-   * sim이 실제로 쓰는 경로에서 뽑아야 그림과 규칙이 어긋나지 않는다.
+   * 지금 마을이 허용하는 부족원 정원 — 마을 패널 표기와 출동 버튼 비활성 판정이 같은 값을 쓴다.
+   * 9단계에 allySortieRange()/allySortiePoints()를 대신해 들어왔다: 아군이 판 위 아무 데나
+   * 갈 수 있게 되면서 "얼마나 멀리"가 팔 것이 없어졌고 "몇 명"이 그 자리를 받았다.
    */
-  allySortiePoints(): Vec2[];
+  allyCap(): number;
   /**
-   * 다음 레벨이 주는 최대 HP/공격력/사거리/출격 한계선 (최대 레벨이면 null).
+   * 다음 레벨이 주는 최대 HP/공격력/사거리/부족원 정원 (최대 레벨이면 null).
    * 비가역 결제라 "무엇을 사는가"가 확인 단계 **전에** 보여야 한다.
    */
-  baseNextStats(): { hpMax: number; dmg: number; range: number; sortie: number } | null;
+  baseNextStats(): { hpMax: number; dmg: number; range: number; allyCap: number } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1184,6 +1205,15 @@ export interface BattleUiApi {
    * "여기 있다"고 알리는 자리가 필요하다 (8단계 검증 지적). 선택 사항이다.
    */
   selectBase?(): void;
+  /**
+   * 부족원 이동 명령 모드를 켜고 끈다 (9단계). 켠 뒤 셀을 탭하면 살아 있는 전원이
+   * 그 칸으로 출발하고 모드가 꺼진다 — 카드 선택 → 셀 탭 → 배치와 **같은 상태 기계**다.
+   * 새 규약을 만들지 않는 이유: 플레이어가 이미 아는 동작 하나를 재사용하는 편이,
+   * 판 위의 작은 사람을 정확히 집게 하는 것보다 손에 붙는다.
+   */
+  setAllyOrderMode?(on: boolean): void;
+  /** 지금 이동 명령 모드인가 — HUD 버튼의 눌림 표시가 이 값을 읽는다 */
+  allyOrderMode?(): boolean;
   /** 홈타운 레벨업 요청 (최대 레벨/골드 부족이면 무시) */
   requestUpgradeBase(): void;
   /**

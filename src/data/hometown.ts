@@ -182,22 +182,21 @@
  * (17/40승 대 타워 몰빵 36/40). 즉 곡선의 뒤쪽은 함정이 아니라 **비상용 상한**이다 —
  * 무한 모드처럼 골드가 남아도는 판에서만 값이 선다.
  */
-import { ALLY_SORTIE_RANGE } from './balance';
 import type { BaseLevelDef } from './types';
 
 export const BASE_LEVELS: readonly BaseLevelDef[] = [
-  // Lv1 — 움막 하나. 8dps·2.0은 쏘는 타워 전부(최소 frost T1 2.4)보다 안쪽이다 (4단계와 동일).
-  // sortie도 시작값 그대로다 — 시작 상태는 모든 기준선 측정의 원점이라 건드리지 않는다
-  { cost: 0, hpMul: 1.0, dmg: 8, cooldownTicks: 30, range: 2.0, sortie: ALLY_SORTIE_RANGE },
-  // Lv2 — 22.5dps. 창움막 T1(24dps)과 맞먹지만 사거리는 여전히 문간(3.0).
-  // sortie +2.5 = 이 표에서 가장 큰 걸음이고 가장 싼 레벨이다 (위 (4))
-  { cost: 300, hpMul: 1.12, dmg: 18, cooldownTicks: 24, range: 3.0, sortie: 8.5 },
+  // Lv1 — 움막 하나. 8dps·2.0은 쏘는 타워 전부(최소 brazier T1)보다 안쪽이다 (4단계와 동일).
+  // 정원 2명: 시작 상태에서 부족은 **한 길목을 잠깐 막는** 크기다. 이 값이 곧 초반
+  // 방치 난이도의 하한이기도 하다 — 아무것도 안 하면 두 명이 전부다.
+  { cost: 0, hpMul: 1.0, dmg: 8, cooldownTicks: 30, range: 2.0, allyCap: 2 },
+  // Lv2 — 22.5dps. 창움막 T1(24dps)과 맞먹지만 사거리는 여전히 문간(3.0). 정원 +1
+  { cost: 300, hpMul: 1.12, dmg: 18, cooldownTicks: 24, range: 3.0, allyCap: 3 },
   // Lv3 — 51dps. 여기서 처음으로 후반 잡졸을 문 앞에서 실제로 죽이기 시작한다
-  { cost: 600, hpMul: 1.24, dmg: 34, cooldownTicks: 20, range: 3.6, sortie: 10.0 },
-  // Lv4 — 98.8dps / 4.2. 들판 타워보다 길지만 발리스타(5.5)에는 못 미친다
-  { cost: 1200, hpMul: 1.36, dmg: 56, cooldownTicks: 17, range: 4.2, sortie: 11.0 },
-  // Lv5 — 168dps(창움막 만렙 177과 맞먹음) / 4.6 / HP 1.48배 / 부족원은 12타일까지 나간다
-  { cost: 2400, hpMul: 1.48, dmg: 84, cooldownTicks: 15, range: 4.6, sortie: 12.0 },
+  { cost: 600, hpMul: 1.24, dmg: 34, cooldownTicks: 20, range: 3.6, allyCap: 4 },
+  // Lv4 — 98.8dps / 4.2. 들판 타워보다 길지만 발리스타에는 못 미친다
+  { cost: 1200, hpMul: 1.36, dmg: 56, cooldownTicks: 17, range: 4.2, allyCap: 5 },
+  // Lv5 — 168dps(창움막 만렙 177과 맞먹음) / 4.6 / HP 1.48배 / 부족원 정원 6명(절대 상한)
+  { cost: 2400, hpMul: 1.48, dmg: 84, cooldownTicks: 15, range: 4.6, allyCap: 6 },
 ];
 
 /** 최대 레벨 (1-base) — UI의 "Lv n/N" 표기와 sim의 상한 판정이 같은 출처를 쓴다 */

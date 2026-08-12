@@ -470,8 +470,10 @@ export class EnemyView {
       const sz = lerp(a.prevZ, a.z, alpha);
       cellToWorld(sx, sz, _pos);
       const step = Math.hypot(a.x - a.prevX, a.z - a.prevZ);
-      // -dist = 기지에서 나아간 거리 (적의 `dist - step*(1-alpha)`와 부호만 반대)
-      const travel = -a.dist + step * (1 - alpha);
+      // 9단계: 아군이 경로를 떠나면서 `-a.dist`(역주행 호장)가 사라졌다. 대신 태어나서
+      // 걸은 총 거리 `walked`를 쓴다 — 방향과 무관하게 **언제나 증가**하므로 앞뒤로
+      // 오가도 다리가 얼거나 거꾸로 돌지 않는다. 보간은 적과 같은 규약(한 틱 뒤로 되감기).
+      const travel = a.walked - step * (1 - alpha);
       const off = phaseOffset01(a.id) * TAU;
       // 멈춰 서서 때리는 중 — 적과 같은 규칙으로 팔을 휘두른다
       const swinging = a.targetId >= 0 && step < STOPPED_EPS;

@@ -11,7 +11,7 @@
  */
 import { createBattle } from '@/sim/battle';
 import { ALLY_DEFS, ENEMY_DEFS, TOWER_DEFS } from '@/data';
-import { ALLY_SORTIE_RANGE } from '@/data/balance';
+import { ALLY_MAX_ACTIVE } from '@/data/balance';
 import type {
   BaseLevelDef,
   BattleSim,
@@ -29,7 +29,7 @@ import type {
  * 홈타운 방어의 효과는 그것을 재는 자리에서 따로 잰다(tests/sim/hometown.test.ts).
  */
 const ARENA_BASE_LEVELS: readonly BaseLevelDef[] = [
-  { cost: 0, hpMul: 1, dmg: 0, cooldownTicks: 30, range: 0, sortie: ALLY_SORTIE_RANGE },
+  { cost: 0, hpMul: 1, dmg: 0, cooldownTicks: 30, range: 0, allyCap: ALLY_MAX_ACTIVE },
 ];
 
 const GRID_W = 24;

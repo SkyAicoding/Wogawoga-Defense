@@ -179,6 +179,8 @@ export class BattleController {
       selectedScenery: () => self.placement.selectedScenery(),
       selectedBase: () => self.placement.selectedBase(),
       selectBase: () => self.placement.selectBase(),
+      setAllyOrderMode: (on) => self.placement.setAllyOrderMode(on),
+      allyOrderMode: () => self.placement.allyOrderMode(),
       requestUpgradeBase: () => {
         // 성공하면 baseUpgraded 이벤트가 연출/외형을, 여기서 사거리 링을 갱신한다
         if (self.sim.applyCommand({ type: 'upgradeBase' })) self.placement.refreshBaseSelection();
@@ -373,11 +375,9 @@ export class BattleController {
       return;
     }
     const applied = this.camera.liftPx;
-    let lowest = this.cellScreenY(this.stage.baseCell.x, this.stage.baseCell.z) + applied;
-    for (const p of this.sim.allySortiePoints()) {
-      const y = this.cellScreenY(p.x, p.z) + applied;
-      if (y > lowest) lowest = y;
-    }
+    // 9단계: 예전에는 출격 한계선 표식들까지 함께 보이게 들어 올렸다. 한계선이 없어져
+    // 마을 패널이 가리면 안 되는 관심 지점은 **기지 셀 하나**뿐이다.
+    const lowest = this.cellScreenY(this.stage.baseCell.x, this.stage.baseCell.z) + applied;
     const need = lowest + BattleController.LIFT_MARGIN_PX - top;
     // 상한: 관심 지점이 **상단 HUD 예약 밑**까지만 올라간다. 그 위로 더 밀면
     // 보이지도 않는 곳으로 판을 던지는 셈이고, 스폰 쪽이 필요 이상으로 잘린다.

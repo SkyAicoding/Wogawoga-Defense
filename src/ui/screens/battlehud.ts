@@ -19,7 +19,6 @@ import {
   ALLY_BLOCK_CAPACITY,
   ALLY_DEFS,
   ALLY_MAX_ACTIVE,
-  ALLY_RETIRE_REFUND,
   TOWER_DEFS,
   counteredBy,
   favoredAgainst,
@@ -124,6 +123,13 @@ export function createBattleHud(): Screen<GameFacade> {
   }
   let allyBtns: AllyButton[] = [];
   let allyCountEl!: HTMLElement;
+  /**
+   * 이동 명령 버튼 (9단계) — 누르면 "다음 셀 탭 = 전원 이동"으로 모드가 바뀐다.
+   * 카드 배치와 같은 상태 기계라 눌림 표시(is-on)도 카드 선택과 같은 규약이다.
+   * 부족원이 하나도 없으면 비활성 — 명령할 사람이 없는데 모드만 켜지면 탭이 사라진다.
+   */
+  let allyMoveBtn!: HTMLElement;
+  let lastAllyMoveSig = '';
   let lastAllySig = '';
 
   // 참조 요소 (enter에서 채움)
@@ -199,13 +205,15 @@ export function createBattleHud(): Screen<GameFacade> {
   const allyDesc = (defId: AllyId): string =>
     t(`ally.${defId}.desc`, { n: ALLY_BLOCK_CAPACITY });
 
-  /** 세 종이 공유하는 규칙 한 줄 (수명·환급·동시 상한) */
-  const allyRules = (): string =>
-    t('battle.ally.rules', {
-      s: Math.round(ALLY_DEFS.clubber.lifeTicks / TICK_RATE),
-      p: Math.round(ALLY_RETIRE_REFUND * 100),
-      m: ALLY_MAX_ACTIVE,
-    });
+  /**
+   * 세 종이 공유하는 규칙 한 줄 (이동 명령·영구·정원).
+   * 9단계: 수명과 환급이 사라져 문구 셋 중 둘이 통째로 바뀌었다. 정원은 이제 상수가
+   * 아니라 **지금 마을 레벨의 값**이라 sim에서 읽는다 — 레벨을 올리면 이 줄이 따라 바뀐다.
+   */
+  const allyRules = (cap: number = ALLY_MAX_ACTIVE): string => t('battle.ally.rules', { m: cap });
+  /** 규칙 줄 DOM — 정원이 마을 레벨을 따라 바뀌므로 update()가 다시 쓴다 */
+  let allyRulesEl!: HTMLElement;
+  let lastAllyRulesCap = -1;
 
   const api = (facade: GameFacade): BattleUiApiExt | null =>
     facade.battle as BattleUiApiExt | null;
@@ -489,9 +497,19 @@ export function createBattleHud(): Screen<GameFacade> {
         h('div', { class: 'home-ally-head' },
           h('span', { class: 'ally-count-label', text: t('battle.ally.title') }),
           allyCountEl,
-          h('span', { class: 'tp-sub home-ally-rules', text: allyRules() }),
+          (allyRulesEl = h('span', { class: 'tp-sub home-ally-rules', text: allyRules() })),
         ),
         h('div', { class: 'ally-row' }, ...allyBtns.map((b) => b.el)),
+        (allyMoveBtn = h('button', {
+          class: 'tp-btn tp-btn--move hud-item',
+          attrs: { type: 'button' },
+          text: t('battle.ally.move'),
+          onClick: () => {
+            const bb2 = api(facade);
+            if (!bb2) return;
+            bb2.setAllyOrderMode?.(!bb2.allyOrderMode?.());
+          },
+        })),
         // 종별 한 줄 — descKey를 화면에 실제로 띄우는 자리. 5단계의 '출동 안내 패널'을
         // 여기로 흡수했다: 별도 패널이면 마을 패널과 배타 규칙이 어긋나고(둘 다 열릴 수
         // 있었다) 같은 정보가 두 자리에 흩어진다.
@@ -762,9 +780,22 @@ export function createBattleHud(): Screen<GameFacade> {
           t('battle.home.stats', {
             hp: `${s.baseHp}/${s.baseHpMax}`,
             r: b.sim.baseRange().toFixed(1),
-            s: b.sim.allySortieRange().toFixed(1),
+            s: `${b.sim.allyCap()}`,
           }),
         );
+        // 이동 버튼 — 인원 0이면 비활성, 모드 켜짐은 is-on으로 (카드 선택과 같은 규약)
+        const moveSig = `${s.allies.length}/${b.allyOrderMode?.() ? 1 : 0}`;
+        if (moveSig !== lastAllyMoveSig) {
+          lastAllyMoveSig = moveSig;
+          cls(allyMoveBtn, 'is-disabled', s.allies.length === 0);
+          cls(allyMoveBtn, 'is-on', b.allyOrderMode?.() === true);
+        }
+        // 정원은 마을 레벨을 따라 바뀐다 — 바뀔 때만 규칙 줄을 다시 쓴다
+        const capNow = b.sim.allyCap();
+        if (capNow !== lastAllyRulesCap) {
+          lastAllyRulesCap = capNow;
+          setText(allyRulesEl, allyRules(capNow));
+        }
         // 출동 버튼 — 비용은 나가 있는 인원 수에 따라 오르므로 인원이 바뀔 때만 갱신하고,
         // 골드는 매 프레임 바뀌니 비활성 여부는 항상 다시 본다.
         // (패널이 닫혀 있으면 이 블록에 오지 않는다 — 안 보이는 DOM을 매 프레임 만지지 않는다)
@@ -808,7 +839,7 @@ export function createBattleHud(): Screen<GameFacade> {
                       hp: `${next.hpMax}`,
                       d: `${next.dmg}`,
                       r: next.range.toFixed(1),
-                      s: next.sortie.toFixed(1),
+                      s: `${next.allyCap}`,
                     })
                   : t('battle.home.desc'),
         );

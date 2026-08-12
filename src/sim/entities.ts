@@ -128,16 +128,14 @@ function makeAlly(): AllySim {
     defId: 'clubber',
     hp: 1,
     maxHp: 1,
-    dist: 0,
-    pathIndex: 0,
-    slot: 0,
-    holdDist: 0,
     x: 0,
     z: 0,
     prevX: 0,
     prevZ: 0,
+    tgtX: 0,
+    tgtZ: 0,
+    walked: 0,
     heading: 0,
-    lifeLeft: 0,
     attackCdLeft: 0,
     targetId: -1,
     alive: true,
@@ -149,9 +147,9 @@ function resetAlly(a: AllySim): void {
   a.alive = true;
   a.attackCdLeft = 0;
   a.targetId = -1;
-  a.lifeLeft = 0;
-  a.slot = 0;
-  a.holdDist = 0;
+  // 걸은 거리는 **반드시** 0으로 되돌린다 — 풀 재사용이라 안 지우면 새 부족원이
+  // 앞사람의 보행 위상을 물려받아 태어나자마자 다리가 엉뚱한 각도에서 시작한다
+  a.walked = 0;
 }
 
 function makeProjectile(): ProjectileSim {

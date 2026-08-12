@@ -40,7 +40,7 @@ import { Rng } from '@/core/rng';
 import { ALLY_MAX_ACTIVE, enemyTraitsOf, hideCapFor } from '@/data/balance';
 import { isBuildableCell, rasterizePathCells, sceneryCells } from '@/data/grid';
 import {
-  allySortiePoints,
+  moveAlly,
   allyTrainCost,
   canTrainAlly,
   moveAllies,
@@ -54,7 +54,7 @@ import { Economy, sceneryClearCostFor, sellRefundFor } from './economy';
 import { pathFor, World, type EnemySim, type SimCtx } from './entities';
 import {
   baseNextStats,
-  baseSortieRange,
+  allyCapFor,
   baseUpgradeCost,
   canUpgradeBase,
   createHometown,
@@ -313,7 +313,9 @@ class Battle implements BattleSim {
       case 'clearScenery':
         return this.cmdClearScenery(cmd.cellX, cmd.cellZ);
       case 'trainAlly':
-        return trainAlly(this.ctx, cmd.defId, cmd.pathIndex);
+        return trainAlly(this.ctx, cmd.defId);
+      case 'moveAlly':
+        return moveAlly(this.ctx, cmd.allyId, cmd.cellX, cmd.cellZ);
       case 'upgradeBase':
         return upgradeBase(this.ctx);
       case 'callWave': {
@@ -457,14 +459,17 @@ class Battle implements BattleSim {
     }
     // 아군 부족원 — 위치/체력/수명/쿨다운/타깃 전부. 하나라도 빠지면
     // "언제 누가 죽고 언제 돌아가는가"의 발산을 해시가 놓친다.
-    // (dist는 x/z에서 유도되지만 출격 한계선에서 멈춘 뒤에도 계속 도는 유일한 값이라 따로 넣는다)
+    // (walked는 x/z에서 유도되지만 **목표에 도착해 멈춘 뒤에도 값이 남는** 유일한 항목이라
+    //  따로 넣는다 — 9단계 전에는 같은 역할을 경로 호장 dist가 했다. 목표 tgtX/tgtZ도 넣는다:
+    //  명령만 바꾸고 아직 한 걸음도 안 걸은 틱을 x/z만으로는 구별할 수 없다)
     for (const a of ctx.world.allies.items) {
       h = mix(h, a.id);
       h = mix(h, Math.round(a.x * 1000));
       h = mix(h, Math.round(a.z * 1000));
-      h = mix(h, Math.round(a.dist * 1000));
+      h = mix(h, Math.round(a.walked * 1000));
+      h = mix(h, Math.round(a.tgtX * 1000));
+      h = mix(h, Math.round(a.tgtZ * 1000));
       h = mix(h, a.hp);
-      h = mix(h, a.lifeLeft);
       h = mix(h, a.attackCdLeft);
       h = mix(h, a.targetId);
     }
@@ -610,15 +615,12 @@ class Battle implements BattleSim {
     return currentLevelDef(this.ctx).range;
   }
 
-  allySortieRange(): number {
-    return baseSortieRange(this.ctx);
+  /** 지금 마을이 허용하는 부족원 정원 (9단계에 allySortieRange를 대신한다) */
+  allyCap(): number {
+    return allyCapFor(this.ctx);
   }
 
-  allySortiePoints(): Vec2[] {
-    return allySortiePoints(this.ctx);
-  }
-
-  baseNextStats(): { hpMax: number; dmg: number; range: number; sortie: number } | null {
+  baseNextStats(): { hpMax: number; dmg: number; range: number; allyCap: number } | null {
     return baseNextStats(this.ctx);
   }
 

@@ -31,6 +31,12 @@ export class PlacementController {
   private selectedSceneryCell: Vec2 | null = null;
   /** 홈타운(기지 셀)이 선택되어 있는가 — 레벨업 패널 대상 */
   private baseSelected = false;
+  /**
+   * 규칙 2) 이동 명령 모드 — 켜져 있으면 다음 셀 탭이 배치가 아니라 **이동 명령**이 된다.
+   * 카드 선택(selectedCardIndex)과 **상호 배타**다: 둘 다 "다음 탭이 무엇을 뜻하는가"를
+   * 바꾸는 모드라, 동시에 켜지면 탭 하나가 두 가지를 뜻하게 된다.
+   */
+  private allyOrder = false;
   private ghostCell: { x: number; z: number } | null = null;
 
   constructor(
@@ -97,6 +103,20 @@ export class PlacementController {
 
   private onTap(px: number, py: number): void {
     const cell = this.cellAt(px, py);
+    /*
+     * 규칙 2) 이동 명령 모드 — 카드 배치보다 **먼저** 본다. 둘은 상호 배타라 순서가
+     * 결과를 바꾸지는 않지만, "다음 탭의 뜻"을 바꾸는 모드는 한자리에 모아 둔다.
+     * 판 밖 탭이면 모드만 끈다(카드 모드가 슬롯 밖 탭을 다루는 것과 같은 규약).
+     */
+    if (this.allyOrder) {
+      if (cell && this.sim.applyCommand({ type: 'moveAlly', allyId: -1, cellX: cell.x, cellZ: cell.z })) {
+        this.allyOrder = false;
+        this.showAllyOrder(cell.x, cell.z);
+        return;
+      }
+      this.setAllyOrderMode(false);
+      return;
+    }
     // 카드 배치 모드
     if (this.selectedCardIndex !== null) {
       const idx = this.selectedCardIndex;
@@ -161,15 +181,23 @@ export class PlacementController {
   }
 
   /**
-   * 홈타운 표시 — 사거리 링 + **아군 출격 한계선 봉수대**.
-   * 레벨업으로 둘 다 늘면 그 자리에서 넓어지고 멀어지는 게 보인다: 마을 패널의
-   * "사거리 N · 출격 N"이 판 위에서 무엇을 뜻하는지 숫자 없이 읽히는 유일한 경로다.
-   * 봉수대는 소품 선택 마커와 같은 메시라 드로우콜이 늘지 않는다 (decals.ts).
+   * 홈타운 표시 — 사거리 링.
+   * 9단계에 **출격 한계선 봉수대가 빠졌다**: 한계선이 없어져 그릴 지점이 없다.
+   * 같은 메시(decals.showSortieMarker)는 버리지 않고 **이동 명령 목표 표식**으로
+   * 재사용한다(showAllyOrder) — 드로우콜이 늘지 않는 이유도 그대로다.
    */
   private showBaseRange(): void {
     const bc = this.stage.baseCell;
     this.stage3d.decals.showRange(bc.x, bc.z, this.sim.baseRange());
-    this.stage3d.decals.showSortieMarker(this.sim.allySortiePoints());
+  }
+
+  /**
+   * 규칙 2) 이동 명령 목표 표식 — 마지막으로 찍은 자리에 원을 남긴다.
+   * 아군이 자유 이동이라 **어디로 가는 중인지가 화면 어디에도 없다**. 표식이 없으면
+   * 명령이 먹혔는지조차 알 수 없다(6명이 동시에 출발하면 더 그렇다).
+   */
+  private showAllyOrder(cellX: number, cellZ: number): void {
+    this.stage3d.decals.showSortieMarker([{ x: cellX, z: cellZ }]);
   }
 
   private showRangeFor(towerId: number): void {
@@ -184,6 +212,17 @@ export class PlacementController {
     // 사거리 링과 별개로 발밑 링 — 타워가 붙어 있으면 사거리 원 하나가 여러 기를
     // 함께 감싸 "어느 걸 골랐는지"가 안 읽힌다
     this.stage3d.decals.showTowerMarker(t.cellX, t.cellZ);
+  }
+
+  allyOrderMode(): boolean {
+    return this.allyOrder;
+  }
+
+  /** HUD '이동' 버튼 → 이동 명령 모드 진입/해제 (카드 모드와 상호 배타) */
+  setAllyOrderMode(on: boolean): void {
+    this.allyOrder = on;
+    if (on) this.selectCard(null);
+    else this.stage3d.decals.hideSortieMarker();
   }
 
   /** HUD 카드 탭 → 배치 모드 진입/해제 */
