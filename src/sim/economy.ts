@@ -2,13 +2,14 @@
  * 경제 — 핸드 3장 유지(덱에서 rng 드로우, 배치 시 즉시 보충),
  * 새로고침(웨이브당 1회 무료, 이후 20×1.6^n 반올림, 웨이브 시작 시 무료 리셋),
  * 판매 환급 = invested의 60% 내림.
- * 배치 지가 상승: 배치 비용 = round(tiers[0].cost × (1 + PLACEMENT_TAX × 배치된 타워 수)).
+ * 배치 지가 상승: 배치 비용 = round(tiers[0].cost × min(PLACEMENT_GROWTH^배치된 타워 수, 상한)).
  * 핸드 CardState.cost는 항상 '지금 배치 시 실비용' — 드로우/새로고침 시 계산하고
  * 타워 배치/판매 후 전 핸드를 재계산한다.
  */
 import type { CardState, TowerId } from '@/data/types';
 import {
-  PLACEMENT_TAX,
+  PLACEMENT_GROWTH,
+  PLACEMENT_MAX_MUL,
   SCENERY_CLEAR_BASE_COST,
   SCENERY_CLEAR_GROWTH,
   SCENERY_CLEAR_MAX_COST,
@@ -27,7 +28,8 @@ export function sellRefundFor(invested: number): number {
 
 /** 배치 지가 — 현재 배치된 타워 수 기준 실비용 */
 export function placementCostFor(baseCost: number, towerCount: number): number {
-  return Math.round(baseCost * (1 + PLACEMENT_TAX * towerCount));
+  const n = Math.max(0, towerCount);
+  return Math.round(baseCost * Math.min(PLACEMENT_GROWTH ** n, PLACEMENT_MAX_MUL));
 }
 
 /**
