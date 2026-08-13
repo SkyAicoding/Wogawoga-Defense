@@ -323,7 +323,7 @@ class Battle implements BattleSim {
       case 'trainAlly':
         return trainAlly(this.ctx, cmd.defId);
       case 'moveAlly':
-        return moveAlly(this.ctx, cmd.allyId, cmd.cellX, cmd.cellZ);
+        return moveAlly(this.ctx, cmd.allyId, cmd.cellX, cmd.cellZ, cmd.defId);
       case 'upgradeBase': {
         if (!upgradeBase(this.ctx)) return false;
         // 정원은 마을 레벨의 함수라 레벨이 오르는 **그 자리에서** 공개 상태도 따라가야 한다

@@ -213,19 +213,28 @@ export function trainAlly(ctx: SimCtx, defId: AllyId): boolean {
 
 /**
  * 규칙 2) 이동 명령 — 찍은 셀 중심을 목표로 박는다.
- * allyId < 0이면 살아 있는 **전원**. 대상이 하나도 없으면 false(연출도 안 난다).
+ * 대상: allyId >= 0이면 그 한 명, 아니면 defId가 있으면 **그 종족 전원**, 없으면 전원.
+ * 대상이 하나도 없으면 false(연출도 안 난다).
  *
  * 격자 밖 셀은 거부한다. 이건 "어디든 찍을 수 있다"(규칙 2)와 충돌하지 않는다 —
  * 판 밖은 자리가 아니라 **없는 칸**이고, 허용하면 아군이 화면 밖으로 걸어 나간다.
  */
-export function moveAlly(ctx: SimCtx, allyId: number, cellX: number, cellZ: number): boolean {
+export function moveAlly(
+  ctx: SimCtx,
+  allyId: number,
+  cellX: number,
+  cellZ: number,
+  defId?: AllyId,
+): boolean {
   const stage = ctx.opts.stage;
   if (!Number.isFinite(cellX) || !Number.isFinite(cellZ)) return false;
   if (cellX < 0 || cellZ < 0 || cellX > stage.gridW - 1 || cellZ > stage.gridH - 1) return false;
   let count = 0;
   for (const a of ctx.world.allies.items) {
     if (!a.alive) continue;
-    if (allyId >= 0 && a.id !== allyId) continue;
+    if (allyId >= 0) {
+      if (a.id !== allyId) continue;
+    } else if (defId !== undefined && a.defId !== defId) continue;
     a.tgtX = cellX;
     a.tgtZ = cellZ;
     count++;

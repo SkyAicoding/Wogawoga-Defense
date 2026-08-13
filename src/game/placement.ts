@@ -10,8 +10,16 @@
  * 타워와 겹칠 일이 없고, 소품도 건설 가능 셀에만 놓이므로 겹치지 않는다.
  */
 import * as THREE from 'three';
-import type { BattleSim, StageDef, TowerId, Vec2 } from '@/data/types';
+import type { AllyId, AllyState, BattleSim, StageDef, TowerId, Vec2 } from '@/data/types';
 import { TOWER_DEFS } from '@/data';
+
+/**
+ * 부족원을 집는 반경 (타일). 유닛 반경이 0.26뿐이라 그것만 보면 손가락이 거의 못 맞힌다.
+ * 0.7이면 한 칸의 절반보다 조금 넓어 겨냥한 사람은 잡히고 옆 칸 사람은 안 잡힌다.
+ * 집결 대열 간격이 0.6이라 이 값이 그보다 크면 대열 안에서 **누구를 잡아도 같은 종족**이
+ * 선택되는데, 선택 단위가 어차피 종족이라(사용자 지시) 그건 문제가 되지 않는다.
+ */
+const ALLY_PICK_RADIUS = 0.7;
 import { InputManager } from '@/core/input';
 import { audio } from '@/audio';
 import type { Stage3D } from '@/render/stage3d';
@@ -32,11 +40,16 @@ export class PlacementController {
   /** 홈타운(기지 셀)이 선택되어 있는가 — 레벨업 패널 대상 */
   private baseSelected = false;
   /**
-   * 규칙 2) 이동 명령 모드 — 켜져 있으면 다음 셀 탭이 배치가 아니라 **이동 명령**이 된다.
+   * 규칙 2) **선택된 부족 종족** (null = 아무도 안 골랐다).
+   *
+   * 사용자 지시: "생산한 다음 마을 부족을 아무나 선택하면 같은 종류는 모두 선택되게 해서
+   * 원하는 블록을 찍으면 그곳으로 이동". 곧 선택 단위는 **한 명이 아니라 종족**이다.
+   * 판 위의 부족원을 탭하면 그 종이 통째로 선택되고, 다음 셀 탭이 이동 명령이 된다.
+   *
    * 카드 선택(selectedCardIndex)과 **상호 배타**다: 둘 다 "다음 탭이 무엇을 뜻하는가"를
-   * 바꾸는 모드라, 동시에 켜지면 탭 하나가 두 가지를 뜻하게 된다.
+   * 바꾸는 상태라, 동시에 켜지면 탭 하나가 두 가지를 뜻하게 된다.
    */
-  private allyOrder = false;
+  private selectedAllyDef: AllyId | null = null;
   private ghostCell: { x: number; z: number } | null = null;
 
   constructor(
@@ -60,15 +73,57 @@ export class PlacementController {
   }
 
   /** 화면 좌표 → 그리드 셀 (지면 밖이면 null) */
-  private cellAt(px: number, py: number): { x: number; z: number } | null {
+  /**
+   * 화면 좌표 → **연속** 셀 좌표 (반올림 전). 격자 밖이어도 그대로 돌려준다.
+   * 부족원 집기(pickAllyAt)는 반올림하면 안 된다 — 유닛은 셀 중심이 아니라
+   * 아무 소수 좌표에나 서 있고(집결 대열 간격이 0.6타일), 반올림하면 한 칸 안의
+   * 서로 다른 두 명이 같은 점으로 뭉개져 "가장 가까운 사람"을 고를 수 없다.
+   */
+  private pointAt(px: number, py: number): { x: number; z: number } | null {
     const rect = this.canvas.getBoundingClientRect();
     this.ndc.set((px / rect.width) * 2 - 1, -(py / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(this.ndc, this.camera.camera);
     if (!this.raycaster.ray.intersectPlane(GROUND, this.hit)) return null;
-    const x = Math.round(this.hit.x + (this.stage.gridW - 1) / 2);
-    const z = Math.round(this.hit.z + (this.stage.gridH - 1) / 2);
+    return {
+      x: this.hit.x + (this.stage.gridW - 1) / 2,
+      z: this.hit.z + (this.stage.gridH - 1) / 2,
+    };
+  }
+
+  private cellAt(px: number, py: number): { x: number; z: number } | null {
+    const p = this.pointAt(px, py);
+    if (!p) return null;
+    const x = Math.round(p.x);
+    const z = Math.round(p.z);
     if (x < 0 || z < 0 || x >= this.stage.gridW || z >= this.stage.gridH) return null;
     return { x, z };
+  }
+
+  /**
+   * 탭 지점에서 가장 가까운 **살아 있는 부족원** (ALLY_PICK_RADIUS 안, 없으면 null).
+   *
+   * 왜 셀이 아니라 반경인가: 부족원은 셀에 붙어 있지 않다. 그리고 손가락은 정확하지 않다 —
+   * 유닛 반경이 0.26타일뿐이라 "그 셀"만 보면 대부분의 탭이 빗나간다.
+   * 0.7타일이면 한 칸의 절반보다 조금 넓어, 옆 칸의 유닛을 훔쳐 오지 않으면서
+   * 겨냥한 사람은 잡힌다. 동점은 낮은 id — 결정론이 아니라 **일관성**을 위해서다
+   * (같은 자리를 두 번 탭하면 같은 사람이 잡혀야 한다).
+   */
+  private pickAllyAt(px: number, py: number): AllyState | null {
+    const p = this.pointAt(px, py);
+    if (!p) return null;
+    let best: AllyState | null = null;
+    let bestD2 = ALLY_PICK_RADIUS * ALLY_PICK_RADIUS;
+    for (const a of this.sim.state.allies) {
+      const dx = a.x - p.x;
+      const dz = a.z - p.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > bestD2) continue;
+      if (best === null || d2 < bestD2 || a.id < best.id) {
+        best = a;
+        bestD2 = d2;
+      }
+    }
+    return best;
   }
 
   private onMove(px: number, py: number): void {
@@ -104,18 +159,34 @@ export class PlacementController {
   private onTap(px: number, py: number): void {
     const cell = this.cellAt(px, py);
     /*
-     * 규칙 2) 이동 명령 모드 — 카드 배치보다 **먼저** 본다. 둘은 상호 배타라 순서가
-     * 결과를 바꾸지는 않지만, "다음 탭의 뜻"을 바꾸는 모드는 한자리에 모아 둔다.
-     * 판 밖 탭이면 모드만 끈다(카드 모드가 슬롯 밖 탭을 다루는 것과 같은 규약).
+     * 규칙 2) 부족 선택/이동 — 카드 배치 **다음**, 나머지 선택보다 **먼저**.
+     *
+     * 순서가 이런 이유: 카드를 든 채로는 짓는 것이 먼저다(손에 카드가 있으면 그게
+     * 지금 하려는 일이다). 카드가 없으면 판 위의 사람이 타워·소품·기지보다 앞선다 —
+     * 부족원은 움직이는 물건이라 "지금 저기 있는 저 사람"을 겨냥한 탭일 가능성이 높고,
+     * 잘못 집어도 되돌리는 값이 0이다(선택만 바뀐다).
+     *
+     * 두 갈래:
+     *  (a) 부족원을 탭했다 → **그 종족 전체**를 고른다 (다른 종을 고르고 있었어도 갈아탄다)
+     *  (b) 이미 고른 종족이 있고 판의 다른 곳을 탭했다 → 그 칸으로 **이동 명령**
      */
-    if (this.allyOrder) {
-      if (cell && this.sim.applyCommand({ type: 'moveAlly', allyId: -1, cellX: cell.x, cellZ: cell.z })) {
-        this.allyOrder = false;
-        this.showAllyOrder(cell.x, cell.z);
+    if (this.selectedCardIndex === null) {
+      const picked = this.pickAllyAt(px, py);
+      if (picked) {
+        this.selectAllyDef(picked.defId);
         return;
       }
-      this.setAllyOrderMode(false);
-      return;
+      if (this.selectedAllyDef !== null) {
+        const defId = this.selectedAllyDef;
+        if (cell && this.sim.applyCommand({ type: 'moveAlly', allyId: -1, cellX: cell.x, cellZ: cell.z, defId })) {
+          this.showAllyOrder(cell.x, cell.z);
+          this.selectedAllyDef = null;
+          return;
+        }
+        // 판 밖 탭 → 선택만 푼다 (카드 모드가 슬롯 밖 탭을 다루는 것과 같은 규약)
+        this.clearAllySelection();
+        return;
+      }
     }
     // 카드 배치 모드
     if (this.selectedCardIndex !== null) {
@@ -214,15 +285,43 @@ export class PlacementController {
     this.stage3d.decals.showTowerMarker(t.cellX, t.cellZ);
   }
 
-  allyOrderMode(): boolean {
-    return this.allyOrder;
+  /** 지금 고른 부족 종족 (없으면 null) — HUD가 '누구를 고르고 있는지' 표시에 쓴다 */
+  selectedAlly(): AllyId | null {
+    return this.selectedAllyDef;
   }
 
-  /** HUD '이동' 버튼 → 이동 명령 모드 진입/해제 (카드 모드와 상호 배타) */
-  setAllyOrderMode(on: boolean): void {
-    this.allyOrder = on;
-    if (on) this.selectCard(null);
-    else this.stage3d.decals.hideSortieMarker();
+  /**
+   * 종족 선택 — 살아 있는 같은 종 **전원**에게 발밑 표식을 세운다.
+   * 표식은 이동 목표 표식과 같은 메시(decals.showSortieMarker)를 쓴다: 둘은 상호 배타이고
+   * (고르는 중 아니면 보낸 뒤) 여러 지점을 하나로 병합해 굽기 때문에 드로우콜이 안 는다.
+   */
+  private selectAllyDef(defId: AllyId): void {
+    this.selectCard(null);
+    this.clearTowerSelection();
+    this.clearScenerySelection();
+    this.clearBaseSelection();
+    this.selectedAllyDef = defId;
+    this.refreshAllySelection();
+    audio.play('uiTap');
+  }
+
+  /** 선택된 종족의 지금 위치로 표식을 다시 굽는다 — 유닛이 걸어가면 따라가야 한다 */
+  refreshAllySelection(): void {
+    if (this.selectedAllyDef === null) return;
+    const pts = this.sim.state.allies
+      .filter((a) => a.defId === this.selectedAllyDef)
+      .map((a) => ({ x: a.x, z: a.z }));
+    if (pts.length === 0) {
+      this.clearAllySelection();
+      return;
+    }
+    this.stage3d.decals.showSortieMarker(pts);
+  }
+
+  clearAllySelection(): void {
+    if (this.selectedAllyDef === null) return;
+    this.selectedAllyDef = null;
+    this.stage3d.decals.hideSortieMarker();
   }
 
   /** HUD 카드 탭 → 배치 모드 진입/해제 */

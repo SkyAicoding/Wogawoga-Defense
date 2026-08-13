@@ -35,9 +35,10 @@ declare global {
             walked: number;
           }[];
           /**
-           * ⚠ 이 칸은 **절대 상한(ALLY_MAX_ACTIVE 6)**이지 지금 마을이 허용하는 정원이
-           * 아니다(실측: Lv1에서 sim.allyCap()은 2인데 이 값은 6). 상한 판정에는 반드시
-           * `sim.allyCap()`을 쓴다 — 이 파일에서 이 필드를 어서션에 쓰지 않는 이유다.
+           * 지금 마을 레벨이 허용하는 정원. 9단계 검증 중에는 이 칸이 **절대 상한 6에
+           * 박혀 갱신되지 않는 버그**가 있었고(HUD가 Lv1에서 '0/6'을 띄웠다) 그래서 이
+           * 파일은 어서션에 안 썼다. 지금은 생성·레벨업 두 곳에서 갱신되어 옳다.
+           * 그래도 상한 판정에는 `sim.allyCap()`을 쓴다 — 규칙의 출처가 그쪽이다.
            */
           allyCap: number;
           baseLevel: number;
@@ -72,6 +73,12 @@ declare global {
       allyCost(defId: string): number;
       canTrainAlly(defId: string): boolean;
       allies(): { id: number; defId: string; hp: number; x: number; z: number; targetId: number }[];
+      /**
+       * 지금 고른 부족 종족 (없으면 null). 9단계 후반에 '이동 명령' 버튼을 걷어내고
+       * 조작을 전부 판 위로 옮기면서 생겼다 — 선택 상태가 DOM에 없으므로
+       * 이 훅이 아니면 "탭이 먹혔는가"를 관찰할 방법이 없다.
+       */
+      selectedAlly(): string | null;
       baseInfo(): {
         level: number;
         levelMax: number;
@@ -837,14 +844,12 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
   expect(quiet, '통제 실패: 적이 없는 준비 단계여야 한다').toEqual({ phase: 'prep', enemies: 0 });
 
   const homePanel = page.locator('.tower-panel--home');
-  const moveBtn = homePanel.locator('.tp-btn--move');
   await tapBase(page);
   await expect(homePanel).toBeVisible();
 
-  // ① 보낼 사람이 없으면 회색 (누를 수는 있어도 뜻이 없는 모드는 열지 않는다)
-  await expect(moveBtn, '인원 0인데 이동 버튼이 살아 있다').toHaveClass(/is-disabled/);
-
-  // 마을을 만렙까지 올려 정원을 열고(9단계: 정원 = 마을 레벨) 전원을 내보낸다
+  // 마을을 만렙까지 올려 정원을 열고(9단계: 정원 = 마을 레벨) 세 종을 둘씩 내보낸다.
+  // **종족별로 둘씩**인 것이 이 테스트의 핵심이다 — 한 종을 고르면 그 둘만 움직이고
+  // 나머지 넷은 제자리여야 한다(사용자 지시: "같은 종류는 모두 선택").
   const squad = await page.evaluate(() => {
     const g = window.__wgd!;
     for (let i = 0; i < 8; i++) {
@@ -860,13 +865,12 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
     return { n, cap: g.sim.allyCap() };
   });
   expect(squad.n, '만렙 정원을 다 채웠다').toBe(squad.cap);
-  expect(squad.cap, '여럿을 한 번에 보내는 것이 이 조작의 요점이다').toBeGreaterThanOrEqual(2);
+  expect(squad.cap, '종족당 둘씩 나와야 이 테스트가 뜻이 있다').toBeGreaterThanOrEqual(6);
 
   /*
    * ④의 통제 A: **모여 있는** 상태의 프레임. 패널을 닫고 잰다 —
-   * 열어 두면 사거리 링(+메시)과 이동 목표 표식이 한쪽 표본에만 끼어 그 몫이
-   * 그대로 아군 탓으로 청구된다(표식은 명령 뒤에만 뜬다).
-   * 출동 먼지(fx allyTrained의 ring/burst)가 사라질 때까지 실시간을 흘린 뒤 얼린다.
+   * 열어 두면 사거리 링(+메시)과 표식이 한쪽 표본에만 끼어 그 몫이 그대로 아군 탓으로
+   * 청구된다. 출동 먼지가 사라질 때까지 실시간을 흘린 뒤 얼린다.
    */
   await tapBase(page);
   await expect(homePanel).toBeHidden();
@@ -877,35 +881,64 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
   const clustered = await maxFrame(page);
   await page.evaluate(() => window.__wgd!.pause(false));
 
-  // ② 마을 패널 → '이동 명령' → 판 위 셀 탭
-  await tapBase(page);
-  await expect(homePanel).toBeVisible();
-  await expect(moveBtn, '인원이 있는데 이동 버튼이 회색이다').not.toHaveClass(/is-disabled/);
-  await moveBtn.click();
-  await expect(moveBtn, '이동 명령 모드가 켜지지 않았다').toHaveClass(/is-on/);
-
+  /*
+   * ② 판 위의 부족원을 탭 → **그 종족 전체** 선택 → 갈 칸을 탭.
+   * 9단계 후반에 '이동 명령' 버튼을 걷어내고 조작을 전부 판 위로 옮겼다(사용자 지시).
+   * 그래서 이 테스트도 DOM 버튼이 아니라 **캔버스 탭**으로만 조작한다 — 그것이
+   * 플레이어가 실제로 하는 동작이고, 버튼이 없어졌으므로 다른 경로도 없다.
+   */
   const before = await page.evaluate(() => window.__wgd!.allies());
+  const mover = before.find((a) => a.defId === 'clubber');
+  if (!mover) throw new Error('몽둥이꾼이 없다 — 편성이 깨졌다');
+  const movers = before.filter((a) => a.defId === 'clubber').map((a) => a.id).sort((x, y) => x - y);
+  const others = before.filter((a) => a.defId !== 'clubber').map((a) => a.id).sort((x, y) => x - y);
+  expect(movers.length, '몽둥이꾼이 둘이어야 "종족 전체"가 검증된다').toBeGreaterThanOrEqual(2);
+  expect(others.length, '안 움직여야 할 대조군').toBeGreaterThanOrEqual(2);
+
+  const pick = await page.evaluate((p) => window.__wgd!.cellToScreen(p.x, p.z), {
+    x: mover.x,
+    z: mover.z,
+  });
+  await page.mouse.click(pick.x, pick.y);
+  await page.waitForTimeout(200);
+  const picked = await page.evaluate(() => window.__wgd!.selectedAlly());
+  expect(picked, '부족원을 탭했는데 그 종족이 선택되지 않았다').toBe('clubber');
+
   const target = await pickBoardCell(page, before[0] as { x: number; z: number });
   expect(target.d, '집결 지점과 너무 가까운 칸을 골랐다 (이동을 관찰할 수 없다)').toBeGreaterThan(3);
   await page.mouse.click(target.px, target.py);
   await page.waitForTimeout(250);
+  const cleared = await page.evaluate(() => window.__wgd!.selectedAlly());
+  expect(cleared, '명령을 내렸으면 선택이 풀려야 한다').toBeNull();
 
   const ordered = await page.evaluate(() =>
     window.__wgd!.sim.state.allies.map((a) => ({ id: a.id, tgtX: a.tgtX, tgtZ: a.tgtZ })),
   );
-  expect(ordered.length, '명령을 받을 부족원').toBe(squad.n);
+  expect(ordered.length, '판 위의 부족원 전원').toBe(squad.n);
+  /*
+   * **선택한 종만 움직인다.** 이것이 이 조작의 계약이다 — 몽둥이꾼 하나를 탭했으니
+   * 몽둥이꾼 전원이 목표를 받고, 돌팔매꾼·파수꾼은 집결 지점을 그대로 지켜야 한다.
+   * toEqual이 아니라 축별 근사인 이유: 셀 좌표는 placement가 Math.round로 만들고,
+   * 가장자리 칸에서는 그 결과가 **-0**이라 toEqual(0)이 Object.is로 갈라진다(실측).
+   */
   for (const a of ordered) {
-    // allyId −1 = 살아 있는 전원 (규칙 2) — 한 탭으로 여섯이 같은 목표를 받는다.
-    // toEqual이 아니라 축별 근사인 이유: 셀 좌표는 placement가 Math.round로 만들고,
-    // 가장자리 칸에서는 그 결과가 **-0**이라 toEqual(0)이 Object.is로 갈라진다(실측).
-    expect(a.tgtX, `#${a.id} 목표 x`).toBeCloseTo(target.x, 5);
-    expect(a.tgtZ, `#${a.id} 목표 z`).toBeCloseTo(target.z, 5);
+    const isMover = movers.includes(a.id);
+    if (isMover) {
+      expect(a.tgtX, `#${a.id} 몽둥이꾼 목표 x`).toBeCloseTo(target.x, 5);
+      expect(a.tgtZ, `#${a.id} 몽둥이꾼 목표 z`).toBeCloseTo(target.z, 5);
+    } else {
+      const moved =
+        Math.abs(a.tgtX - target.x) < 1e-5 && Math.abs(a.tgtZ - target.z) < 1e-5;
+      expect(moved, `#${a.id}(다른 종족)이 같이 끌려갔다`).toBe(false);
+    }
   }
-  // 명령이 먹혔으면 모드는 스스로 꺼지고(다음 탭이 다시 선택이 된다), 마을 선택은 남는다
-  await expect(moveBtn, '명령 뒤에도 이동 모드가 켜져 있다').not.toHaveClass(/is-on/);
-  expect(await page.evaluate(() => window.__wgd!.selectedBase()), '탭이 마을 선택을 풀었다').toBe(
-    true,
-  );
+  // 명령이 먹혔으면 선택은 스스로 풀린다(위에서 확인). 그리고 부족원을 탭하는 순간
+  // 마을 선택은 **풀린다** — 판 위의 선택 셋(타워·소품·기지)과 상호 배타이기 때문이다
+  // (탭 하나가 두 가지를 동시에 고르면 어느 패널을 띄울지 정할 수 없다).
+  expect(
+    await page.evaluate(() => window.__wgd!.selectedBase()),
+    '부족을 골랐는데 마을 선택이 남아 있다',
+  ).toBe(false);
 
   // ③ 정말 걸어가고, 도착해서 선다
   const walked = await page.evaluate(() => {
@@ -925,10 +958,15 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
   for (const a of before) {
     const mid = walked.mid.find((m) => m.id === a.id)!;
     const end = walked.end.find((m) => m.id === a.id)!;
-    expect(distTo(mid), `#${a.id} 4초 뒤 남은 거리`).toBeLessThan(distTo(a) - 1);
-    // 도착 판정(ARRIVE_EPS2)은 제곱거리 1e-6 — 눈금 하나 안쪽이면 선 것이다
-    expect(distTo(end), `#${a.id} 도착`).toBeLessThan(0.01);
-    expect(end.walked, `#${a.id} 걸은 거리`).toBeGreaterThan(0);
+    if (movers.includes(a.id)) {
+      expect(distTo(mid), `#${a.id} 4초 뒤 남은 거리`).toBeLessThan(distTo(a) - 1);
+      // 도착 판정(ARRIVE_EPS2)은 제곱거리 1e-6 — 눈금 하나 안쪽이면 선 것이다
+      expect(distTo(end), `#${a.id} 도착`).toBeLessThan(0.01);
+      expect(end.walked, `#${a.id} 걸은 거리`).toBeGreaterThan(0);
+    } else {
+      // 명령을 안 받은 종족은 **한 걸음도** 안 걷는다 (집결 지점이 곧 목표라 walked 0)
+      expect(end.walked, `#${a.id}(다른 종족)이 걸었다`).toBe(0);
+    }
   }
 
   /*
@@ -980,7 +1018,12 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
     g.ff(900);
     g.sim.state.prepTicksLeft = 1e9;
   });
-  await tapBase(page); // 패널을 닫아 표본 A와 같은 조건으로 되돌린다
+  /*
+   * 패널을 닫아 표본 A와 같은 조건으로 되돌린다.
+   * ⚠ 무조건 tapBase를 부르면 안 된다 — 그건 **토글**이고, 위에서 부족원을 탭하는 순간
+   * 마을 선택이 이미 풀렸다(선택 셋은 상호 배타다). 지금 상태를 보고 열려 있을 때만 닫는다.
+   */
+  if (await page.evaluate(() => window.__wgd!.selectedBase())) await tapBase(page);
   await expect(homePanel).toBeHidden();
   await page.waitForTimeout(2500);
   await page.evaluate(() => window.__wgd!.pause(true));

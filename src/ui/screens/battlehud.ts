@@ -123,13 +123,14 @@ export function createBattleHud(): Screen<GameFacade> {
   }
   let allyBtns: AllyButton[] = [];
   let allyCountEl!: HTMLElement;
-  /**
-   * 이동 명령 버튼 (9단계) — 누르면 "다음 셀 탭 = 전원 이동"으로 모드가 바뀐다.
-   * 카드 배치와 같은 상태 기계라 눌림 표시(is-on)도 카드 선택과 같은 규약이다.
-   * 부족원이 하나도 없으면 비활성 — 명령할 사람이 없는데 모드만 켜지면 탭이 사라진다.
+  /*
+   * ── '이동 명령' 버튼은 삭제됐다 (사용자 지시) ──────────────────────────────
+   * "그럼 안되고, 그냥 생산한 다음 마을 부족을 아무나 선택하면 같은 종류는 모두
+   *  선택되게 해서 원하는 블록을 찍으면 그곳으로 이동 하도록 해줘."
+   * 조작이 전부 **판 위**로 옮겨갔다: 부족원 탭 → 그 종족 전체 선택 → 셀 탭 → 이동.
+   * HUD에 남은 것은 '지금 누구를 고르고 있는지'를 알려 주는 표시 한 줄뿐이고,
+   * 상태와 입력은 game/placement.ts가 갖는다(selectedAlly / clearAllySelection).
    */
-  let allyMoveBtn!: HTMLElement;
-  let lastAllyMoveSig = '';
   let lastAllySig = '';
 
   // 참조 요소 (enter에서 채움)
@@ -500,16 +501,6 @@ export function createBattleHud(): Screen<GameFacade> {
           (allyRulesEl = h('span', { class: 'tp-sub home-ally-rules', text: allyRules() })),
         ),
         h('div', { class: 'ally-row' }, ...allyBtns.map((b) => b.el)),
-        (allyMoveBtn = h('button', {
-          class: 'tp-btn tp-btn--move hud-item',
-          attrs: { type: 'button' },
-          text: t('battle.ally.move'),
-          onClick: () => {
-            const bb2 = api(facade);
-            if (!bb2) return;
-            bb2.setAllyOrderMode?.(!bb2.allyOrderMode?.());
-          },
-        })),
         // 종별 한 줄 — descKey를 화면에 실제로 띄우는 자리. 5단계의 '출동 안내 패널'을
         // 여기로 흡수했다: 별도 패널이면 마을 패널과 배타 규칙이 어긋나고(둘 다 열릴 수
         // 있었다) 같은 정보가 두 자리에 흩어진다.
@@ -783,13 +774,6 @@ export function createBattleHud(): Screen<GameFacade> {
             s: `${b.sim.allyCap()}`,
           }),
         );
-        // 이동 버튼 — 인원 0이면 비활성, 모드 켜짐은 is-on으로 (카드 선택과 같은 규약)
-        const moveSig = `${s.allies.length}/${b.allyOrderMode?.() ? 1 : 0}`;
-        if (moveSig !== lastAllyMoveSig) {
-          lastAllyMoveSig = moveSig;
-          cls(allyMoveBtn, 'is-disabled', s.allies.length === 0);
-          cls(allyMoveBtn, 'is-on', b.allyOrderMode?.() === true);
-        }
         // 정원은 마을 레벨을 따라 바뀐다 — 바뀔 때만 규칙 줄을 다시 쓴다
         const capNow = b.sim.allyCap();
         if (capNow !== lastAllyRulesCap) {

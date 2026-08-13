@@ -179,8 +179,8 @@ export class BattleController {
       selectedScenery: () => self.placement.selectedScenery(),
       selectedBase: () => self.placement.selectedBase(),
       selectBase: () => self.placement.selectBase(),
-      setAllyOrderMode: (on) => self.placement.setAllyOrderMode(on),
-      allyOrderMode: () => self.placement.allyOrderMode(),
+      selectedAlly: () => self.placement.selectedAlly(),
+      clearAllySelection: () => self.placement.clearAllySelection(),
       requestUpgradeBase: () => {
         // 성공하면 baseUpgraded 이벤트가 연출/외형을, 여기서 사거리 링을 갱신한다
         if (self.sim.applyCommand({ type: 'upgradeBase' })) self.placement.refreshBaseSelection();
@@ -349,6 +349,10 @@ export class BattleController {
     );
     s3.projectiles.update(st.projectiles, alpha, dt);
     s3.towers.aim(st.towers, st.enemies, alpha);
+    // 부족 선택 표식은 **걸어가는 사람을 따라간다** — 매 프레임 다시 굽지 않으면
+    // 유닛은 떠났는데 발밑 표식만 스폰 자리에 남는다. 지점이 그대로면 굽지 않는다
+    // (decals.showSortieMarker가 서명으로 걸러낸다) 무선택이면 즉시 반환한다.
+    this.placement.refreshAllySelection();
     s3.update(dt);
     this.updatePanelLift();
     this.camera.update(realDt);
@@ -527,6 +531,9 @@ export class BattleController {
       selectedCard: (): number | null => this.api.selectedCard(),
       // 타워 파괴 시 선택 패널/사거리 링이 정리되는지 검증용
       selectedTower: (): number | null => this.api.selectedTower(),
+      // 부족 선택(판 위 탭 → 같은 종족 전체) 검증용 — 조작이 전부 캔버스에서 일어나므로
+      // DOM으로는 관찰할 방법이 없다
+      selectedAlly: (): AllyId | null => this.api.selectedAlly?.() ?? null,
       // 지형지물 제거 검증용
       selectedScenery: (): { x: number; z: number } | null => this.api.selectedScenery(),
       sceneryList: (): { x: number; z: number }[] => {
