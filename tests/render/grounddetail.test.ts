@@ -234,6 +234,65 @@ describe('대비 밴드 (규칙 ④)', () => {
     }
   });
 
+  /**
+   * 3각 판의 **두 가지 합법 용도**만 남긴다.
+   *
+   * 이 크기(화면상 3~10px)에서 홀로 뜬 삼각형은 예외 없이 **화살촉(➤)** 으로 읽힌다.
+   * pebbleFlat 의 곁돌을 4각 → 3각으로 내렸을 때 확대 캡처에서 정확히 그렇게 됐다 —
+   * 정사각형을 고치려다 화살표를 만든 것이라, twig 과 같은 실패를 한 칸 옆에서
+   * 반복한 셈이다. 그래서 3각은 다음 둘 중 하나여야 한다.
+   *   (a) **획** — 요소의 판이 전부 3각인 것 (blade 로 만든 잎/가지/균열)
+   *   (b) **면** — 더 큰 판의 XZ 윤곽 **안**에 완전히 든 것 (로우폴리 깎인 면)
+   * 배치할 때 s·yaw 는 요소의 모든 판에 똑같이 걸리므로, 여기서 한 번 확인한 포함
+   * 관계는 화면의 모든 인스턴스에서 그대로 성립한다.
+   */
+  it('3각 판은 획이거나, 더 큰 판 안에 든 면이다 — 홀로 뜬 삼각형은 화살촉이 된다', () => {
+    /** FlatSpec → XZ 꼭짓점 (buildFlats 와 같은 식: rad = 0.5/cos(π/n), 각도 감소 방향) */
+    const ring = (f: { pos: readonly number[]; scale?: readonly number[]; rot?: readonly number[]; sides?: number }) => {
+      const n = f.sides ?? 4;
+      const sx = f.scale?.[0] ?? 1;
+      const sz = f.scale?.[1] ?? 1;
+      const ry = f.rot?.[1] ?? 0;
+      const rad = 0.5 / Math.cos(Math.PI / n);
+      const out: [number, number][] = [];
+      for (let i = 0; i < n; i++) {
+        const a = Math.PI / n - (i / n) * Math.PI * 2;
+        const lx = Math.cos(a) * rad * sx;
+        const lz = Math.sin(a) * rad * sz;
+        out.push([
+          (f.pos[0] as number) + lx * Math.cos(ry) + lz * Math.sin(ry),
+          (f.pos[2] as number) - lx * Math.sin(ry) + lz * Math.cos(ry),
+        ]);
+      }
+      return out;
+    };
+    /** 볼록 다각형 내부 판정 (모든 판이 정n각형이라 볼록이 보장된다) */
+    const inside = (p: [number, number], poly: [number, number][]): boolean => {
+      let sign = 0;
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i] as [number, number];
+        const b = poly[(i + 1) % poly.length] as [number, number];
+        const c = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+        if (Math.abs(c) < 1e-9) continue;
+        const s = c > 0 ? 1 : -1;
+        if (sign === 0) sign = s;
+        else if (s !== sign) return false;
+      }
+      return true;
+    };
+
+    for (const [name, flats] of Object.entries(GD_ELEMENTS)) {
+      // (a) 획 요소 — 판이 전부 3각이면 통과 (twig·grassSprig·litter·crackFleck)
+      if (flats.every((f) => f.sides === 3)) continue;
+      for (const f of flats) {
+        if (f.sides !== 3) continue;
+        const tri = ring(f);
+        const host = flats.some((g) => g !== f && (g.sides ?? 4) > 3 && tri.every((p) => inside(p, ring(g))));
+        expect(host, `${name}: 3각 판이 큰 판 밖으로 삐져나왔다 — 화살촉(➤)이 된다`).toBe(true);
+      }
+    }
+  });
+
   it('잔가지는 획이 하나다 — 두 획이 만나면 체크마크(✓)/화살표(➤) 글리프가 된다', () => {
     /*
      * 경로 타일에는 이미 진행 방향 셰브런(▶)이 깔려 있다. 판 위의 화살표 모양은
