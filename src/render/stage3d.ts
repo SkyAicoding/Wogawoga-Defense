@@ -4,12 +4,15 @@
  */
 import * as THREE from 'three';
 import type { StageDef } from '@/data/types';
-import { Rng, hashSeed } from '@/core/rng';
 import { cellKey, sceneryCells } from '@/data/grid';
 import { BASE_LEVEL_MAX } from '@/data/hometown';
 import { BIOMES, flatMat } from './palette';
-import { buildParts, type PartSpec } from './meshlib/factory';
-import { buildStage as buildTerrain, type CellToWorld } from './meshlib/terrain';
+import {
+  buildStage as buildTerrain,
+  buildWater,
+  WATER_Y,
+  type CellToWorld,
+} from './meshlib/terrain';
 import { buildProps } from './meshlib/props';
 import { createBasecamp, type Basecamp } from './meshlib/basecamp';
 import { EnemyView } from './views/enemyview';
@@ -58,38 +61,16 @@ export interface Stage3D {
   dispose(): void;
 }
 
-/** 부유섬 하부 뾰족 바위 파트 */
-function underRocks(stage: StageDef, seed: number): PartSpec[] {
-  const rng = new Rng(seed);
-  const parts: PartSpec[] = [];
-  const halfW = stage.gridW / 2;
-  const halfH = stage.gridH / 2;
-  const pal = BIOMES[stage.biome];
-  const n = 7;
-  for (let i = 0; i < n; i++) {
-    const x = rng.range(-halfW * 0.7, halfW * 0.7);
-    const z = rng.range(-halfH * 0.7, halfH * 0.7);
-    const s = rng.range(1.6, 3.0);
-    parts.push({
-      kind: 'cone',
-      pos: [x, -2.1 - s * 0.6, z],
-      rot: [Math.PI, rng.range(0, 3), 0],
-      scale: [s * 0.8, s * 2.4, s * 0.8],
-      color: pal.cliff[1],
-      hueJitter: 0.012,
-      seg: 5,
-    });
-  }
-  return parts;
-}
-
 export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
   const q = quality ?? flagsFor('high');
   const pal = BIOMES[stage.biome];
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(pal.sky);
   const diag = Math.hypot(stage.gridW, stage.gridH);
-  scene.fog = new THREE.Fog(pal.fog, diag * 2.2, diag * 5);
+  // 안개 구간은 바이옴마다 다르다 — 사막은 멀리까지 트여 있고(6.0) 늪·화산은
+  // 섬 둘레부터 삼킨다(3.2/3.4). 늪의 "보라 안개 배경"과 화산의 "어둠 속 용암"이
+  // 사실상 이 두 숫자에서 나온다.
+  scene.fog = new THREE.Fog(pal.fog, diag * pal.fogRange[0], diag * pal.fogRange[1]);
 
   const root = new THREE.Group();
   root.name = 'stageRoot';
@@ -107,31 +88,17 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
   basecamp.group.position.set(baseV.x, 0, baseV.z);
   root.add(basecamp.group);
 
-  // 부유섬 하부 바위
-  const underGeo = buildParts(underRocks(stage, hashSeed(`under:${stage.id}`)), {
-    seed: 3,
-    ao: 0.35,
-  });
-  const underMesh = new THREE.Mesh(underGeo, flatMat());
-  root.add(underMesh);
-
-  // --- 물 평면 (버텍스 흔들림은 quality 게이트) ---
-  const waterSize = diag * 6;
-  const waterGeo = q.waterAnim
-    ? new THREE.PlaneGeometry(waterSize, waterSize, 24, 24)
-    : new THREE.PlaneGeometry(waterSize, waterSize, 1, 1);
-  waterGeo.rotateX(-Math.PI / 2);
-  const waterMat = new THREE.MeshLambertMaterial({ color: pal.water });
-  const water = new THREE.Mesh(waterGeo, waterMat);
-  water.position.y = -1.7;
+  // --- 물/용암 (수심 밴드 + 포말은 terrain 쪽에서 굽는다) ---
+  const waterBuild = buildWater(stage, q.waterAnim);
+  const water = new THREE.Mesh(waterBuild.geo, flatMat());
+  water.position.y = WATER_Y;
   water.receiveShadow = q.shadows;
   scene.add(water);
-  const waterBase = q.waterAnim
-    ? Float32Array.from(waterGeo.getAttribute('position').array as Float32Array)
-    : null;
 
   // --- 라이팅: 태양 (타이트 섀도) + 헤미스피어 ---
-  const sun = new THREE.DirectionalLight(0xfff2d8, 2.4);
+  // 빛도 바이옴 자산이다 — 사막은 희고 뜨겁게(2.9), 늪은 흐리게(1.75),
+  // 화산은 낮춰서(1.9) 용암이 화면의 유일한 광원처럼 읽히게 한다.
+  const sun = new THREE.DirectionalLight(pal.sun, pal.sunPower);
   sun.position.set(diag * 0.7, diag * 1.1, diag * 0.4);
   sun.castShadow = q.shadows;
   if (q.shadows) {
@@ -148,11 +115,11 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
   }
   sun.target.position.set(0, 0, 0);
   scene.add(sun, sun.target);
-  scene.add(new THREE.HemisphereLight(pal.sky, pal.hemiGround, 1.15));
+  scene.add(new THREE.HemisphereLight(pal.sky, pal.hemiGround, pal.hemiPower));
   if (stage.biome === 'volcano') {
-    // 용암 바닥광
-    const lavaGlow = new THREE.PointLight(0xff5a1a, 60, diag * 2);
-    lavaGlow.position.set(0, -3, 0);
+    // 용암 바닥광 — 태양을 낮춘 만큼 이쪽을 올려 절벽 하단이 아래에서 달아오르게 한다
+    const lavaGlow = new THREE.PointLight(0xff5a1a, 120, diag * 2.2);
+    lavaGlow.position.set(0, -2.4, 0);
     scene.add(lavaGlow);
   }
 
@@ -210,17 +177,9 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
         const smokeColor = lvl === 0 ? 0xffb02e : lvl === 1 ? 0x8a8078 : 0x4a4644;
         particles.trail(firePos.x, firePos.y, firePos.z, smokeColor, lvl === 0 ? 0.06 : 0.1);
       }
-      // 물 버텍스 흔들림
-      if (waterBase) {
-        const attr = waterGeo.getAttribute('position');
-        const arr = attr.array as Float32Array;
-        for (let i = 0; i < attr.count; i++) {
-          const x = waterBase[i * 3] as number;
-          const z = waterBase[i * 3 + 2] as number;
-          arr[i * 3 + 1] = Math.sin(time * 1.4 + x * 0.35 + z * 0.5) * 0.09;
-        }
-        attr.needsUpdate = true;
-      }
+      // 물결 — 정점 위치가 아니라 **물결선의 위상**을 민다.
+      // (예전의 진폭 0.09 세로 흔들림은 이 카메라에서 한 픽셀도 안 움직였다)
+      waterBuild.animate(time);
     },
     dispose(): void {
       enemies.dispose();
@@ -233,9 +192,7 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
       terrain.dispose();
       props.dispose();
       basecamp.dispose();
-      underGeo.dispose();
-      waterGeo.dispose();
-      waterMat.dispose();
+      waterBuild.geo.dispose();
       // 그림자 맵(렌더 타깃)은 씬을 버려도 GPU에 남는다 — 전투를 반복하면
       // 진입마다 텍스처가 쌓이므로 여기서 명시적으로 반납한다 (DirectionalLight.dispose가
       // shadow.map/mapPass를 함께 버린다)
