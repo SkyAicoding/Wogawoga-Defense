@@ -178,13 +178,16 @@ async function pickBoardCell(
 }
 
 /**
- * rAF 2회 뒤부터 20프레임 관측한 드로우콜/삼각형 최대치 (renderInfo는 매 프레임 리셋된다).
- * 아래 두 테스트가 같은 잣대를 써야 두 곳의 실측값을 나란히 읽을 수 있다.
+ * rAF 2회 뒤부터 n프레임 관측한 드로우콜/삼각형 최대치 (renderInfo는 매 프레임 리셋된다).
+ * 아래 테스트들이 같은 잣대를 써야 여러 곳의 실측값을 나란히 읽을 수 있다.
+ *
+ * 비행 중인 투사체 수(proj)도 같이 낸다 — 통제 A/B가 두 표본의 조건이 같았음을 이 값으로
+ * 증명한다(그게 안 맞으면 델타 1이 아군이 아니라 화살 한 발의 몫이다).
  */
-function maxFrame(page: Page): Promise<{ calls: number; tris: number }> {
+function maxFrame(page: Page, frames = 20): Promise<{ calls: number; tris: number; proj: number }> {
   return page.evaluate(
-    () =>
-      new Promise<{ calls: number; tris: number }>((res) => {
+    (n) =>
+      new Promise<{ calls: number; tris: number; proj: number }>((res) => {
         const g = window.__wgd!;
         let calls = 0;
         let tris = 0;
@@ -193,12 +196,113 @@ function maxFrame(page: Page): Promise<{ calls: number; tris: number }> {
           const r = g.renderInfo();
           calls = Math.max(calls, r.calls);
           tris = Math.max(tris, r.triangles);
-          if (++i >= 20) res({ calls, tris });
+          if (++i >= n) res({ calls, tris, proj: g.sim.state.projectiles.length });
           else requestAnimationFrame(step);
         };
         requestAnimationFrame(() => requestAnimationFrame(step));
       }),
+    frames,
   );
+}
+
+/**
+ * **합성 최악 프레임 레시피** — 아래 두 예산 테스트가 공유한다.
+ * 후반 웨이브를 불러 동시 생존을 최대로 채우고(스테이지1 웨이브 49 = 56마리), 종을 16종으로
+ * 흩어 메시 수를 최대화하고, 만렙 T5 타워 12기 + 마을 만렙 + 아군 정원을 세운 뒤
+ * 전원 반피로 깎아 오버레이(체력바)까지 켜고 얼린다.
+ *
+ * 두 테스트가 **같은 함수**를 써야 s1 값과 s2~s6 값을 나란히 읽을 수 있다 — 레시피가
+ * 한쪽에서만 흘러가면 표가 통째로 거짓이 된다(이 파일이 실제로 겪은 사고다).
+ * 호출 전제: 이미 전투 화면이고 `window.__wgd`가 준비됐을 것.
+ */
+async function buildWorstFrame(
+  page: Page,
+): Promise<{ towers: number; enemies: number; allies: number }> {
+  const built = await page.evaluate(() => {
+    const g = window.__wgd!;
+    const sim = g.sim;
+    const st = sim.state as unknown as {
+      gold: number;
+      baseHp: number;
+      baseHpMax: number;
+      waveIndex: number;
+      hand: readonly unknown[];
+      towers: { id: number; hp: number; maxHp: number }[];
+      enemies: { defId: string; hp: number; maxHp: number; dist: number }[];
+      allies: { hp: number; maxHp: number }[];
+    };
+    // 1) 만렙 T5 타워 12기
+    let n = 0;
+    outer: for (let z = 0; z < 40 && n < 12; z++) {
+      for (let x = 0; x < 40 && n < 12; x++) {
+        if (!sim.canPlaceAt(x, z)) continue;
+        st.gold = 99_999_999;
+        for (let h = 0; h < st.hand.length; h++) {
+          if (g.place(h, x, z)) {
+            n++;
+            continue outer;
+          }
+        }
+      }
+    }
+    for (let round = 0; round < 6; round++) {
+      st.gold = 99_999_999;
+      for (const t of st.towers) sim.applyCommand({ type: 'upgradeTower', towerId: t.id });
+    }
+    // 2) 마을 만렙
+    for (let i = 0; i < 8; i++) {
+      st.gold = 99_999_999;
+      g.upgradeBase();
+    }
+    // 3) 적 — 후반 웨이브를 불러 놓고 죽지도 새지도 않게 붙잡아 둔다
+    st.baseHp = 1e9;
+    st.baseHpMax = 1e9;
+    st.waveIndex = 48;
+    g.callWave();
+    for (let k = 0; k < 3000 && st.enemies.length < 60; k++) {
+      g.ff(1);
+      for (const e of st.enemies) {
+        e.maxHp = 1e7;
+        e.hp = 1e7;
+        if (e.dist > 4) e.dist = 4;
+      }
+      for (const t of st.towers) t.hp = t.maxHp;
+      st.baseHp = 1e9;
+    }
+    // 4) 종을 전부 흩어 메시 수를 최대화 (종마다 InstancedMesh가 따로다)
+    const IDS = [
+      'raptor', 'compy', 'trike', 'ptera', 'ankylo', 'boar', 'warrior', 'shaman',
+      'blade', 'lancer', 'archer', 'hexer', 'mammoth', 'spino', 'trex', 'golem',
+    ];
+    st.enemies.forEach((e, i) => {
+      e.defId = IDS[i % IDS.length]!;
+    });
+    // 5) 아군 정원
+    for (let i = 0; i < 6; i++) {
+      st.gold = 99_999_999;
+      g.trainAlly((['clubber', 'slinger', 'guardian'] as const)[i % 3]!);
+    }
+    return { towers: st.towers.length, enemies: st.enemies.length, allies: st.allies.length };
+  });
+
+  // 스폰 팝(0.28초)이 끝나도록 실시간을 흘린 뒤 얼린다 — 팝 중에는 스케일이 0에 가깝다
+  await page.waitForTimeout(1000);
+  await page.evaluate(() => {
+    const g = window.__wgd!;
+    const st = g.sim.state as unknown as {
+      enemies: { hp: number; maxHp: number }[];
+      towers: { hp: number; maxHp: number }[];
+      allies: { hp: number; maxHp: number }[];
+    };
+    g.pause(true);
+    // 반피로 깎아 오버레이(체력바)까지 켠다
+    for (const e of st.enemies) e.hp = Math.max(1, Math.round(e.maxHp * 0.5));
+    for (const t of st.towers) t.hp = Math.max(1, Math.round(t.maxHp * 0.5));
+    for (const a of st.allies) a.hp = Math.max(1, Math.round(a.maxHp * 0.5));
+    g.ff(1);
+  });
+  await page.waitForTimeout(500);
+  return built;
 }
 
 test('타이틀 → 로비 → 전투 → 웨이브 진행 (콘솔 에러 0, 드로우콜 예산)', async ({ page }) => {
@@ -1251,26 +1355,32 @@ test('홈타운: 기지가 쏜다 · 레벨업 2단 확인 · 골드/최대레�
  */
 test('최악 프레임 예산 — 삼각형 150,000 / 드로우콜 상한', async ({ page }) => {
   /*
-   * ⚠ **이 예산은 스테이지1에서만 검증된다** (8단계 검증에서 확인, 미해결).
-   * 진입 동선이 `goto → click(100,300) → 전투`라 언제나 s1이다. 같은 레시피를 다른
-   * 스테이지에 적용해 재면(1280×800 · swiftshader · 배치 가능한 칸을 전부 채운 구성):
-   *    s1 143,601 / s2 144,469 / s3 **160,212** / s4 **151,959** / s5 **154,598** / s6 **150,360**
-   * 즉 s3~s6은 이 레시피에서 삼각형 예산(150,000)을 넘는다. **아군 기능 탓이 아니다** —
-   * 아군 0명 통제에서도 s3은 152,880으로 이미 넘고, 아군 6명의 몫은 5,800~7,700으로
-   * 스테이지에 무관하다(5단계 아군 기능 자체의 값). 출격 한계선이 어디든 몫은 0이다
-   * (아군은 항상 그려진다 — render/views/enemyview.ts frustumCulled = false).
-   * 완화 요인: 이 초과는 아래 '16종 흩기'라는 **합성 최악**에서만 난다 — 자연 편성이면
-   * s3·s5도 예산 안이다. 고치려면 프레임 구성이 아니라 지오메트리(스테이지 소품/타워
-   * LOD) 쪽을 손대야 해서 이번 작업 범위 밖에 뒀다.
+   * 이 테스트가 실제로 재는 것은 **스테이지1**이다 — 진입 동선이
+   * `goto → click(100,300) → 전투`라 언제나 s1이다. s2~s6은 바로 아래
+   * '스테이지별 최악 프레임 예산' 테스트가 같은 레시피(buildWorstFrame)로 따로 잰다.
    *
-   * ── ⚠ 위 스테이지별 수치는 **낡았다** (798d7ad 소품 개편 이전 값) ─────────────
-   * 그 개편이 소품을 섀도 캐스터에서 빼면서(propsMesh.castShadow = false) 스테이지당
-   * 1.6~2.7만 삼각형이 회수됐다. 같은 레시피를 다시 재면 s1 은 143,601 이 아니라
-   *   개편 직후            72콜 / 127,096
-   *   맨 셀 바닥 결 추가 후 **74콜 / 130,647**  (여유 19,353 = 12.9% · 콜 여유 16)
-   * 이다. 곧 "어차피 넘고 있다"도 "여유가 없다"도 둘 다 틀린 판단이 된다.
-   * s2~s6 은 진입 동선이 언제나 s1 이라 아직 재측정하지 못했다 — 위 목록을 근거로
-   * 쓰기 전에 반드시 다시 재라.
+   * ── 스테이지별 실측 (desktop 1280×800 · swiftshader · 같은 레시피 · 2회 반복 중 최댓값) ──
+   *    s1 75콜 / 131,483   s2 73콜 / 122,971   s3 76콜 / 137,991
+   *    s4 75콜 / 134,032   s5 75콜 / 134,675   s6 73콜 / 134,069
+   * **6판 전부 예산 안**이다. 최악은 s3으로 삼각형 150,000의 92.0%(여유 12,009),
+   * 드로우콜 90의 84%(여유 14). s2가 유독 낮은 것은 이 판에서 동시 생존이 49마리까지만
+   * 차기 때문이다(다른 판은 60) — 스테이지가 가벼워서가 아니라 표본이 작다.
+   *
+   * ⚠ 이 표는 예전에 "s3~s6은 예산을 넘는다(160,212 / 151,959 / 154,598 / 150,360)"였다.
+   * 그 값들은 **798d7ad 소품 개편 이전**이고 지금은 거짓이다 — 그 개편이 소품을 섀도
+   * 캐스터에서 빼면서(propsMesh.castShadow = false) 스테이지당 1.6~2.7만 삼각형이
+   * 회수됐다. 존재하지 않는 초과를 고치려 들지 마라. 다만 아래 사실은 여전히 유효하다:
+   * 아군 6명의 몫은 5,800~7,700으로 스테이지에 무관하고(아군은 절두체 컬링을 꺼서 항상
+   * 그려진다 — render/views/enemyview.ts frustumCulled = false), 이 구성은 '16종 흩기'라는
+   * **합성 최악**이라 자연 편성보다 늘 무겁다.
+   *
+   * ── 재측정하는 법 ─────────────────────────────────────────────────────────
+   * 예전 주석은 "진입 동선이 언제나 s1이라 s2~s6은 재측정하지 못했다"고 적어 두었지만,
+   * 지금은 설정의 '모든 스테이지 열기'(settings.unlockAll)가 그 벽을 없앴다.
+   * 동선은 아래 enterStageWithUnlockAll()이 그대로 보여 준다:
+   *   로비 ⚙ → '모든 스테이지 열기' 스위치 → ← 로 로비 복귀 → 캐러셀 scrollLeft로 카드 이동 → 전투
+   * 세이브를 손으로 심을 필요가 없다 — 심으려면 crc 봉투(core/save.ts)를 테스트가 다시
+   * 구현해야 하고, 그 사본은 세이브 포맷이 바뀌는 날 조용히 틀려진다.
    *
    * 기본 60초로는 모자란다 — **문턱이 아니라 시간의 문제**다.
    * 이 테스트는 표본을 3개(worst / withAlly / noAlly) 뽑고 표본 하나가 rAF 30프레임인데,
@@ -1294,117 +1404,13 @@ test('최악 프레임 예산 — 삼각형 150,000 / 드로우콜 상한', asyn
   await page.waitForFunction(() => window.__wgd !== undefined);
   await page.waitForTimeout(900);
 
-  /**
-   * rAF 2회 뒤부터 n프레임 관측한 최대치 (renderInfo는 매 프레임 리셋된다).
-   * 비행 중인 투사체 수도 같이 낸다 — 아래 통제 A/B가 두 표본의 조건이 같았음을
-   * 이 값으로 증명한다(그게 안 맞으면 델타 1이 아군이 아니라 화살 한 발의 몫이다).
-   */
-  const sample = (): Promise<{ calls: number; tris: number; proj: number }> =>
-    page.evaluate(
-      () =>
-        new Promise<{ calls: number; tris: number; proj: number }>((res) => {
-          const g = window.__wgd!;
-          let calls = 0;
-          let tris = 0;
-          let i = 0;
-          const step = (): void => {
-            const r = g.renderInfo();
-            calls = Math.max(calls, r.calls);
-            tris = Math.max(tris, r.triangles);
-            if (++i >= 30) res({ calls, tris, proj: g.sim.state.projectiles.length });
-            else requestAnimationFrame(step);
-          };
-          requestAnimationFrame(() => requestAnimationFrame(step));
-        }),
-    );
+  const sample = (): Promise<{ calls: number; tris: number; proj: number }> => maxFrame(page, 30);
 
-  const built = await page.evaluate(() => {
-    const g = window.__wgd!;
-    const sim = g.sim;
-    const st = sim.state as unknown as {
-      gold: number;
-      baseHp: number;
-      baseHpMax: number;
-      waveIndex: number;
-      hand: readonly unknown[];
-      towers: { id: number; hp: number; maxHp: number }[];
-      enemies: { defId: string; hp: number; maxHp: number; dist: number }[];
-      allies: { hp: number; maxHp: number }[];
-    };
-    // 1) 만렙 T5 타워 12기
-    let n = 0;
-    outer: for (let z = 0; z < 40 && n < 12; z++) {
-      for (let x = 0; x < 40 && n < 12; x++) {
-        if (!sim.canPlaceAt(x, z)) continue;
-        st.gold = 99_999_999;
-        for (let h = 0; h < st.hand.length; h++) {
-          if (g.place(h, x, z)) {
-            n++;
-            continue outer;
-          }
-        }
-      }
-    }
-    for (let round = 0; round < 6; round++) {
-      st.gold = 99_999_999;
-      for (const t of st.towers) sim.applyCommand({ type: 'upgradeTower', towerId: t.id });
-    }
-    // 2) 마을 만렙
-    for (let i = 0; i < 8; i++) {
-      st.gold = 99_999_999;
-      g.upgradeBase();
-    }
-    // 3) 적 — 후반 웨이브를 불러 놓고 죽지도 새지도 않게 붙잡아 둔다
-    st.baseHp = 1e9;
-    st.baseHpMax = 1e9;
-    st.waveIndex = 48;
-    g.callWave();
-    for (let k = 0; k < 3000 && st.enemies.length < 60; k++) {
-      g.ff(1);
-      for (const e of st.enemies) {
-        e.maxHp = 1e7;
-        e.hp = 1e7;
-        if (e.dist > 4) e.dist = 4;
-      }
-      for (const t of st.towers) t.hp = t.maxHp;
-      st.baseHp = 1e9;
-    }
-    // 4) 종을 전부 흩어 메시 수를 최대화 (종마다 InstancedMesh가 따로다)
-    const IDS = [
-      'raptor', 'compy', 'trike', 'ptera', 'ankylo', 'boar', 'warrior', 'shaman',
-      'blade', 'lancer', 'archer', 'hexer', 'mammoth', 'spino', 'trex', 'golem',
-    ];
-    st.enemies.forEach((e, i) => {
-      e.defId = IDS[i % IDS.length]!;
-    });
-    // 5) 아군 정원
-    for (let i = 0; i < 6; i++) {
-      st.gold = 99_999_999;
-      g.trainAlly((['clubber', 'slinger', 'guardian'] as const)[i % 3]!);
-    }
-    return { towers: st.towers.length, enemies: st.enemies.length, allies: st.allies.length };
-  });
+  const built = await buildWorstFrame(page);
   expect(built.towers, '타워 12기').toBeGreaterThanOrEqual(10);
   expect(built.enemies, '동시 생존 적').toBeGreaterThanOrEqual(40);
   expect(built.allies, '아군 정원').toBeGreaterThanOrEqual(6);
 
-  // 스폰 팝(0.28초)이 끝나도록 실시간을 흘린 뒤 얼린다 — 팝 중에는 스케일이 0에 가깝다
-  await page.waitForTimeout(1000);
-  await page.evaluate(() => {
-    const g = window.__wgd!;
-    const st = g.sim.state as unknown as {
-      enemies: { hp: number; maxHp: number }[];
-      towers: { hp: number; maxHp: number }[];
-      allies: { hp: number; maxHp: number }[];
-    };
-    g.pause(true);
-    // 반피로 깎아 오버레이(체력바)까지 켠다
-    for (const e of st.enemies) e.hp = Math.max(1, Math.round(e.maxHp * 0.5));
-    for (const t of st.towers) t.hp = Math.max(1, Math.round(t.maxHp * 0.5));
-    for (const a of st.allies) a.hp = Math.max(1, Math.round(a.maxHp * 0.5));
-    g.ff(1);
-  });
-  await page.waitForTimeout(500);
   const worst = await sample();
   const msg = `최악 프레임 ${JSON.stringify(worst)} 구성 ${JSON.stringify(built)}`;
 
@@ -1468,6 +1474,109 @@ test('최악 프레임 예산 — 삼각형 150,000 / 드로우콜 상한', asyn
   ).toBeLessThanOrEqual(15_000);
 
   await page.evaluate(() => window.__wgd?.pause(false));
+  expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
+});
+
+/**
+ * 설정의 '모든 스테이지 열기'를 **UI 그대로** 켠다 (로비 ⚙ → 스위치 → ← 로 복귀).
+ *
+ * localStorage에 세이브를 직접 심지 않는 이유: 그러려면 crc 봉투(core/save.ts)를 테스트가
+ * 다시 구현해야 하고, 그 사본은 세이브 포맷이 바뀌는 날 조용히 틀려진다(테스트는 계속
+ * 초록인 채로). 여기서는 실제 사용자가 누르는 경로를 그대로 밟으므로, 토글이 사라지거나
+ * 라벨이 바뀌면 이 테스트가 먼저 빨개진다.
+ * 호출 전제: 로비 화면일 것. 끝나면 다시 로비다.
+ */
+async function turnOnUnlockAll(page: Page): Promise<void> {
+  await page.locator('.topbar .icon-btn').last().click(); // ⚙
+  const sw = page.locator('.set-row', { hasText: '모든 스테이지 열기' }).getByRole('switch');
+  await expect(sw, '설정에 「모든 스테이지 열기」 스위치가 없다').toHaveCount(1);
+  await sw.click();
+  await expect(sw).toHaveAttribute('aria-checked', 'true');
+  await page.locator('.topbar .icon-btn').first().click(); // ← 로비로
+  await page.waitForTimeout(300);
+}
+
+/**
+ * 로비 캐러셀을 stageId 카드로 옮기고 전투에 들어간다.
+ * 카드를 클릭해도 선택이 바뀌지 않는다 — 로비는 **캐러셀 스크롤 위치**로만 선택을 정한다
+ * (ui/screens/lobby.ts의 scroll 리스너). 그래서 scrollLeft를 직접 세운다.
+ * 화살표(◀▶)를 연타하는 방법도 있지만 smooth 스크롤이라 대기 시간이 기계 속도에 얹힌다.
+ */
+async function enterStageWithUnlockAll(page: Page, stageId: number): Promise<number | null> {
+  await page.goto('/?test=1', { waitUntil: 'networkidle' });
+  await page.mouse.click(100, 300); // 타이틀 → 로비
+  await page.waitForTimeout(400);
+  await page.evaluate((idx) => {
+    const car = document.querySelector('.carousel') as HTMLElement;
+    const card = car.querySelectorAll<HTMLElement>('.stage-card')[idx]!;
+    car.scrollLeft = card.offsetLeft - car.offsetLeft;
+  }, stageId - 1);
+  await page.waitForTimeout(500);
+  await page.getByRole('button', { name: /전투/ }).first().click();
+  await page.waitForFunction(() => window.__wgd !== undefined);
+  await page.waitForTimeout(900);
+  // 정말 그 스테이지에 들어왔는지 — 캐러셀이 밀리면 조용히 s1을 6번 재게 된다
+  return page.evaluate(
+    () =>
+      (window.__wgd!.sim as unknown as { ctx?: { opts?: { stage?: { id?: number } } } }).ctx?.opts
+        ?.stage?.id ?? null,
+  );
+}
+
+/**
+ * **스테이지별 최악 프레임 예산** — 위 테스트가 s1만 재던 구멍을 메운다.
+ *
+ * 예전에는 "진입 동선이 언제나 s1이라 s2~s6은 잴 수 없다"고 주석에만 적혀 있었고, 그동안
+ * 낡은 초과 목록(s3 160,212 …)이 근거처럼 인용됐다. 설정의 '모든 스테이지 열기'가 생기면서
+ * 그 벽이 없어졌으므로 여기서 **실제로** 6판을 전부 잰다.
+ *
+ * 실측(desktop 1280×800 · swiftshader · 2회 반복 중 최댓값):
+ *   s1 75콜 / 131,483   s2 73 / 122,971   s3 76 / 137,991
+ *   s4 75 / 134,032     s5 75 / 134,675   s6 73 / 134,069
+ * 최악 s3이 삼각형 예산의 92.0%. 한 판이 약 18초라 6판 + 로딩으로 2분 안쪽이다.
+ *
+ * desktop에서만 돈다. 레시피의 뷰포트(1280×800)가 위 표의 전제이고, mobile-portrait에서
+ * 한 벌 더 돌리면 **같은 판정을 2분 더 주고 사는 것**이라서다. 뷰포트가 바뀌면 컬링되는
+ * 소품이 달라져 표와 나란히 읽을 수도 없다. 모바일 프레임 예산은 위 '최악 프레임 예산'
+ * 테스트가 두 프로젝트 모두에서 계속 지킨다.
+ */
+test('스테이지별 최악 프레임 예산 — s1~s6 전부 삼각형 150,000 / 드로우콜 90', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop', '표의 전제인 1280×800에서만 잰다');
+  test.setTimeout(300_000);
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/?test=1', { waitUntil: 'networkidle' });
+  await page.mouse.click(100, 300); // 타이틀 → 로비
+  await page.waitForTimeout(400);
+  await turnOnUnlockAll(page);
+
+  const table: string[] = [];
+  for (const stageId of [1, 2, 3, 4, 5, 6]) {
+    const entered = await enterStageWithUnlockAll(page, stageId);
+    expect(entered, `s${stageId}에 들어가려 했는데 s${entered}에 들어왔다`).toBe(stageId);
+
+    const built = await buildWorstFrame(page);
+    const worst = await maxFrame(page, 30);
+    const msg = `s${stageId} ${JSON.stringify(worst)} 구성 ${JSON.stringify(built)}`;
+    table.push(`s${stageId} ${worst.calls}콜 / ${worst.tris}`);
+
+    // 구성이 실제로 서 있었는지 — 빈 판을 재고 초록이 뜨면 이 테스트는 공허하다
+    expect(built.towers, msg).toBeGreaterThanOrEqual(10);
+    expect(built.enemies, msg).toBeGreaterThanOrEqual(40);
+    expect(built.allies, msg).toBeGreaterThanOrEqual(6);
+    expect(worst.tris, msg).toBeGreaterThan(50_000);
+
+    expect(worst.tris, msg).toBeLessThanOrEqual(150_000);
+    expect(worst.calls, msg).toBeLessThanOrEqual(90);
+    await page.evaluate(() => window.__wgd?.pause(false));
+  }
+  testInfo.annotations.push({ type: '실측', description: table.join(' · ') });
   expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
 });
 

@@ -16,13 +16,16 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
   GD_CELL_TRI_BUDGET,
+  GD_CONTRAST_BAND,
   GD_ELEMENTS,
   GD_ELEMENT_TRI_BUDGET,
   GD_STAGE_CAP,
   GD_ZONES,
   buildGroundDetail,
   flatsTriCount,
+  gdGroundLuma,
   gdKit,
+  gdLuma,
 } from '@/render/meshlib/grounddetail';
 import {
   buildableCells,
@@ -119,6 +122,140 @@ describe('바닥 결 원가표', () => {
     expect(innerMax['jungle'], '정글이 가장 빽빽해야 한다').toBeGreaterThan(innerMax['desert'] as number);
     // eslint-disable-next-line no-console
     console.log('바이옴 밀도:\n  ' + rows.join('\n  '));
+  });
+});
+
+const ALL_BIOMES = ['grassland', 'jungle', 'desert', 'snow', 'swamp', 'volcano'] as const;
+
+/**
+ * 규칙 ④ — **명도 대비**.
+ *
+ * 이 파일에는 오랫동안 색/휘도 어서션이 **한 건도** 없었다. 그동안 grounddetail.ts
+ * 머리말은 "±20% 이내"를 선언했지만 구현은 바닥 얼룩에만 있었고, 액센트는 팔레트
+ * 원색을 그대로 썼다. 실측(수정 전)이 그 격차를 그대로 보여 준다:
+ *   초원 지면 0.732 ← twig(P.soil) 0.343(−53%) · flowerWhite 0.948(+30%)
+ *   설원 지면 0.923 ← deadWoodLit 0.297(−68%) · C.bark 0.310(−66%)
+ * ±20% 안에 든 것은 flowerYellow(+10%) 하나뿐이었다. 즉 규칙이 아니라 주석이었다.
+ *
+ * 그래서 여기서 잠그는 것은 두 가지다.
+ *  (a) **모든 바이옴 × 모든 zone × 모든 FlatSpec 색**이 그 바이옴 지면 평균 휘도
+ *      기준 밴드 안이다 — 액센트든 바닥 얼룩이든 예외 없다.
+ *  (b) 밴드 자체가 슬그머니 넓어지지 않는다. 밴드를 넓히는 것은 "규칙을 지켰다"가
+ *      아니라 "규칙을 바꿨다"이므로, 상수·머리말 주석·이 테스트가 **같이** 움직여야
+ *      한다는 것을 (b)가 강제한다.
+ */
+describe('대비 밴드 (규칙 ④)', () => {
+  it('밴드 폭이 선언값 그대로다 — 넓히려면 주석·구현·테스트를 같이 고쳐라', () => {
+    expect(GD_CONTRAST_BAND, '규칙 ④ 밴드 폭이 바뀌었다').toBeCloseTo(0.28, 6);
+    // 0.30 을 넘기면 캡처에서 하드 엣지가 생겨 "칸 안의 물건"으로 읽히기 시작한다
+    // (수정 전 잔가지 −53% / 흰 꽃 +30% 이 정확히 그 상태였다).
+    expect(GD_CONTRAST_BAND, '이 이상은 골드 제거 대상 오인이 시작된다').toBeLessThanOrEqual(0.30);
+    expect(GD_CONTRAST_BAND, '너무 조이면 레이어가 통째로 증발한다').toBeGreaterThanOrEqual(0.18);
+  });
+
+  it('6개 바이옴 모든 zone 의 모든 FlatSpec 색이 지면 휘도 대비 밴드 안이다', () => {
+    const rows: string[] = [];
+    for (const biome of ALL_BIOMES) {
+      const ref = gdGroundLuma(biome);
+      const kit = gdKit(biome);
+      let lo = Infinity;
+      let hi = -Infinity;
+      let n = 0;
+      for (const zone of GD_ZONES) {
+        // 바닥 얼룩 색
+        for (const c of kit.soil[zone]) {
+          const d = (gdLuma(c) - ref) / ref;
+          expect(
+            Math.abs(d),
+            `${biome}/${zone} 바닥 얼룩 #${c.toString(16)} 대비 ${(d * 100).toFixed(0)}%`,
+          ).toBeLessThanOrEqual(GD_CONTRAST_BAND + 1e-6);
+          if (d < lo) lo = d;
+          if (d > hi) hi = d;
+          n++;
+        }
+        // 액센트의 모든 판
+        for (const flats of kit.accent[zone]) {
+          for (const f of flats) {
+            const d = (gdLuma(f.color) - ref) / ref;
+            expect(
+              Math.abs(d),
+              `${biome}/${zone} 액센트 판 #${f.color.toString(16)} 대비 ${(d * 100).toFixed(0)}%`,
+            ).toBeLessThanOrEqual(GD_CONTRAST_BAND + 1e-6);
+            if (d < lo) lo = d;
+            if (d > hi) hi = d;
+            n++;
+          }
+        }
+      }
+      rows.push(
+        `${biome.padEnd(9)} 지면 ${ref.toFixed(3)} · 판 ${String(n).padStart(3)}개 · ` +
+          `대비 ${(lo * 100).toFixed(0)}% ~ ${(hi >= 0 ? '+' : '') + (hi * 100).toFixed(0)}%`,
+      );
+    }
+    // eslint-disable-next-line no-console
+    console.log('대비 밴드 실측(수정 후):\n  ' + rows.join('\n  '));
+  });
+
+  it('밴드가 색을 다 뭉개지는 않는다 — 밝은 쪽·어두운 쪽이 둘 다 살아 있다', () => {
+    // 클램프를 "전부 지면색으로" 구현하면 위 테스트는 통과하면서 판이 죽는다.
+    // 그래서 각 바이옴이 밴드의 **양쪽 절반을 다 쓰는지**를 같이 잠근다.
+    for (const biome of ALL_BIOMES) {
+      const ref = gdGroundLuma(biome);
+      const kit = gdKit(biome);
+      let lo = 0;
+      let hi = 0;
+      for (const zone of GD_ZONES) {
+        for (const flats of kit.accent[zone]) {
+          for (const f of flats) {
+            const d = (gdLuma(f.color) - ref) / ref;
+            if (d < lo) lo = d;
+            if (d > hi) hi = d;
+          }
+        }
+      }
+      expect(hi - lo, `${biome} 액센트 대비 폭이 무너졌다`).toBeGreaterThan(0.18);
+      expect(-lo, `${biome} 어두운 쪽 액센트가 사라졌다`).toBeGreaterThan(0.08);
+      expect(hi, `${biome} 밝은 쪽 액센트가 사라졌다`).toBeGreaterThan(0.02);
+    }
+  });
+
+  it('직각 판(sides:4)이 없다 — 이 크기에서 사각형은 색종이 조각으로 읽힌다', () => {
+    /*
+     * 확대 캡처에서 flowerDot 의 0.072 사각 꽃잎이 **흰 정사각형 스티커**로,
+     * pebbleFlat/shellFleck 의 곁판이 **회갈색 정사각형**으로 읽혔다. 화면상 3~4px
+     * 에서는 안티에일리어싱을 거쳐도 직각만 살아남기 때문이다. 5각 이상이면 같은
+     * 픽셀 수에서 둥글게 뭉개진다 — 원가는 판당 +1 tri 뿐이다.
+     */
+    for (const [name, flats] of Object.entries(GD_ELEMENTS)) {
+      for (const f of flats) {
+        expect(f.sides ?? 4, `${name}: 직각 판이 남아 있다`).toBeGreaterThanOrEqual(3);
+        expect(f.sides ?? 4, `${name}: 사각 판은 색종이 조각으로 읽힌다`).not.toBe(4);
+      }
+    }
+  });
+
+  it('잔가지는 획이 하나다 — 두 획이 만나면 체크마크(✓)/화살표(➤) 글리프가 된다', () => {
+    /*
+     * 경로 타일에는 이미 진행 방향 셰브런(▶)이 깔려 있다. 판 위의 화살표 모양은
+     * 전부 "길 표시"로 먼저 읽히므로, 이 레이어에서 예각으로 갈라지는 2획 도형은
+     * 못생긴 정도가 아니라 **기호 충돌**이다. 각도를 눕히는 미세 조정으로는 못 고친다
+     * (1차 90° → 꺾쇠 ⌐, 2차 0.52rad → 체크마크 ✓ 로 같은 실패를 두 번 반복했다).
+     * twig 은 shoreCommon 을 통해 **6개 바이옴 전부의 물가**에 깔리므로 파급이 크다.
+     */
+    expect(GD_ELEMENTS['twig']?.length, 'twig 이 다시 여러 획이 됐다').toBe(1);
+    expect(flatsTriCount(GD_ELEMENTS['twig'] as never), 'twig 은 1 tri 여야 한다').toBe(1);
+    // shoreCommon 에 실린 잔가지도 같은 규약인지 — 6판 전부의 물가 편성을 훑는다
+    for (const biome of ALL_BIOMES) {
+      for (const flats of gdKit(biome).accent.shore) {
+        // 잎/획 요소(sides:3)만 골라 본다: 한 요소 안에서 원점을 공유하는 획이
+        // 2개뿐이면 그게 정확히 ✓ 다. 3개 이상(풀 포기·균열)은 부채라 글리프가 아니다.
+        const strokes = flats.filter((f) => f.sides === 3);
+        expect(
+          strokes.length,
+          `${biome}/shore 에 2획 요소가 있다 — ✓ 글리프가 된다`,
+        ).not.toBe(2);
+      }
+    }
   });
 });
 

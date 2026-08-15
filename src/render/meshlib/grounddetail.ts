@@ -61,9 +61,14 @@
  *     어지럽히면 "여기 지을 수 있다"가 흐려진다. 중앙에는 미묘한 색 얼룩만 둔다.
  *  ③ **셀 밖으로 안 샌다** (GD_FIT 0.47 + 요소 외접 반경). 이웃 칸 장식과 붙어
  *     카펫이 되면 타일 격자가 아예 지워져 조준이 어려워진다.
- *  ④ **명도 대비 ±20% 이내.** 이보다 세면 "칸 안에 물건이 있다"로 읽혀 유저가
- *     골드 제거 대상으로 오인한다 — 이 레이어의 1순위 실패 모드다. 그래서 세로로
- *     선 것·그림자를 만드는 것은 하나도 넣지 않는다.
+ *  ④ **명도 대비 ±28%(GD_CONTRAST_BAND) 이내.** 이보다 세면 "칸 안에 물건이 있다"로
+ *     읽혀 유저가 골드 제거 대상으로 오인한다 — 이 레이어의 1순위 실패 모드다.
+ *     그래서 세로로 선 것·그림자를 만드는 것은 하나도 넣지 않는다.
+ *     기준선은 **바이옴 지면 램프의 평균 휘도**(gdGroundLuma), 재는 자는 Rec.709 이고,
+ *     실제로 당기는 곳은 clampKit — 편성표(kitOf)를 통과한 색에는 밴드 밖이 없다.
+ *     ⚠ 오래 이 줄이 "±20%"라고만 적혀 있고 **구현은 바닥 얼룩에만** 있었다. 그때
+ *       실측은 잔가지 −53% / 흰 꽃 +30% / 설원 마른가지 −68% 였다 — 즉 규칙이 아니라
+ *       희망이었다. 숫자를 바꾸려거든 GD_CONTRAST_BAND 주석의 "세 곳" 경고를 읽어라.
  *
  * 실측(오프라인, tests/render/grounddetail.test.ts 가 잠근다): 셀당 평균 17~29,
  * 스테이지 총량 2,000~3,600. 캐스터가 아니므로 **프레임 청구는 ×1**이다.
@@ -144,6 +149,121 @@ function mix(a: number, b: number, t: number): number {
   return _ca.setHex(a).lerp(_cb.setHex(b), t).getHex();
 }
 
+// ── 규칙 ④ 대비 클램프 (선언이 아니라 구현) ─────────────────────────────────
+
+/**
+ * 이 레이어가 지면에서 벗어날 수 있는 **상대 휘도 폭**.
+ *
+ * ── 왜 0.20 이 아니라 0.28 인가 (캡처 실측) ───────────────────────────────
+ * 규칙 ④는 오래 ±20%라고 **주석에만** 적혀 있었고 액센트에는 구현이 없었다.
+ * 실제로 구현해 보니 두 방향에서 다른 답이 나왔다:
+ *  · **밝은 판(설원 지면 0.923)** — ±20% 하한이 0.738 이라, 마른 잔가지(0.297)와
+ *    나무껍질(0.310)이 **밝은 베이지**까지 끌려 올라와 눈 위에서 통째로 증발했다.
+ *    캡처 fix/band20/snow.png 확대에서 잔가지가 한 개도 보이지 않는다.
+ *  · **어두운 판(화산 지면 0.312)** — ±20% 상한이 0.374 라 유황·용암 결이 재색과
+ *    구분되지 않아 판이 회색 한 장이 됐다.
+ * 0.28 로 넓히면 두 판 다 요소가 다시 보이면서, 이 레이어의 1순위 실패 모드
+ * ("칸 안에 물건이 있다" → 골드 제거 대상 오인)는 그대로 막힌다 — 오인이 시작되는
+ * 지점은 실측상 **하드 엣지가 생기는 −40% 부근**이었다(수정 전 잔가지 −53%,
+ * 흰 꽃 +30%가 정확히 그 예다). 0.28 은 그 절반 아래다.
+ *
+ * ⚠ 이 숫자를 고치면 **세 곳을 같이** 고쳐라: 파일 머리 규칙 ④ 문구, 이 상수,
+ *   그리고 tests/render/grounddetail.test.ts 의 "대비 밴드" 케이스. 규칙이 주석에만
+ *   있고 코드가 어기는 상태가 바로 이 상수가 생긴 이유다.
+ */
+export const GD_CONTRAST_BAND = 0.28;
+
+/**
+ * Rec.709 상대 휘도. **팔레트 숫자(sRGB 바이트)를 그대로** 쓴다 — 선형 변환하지
+ * 않는 것이 중요하다. 이 판정의 목적은 물리적 밝기가 아니라 "눈에 얼마나 튀나"이고,
+ * 그건 화면에 나가는 sRGB 값에서 재야 한다. THREE.Color 를 거치면 컬러 매니지먼트가
+ * 선형으로 바꿔 버리므로 여기서는 비트 연산으로 직접 뽑는다.
+ */
+export function gdLuma(hex: number): number {
+  return (
+    (0.2126 * ((hex >> 16) & 0xff) + 0.7152 * ((hex >> 8) & 0xff) + 0.0722 * (hex & 0xff)) / 255
+  );
+}
+
+const _hsl = { h: 0, s: 0, l: 0 };
+
+/**
+ * 색상·채도는 두고 **명도만** 밴드 안으로 당긴다.
+ *
+ * 지면색 쪽으로 lerp 하는 쪽(구현이 한 줄이다)도 시도했고 접었다 — 흰 꽃이
+ * 32% 섞이는 순간 **연두색 얼룩**이 되어 꽃이 아니게 됐다. 색을 섞으면 대비와 함께
+ * 색상까지 지워진다. 그래서 HSL 의 h·s 를 고정하고 l 만 움직인다: 흰 꽃은 크림색으로,
+ * 설원의 검은 잔가지는 **볕에 바랜 회갈색**으로 내려앉는다 — 둘 다 자기 색을 지킨다.
+ *
+ * l → 휘도는 (h·s 고정 시) 단조증가라 이분 탐색이 항상 수렴한다. 색은 kit 을 만들 때
+ * 한 번만 통과하고 KITS 에 캐시되므로 프레임 비용은 0이다.
+ */
+function toBand(hex: number, refLuma: number, band = GD_CONTRAST_BAND): number {
+  const lo = refLuma * (1 - band);
+  const hi = refLuma * (1 + band);
+  const l = gdLuma(hex);
+  if (l >= lo && l <= hi) return hex;
+  const target = l < lo ? lo : hi;
+  // 도달 불가능한 상한(밝은 판에서 hi > 1) — 흰색이 갈 수 있는 끝이다
+  if (target >= 1) return 0xffffff;
+  const up = target > l;
+  _ca.setHex(hex).getHSL(_hsl);
+  let a = 0;
+  let b = 1;
+  for (let i = 0; i < 22; i++) {
+    const m = (a + b) / 2;
+    if (gdLuma(_cb.setHSL(_hsl.h, _hsl.s, m).getHex()) < target) a = m;
+    else b = m;
+  }
+  /*
+   * 마지막 한 칸은 **양자화 보정**이다. 탐색은 실수로 수렴하지만 결과는 8비트로
+   * 반올림되므로, 수렴값이 밴드 경계 바로 **바깥**(−28.2% 같은 값)에 떨어질 수 있다.
+   * 테스트가 실제로 그걸 잡았다. 그래서 밴드 안쪽으로 1/512 씩 밀어 마무리한다 —
+   * 눈에 보이지 않는 차이지만, 이 레이어의 계약이 "밴드 안"이므로 안이어야 한다.
+   */
+  let m = (a + b) / 2;
+  let out = _cb.setHSL(_hsl.h, _hsl.s, m).getHex();
+  for (let i = 0; i < 32 && (up ? gdLuma(out) < target : gdLuma(out) > target); i++) {
+    m = Math.min(1, Math.max(0, m + (up ? 1 / 512 : -1 / 512)));
+    out = _cb.setHSL(_hsl.h, _hsl.s, m).getHex();
+  }
+  return out;
+}
+
+/** 바이옴 지면 램프의 평균 휘도 — 대비를 재는 기준선 */
+export function gdGroundLuma(biome: BiomeId): number {
+  const g = BIOMES[biome].ground;
+  if (g.length === 0) return 0.5;
+  let s = 0;
+  for (const c of g) s += gdLuma(c);
+  return s / g.length;
+}
+
+/** 판 목록의 모든 색을 밴드 안으로 (요소 함수가 어떤 색을 고르든 여기를 반드시 지난다) */
+function bandFlats(flats: Flats, refLuma: number): Flats {
+  return flats.map((f) => {
+    const c = toBand(f.color, refLuma);
+    return c === f.color ? f : { ...f, color: c };
+  });
+}
+
+/**
+ * 편성 전체를 밴드에 통과시킨다.
+ *
+ * 요소 함수(twig·flowerDot…) 안에서 색을 손보지 않고 **표를 만든 뒤 한 번에** 거는
+ * 것이 핵심이다. 그래야 "새 액센트를 추가했는데 대비 클램프를 깜빡했다"가 구조적으로
+ * 불가능해진다 — kitOf 를 통과한 편성에는 밴드 밖 색이 존재할 수 없다.
+ */
+function clampKit(raw: GdKit, refLuma: number): GdKit {
+  const soil = {} as Record<Zone, readonly number[]>;
+  const accent = {} as Record<Zone, readonly Flats[]>;
+  for (const z of ZONES) {
+    soil[z] = raw.soil[z].map((c) => toBand(c, refLuma));
+    accent[z] = raw.accent[z].map((f) => bandFlats(f, refLuma));
+  }
+  return { soil, soilW: raw.soilW, accent, count: raw.count };
+}
+
 // ── 존 ─────────────────────────────────────────────────────────────────────
 /**
  * 셀의 성격. **개수가 아니라 풍성함과 색만** 존마다 다르다 (셀 개수는 불변).
@@ -210,33 +330,64 @@ function grassSprig(color: number): Flats {
 }
 
 /**
- * 작은 꽃 — 잎 판(3) + 꽃잎 2장(4) = 7 tri.
- * 잎을 먼저 깔지 않으면 잔디 위 **종이 조각**으로 보인다 — props.ts:flowerPatch 가
- * 1차 캡처에서 겪은 것과 같다.
+ * 작은 꽃 — 잎 판(5각 3 tri) + 꽃송이 **한 덩이**(6각 4 tri) = 7 tri.
+ *
+ * 2차 캡처(before/grassland_zoom.png, 5배 확대)에서 정확히 진단된 결함:
+ * 꽃잎을 `sides: 4` 0.072 판 **두 장**으로 두었더니 게임 카메라에서 화면상 3~4px
+ * 짜리 **흰 정사각형 두 개**가 되어 잔디 위에 붙은 **색종이 조각/스티커**로 읽혔다.
+ * 원인은 색이 아니라 **모서리 개수**다 — 4각형은 이 크기에서 안티에일리어싱을 거쳐도
+ * 직각이 살아남는 유일한 다각형이라 "잘라 붙인 종이"라는 인상이 지워지지 않는다.
+ * 6각형은 같은 픽셀 수에서 원으로 뭉개져 "꽃송이"가 된다.
+ *
+ * 두 장 → 한 장으로 줄인 것은 예산 때문이다(6각 4 tri × 2 + 잎 3 = 11 > 8).
+ * 대신 한 덩이를 키우고(0.072 → 0.105) hueJitter 를 0.02 → 0.05 로 올렸다 —
+ * buildFlats 가 **삼각형마다** 색을 흔들므로, 6각 판 하나가 색이 조금씩 다른
+ * 꽃잎 4장으로 갈라져 보인다. 두 색(a·b)은 그 한 덩이 안에서 섞어 쓴다.
  */
 function flowerDot(leaf: number, a: number, b: number): Flats {
   return [
     { pos: [0, Y_ACC, 0], scale: [0.21, 0.18], color: leaf, sides: 5, hueJitter: 0.04 },
-    { pos: [0.05, Y_TOP, 0.03], scale: [0.072, 0.072], color: a, sides: 4, hueJitter: 0.02 },
-    { pos: [-0.05, Y_TOP, -0.04], scale: [0.062, 0.062], color: b, sides: 4, hueJitter: 0.02 },
-  ];
-}
-
-/** 돌멩이 — 5각(3) + 4각(2) = 5 tri. 지면보다 한 단 어둡게 */
-function pebbleFlat(color: number): Flats {
-  return [
-    { pos: [0.03, Y_ACC, 0.02], scale: [0.13, 0.11], color, sides: 5, hueJitter: 0.02 },
-    { pos: [-0.07, Y_ACC, -0.06], scale: [0.085, 0.075], color: shade(color, 0.86), sides: 4 },
+    { pos: [0.035, Y_TOP, 0.025], scale: [0.105, 0.10], color: mix(a, b, 0.35), sides: 6, hueJitter: 0.05 },
   ];
 }
 
 /**
- * 잔가지 — 일직선 + 곁가지 하나 (2 tri).
- * 첫 판은 곁가지를 90°(1.55rad)로 틀었는데 캡처에서 **꺾쇠 글리프(⌐)** 로 읽혔다.
- * 가지는 원래 예각으로 갈라진다 — 0.52rad 로 눕히고 끝을 뾰족하게 하니 가지가 됐다.
+ * 돌멩이 — 6각 몸돌(4) + 3각 부스러기(1) = 5 tri. 지면보다 한 단 어둡게.
+ *
+ * 곁돌이 `sides: 4` 였고 같은 확대 캡처에서 **회갈색 정사각형**으로 읽혔다
+ * (flowerDot 과 같은 병이다). 5각으로 올리면 직각은 사라지지만 판당 +1 tri 이고,
+ * pebbleFlat 은 6바이옴 거의 모든 zone 에 실려 있어 그 +1 이 스테이지당 수십 tri 다.
+ * 그래서 **몸돌을 6각으로 올리고 곁돌을 3각으로 내렸다** — 원가는 5 tri 그대로,
+ * 몸돌은 더 둥글어지고, 곁돌은 돌에 붙은 부스러기로 읽힌다(몸돌과 겹쳐 놓았으므로
+ * 홀로 떠 있는 삼각형이 아니다 — 그러면 화살촉이 된다).
+ */
+function pebbleFlat(color: number): Flats {
+  return [
+    { pos: [0.02, Y_ACC, 0.015], scale: [0.135, 0.115], color, sides: 6, hueJitter: 0.025 },
+    { pos: [-0.055, Y_ACC, -0.05], scale: [0.075, 0.07], color: shade(color, 0.86), sides: 3 },
+  ];
+}
+
+/**
+ * 잔가지 — **획 하나**짜리 마른 막대기 (1 tri).
+ *
+ * 앞선 두 판이 모두 같은 함정에 빠졌다. 1차는 곁가지를 90°로 틀어 **꺾쇠(⌐)**,
+ * 2차는 0.52rad 로 눕혀 **체크마크(✓)/화살표(➤)** 가 됐다. 확대 캡처에서 초원 판
+ * 한 화면에 짙은 적갈색 ✓ 가 예닐곱 개 셀 수 있었고, 이 게임에서는 그게 단순히
+ * 못생긴 게 아니라 **의미 충돌**이다 — 경로 타일 위에 진행 방향 셰브런(▶)이 이미
+ * 깔려 있어서, 판 위의 화살표 모양은 전부 "길 표시"로 먼저 읽힌다.
+ *
+ * 각도 문제가 아니다. **긴 획과 짧은 획이 한 점에서 만나는 도형 자체**가 글리프다
+ * (✓ ➤ ⌐ ∟ 은 전부 그 도형이다). 그래서 각도를 더 눕히는 대신 곁가지를 없앴다 —
+ * 땅에 떨어진 막대기는 한 획으로 충분히 읽히고, 획이 하나뿐이면 만나는 점이
+ * 없으므로 어떤 yaw 로 돌려도 글리프가 될 수 없다. 덤으로 2 tri → **1 tri**.
+ *
+ * 길이 0.26 → 0.28, 밑동 0.038 → 0.05 로 살짝 키웠다. 획이 하나뿐이라 그전 굵기로는
+ * 확대 전에는 **머리카락 한 올**로 사라졌다. 밑동:길이 = 1:5.6 의 쐐기라 굵은 쪽이
+ * 부러진 단면, 가는 쪽이 가지 끝으로 읽힌다.
  */
 function twig(color: number): Flats {
-  return [blade(0.0, 0.26, 0.038, color), blade(0.52, 0.13, 0.028, shade(color, 0.9))];
+  return [blade(0.0, 0.28, 0.05, color)];
 }
 
 /** 이끼/얼룩 — 6각 판 1장 (4 tri). 가장 싼 "면" */
@@ -274,11 +425,14 @@ function crackFleck(color: number): Flats {
   ];
 }
 
-/** 조개 껍데기 — 5각(3) + 4각(2) = 5 tri. 물가에만 */
+/** 조개 껍데기 — 5각 몸통(3) + 3각 진주광(1) = 4 tri. 물가에만.
+ *  덧판도 `sides: 4` 였다 — pebbleFlat 과 같은 이유로 직각을 없앤다. 여기서는 3각이
+ *  오히려 맞는 모양이다: 조개 안쪽 결은 원래 부챗살이라 뾰족한 쪽이 경첩으로 읽힌다.
+ *  덤으로 5 → **4 tri**. */
 function shellFleck(color: number): Flats {
   return [
     { pos: [0.02, Y_ACC, 0.01], scale: [0.10, 0.085], color, sides: 5, hueJitter: 0.02 },
-    { pos: [-0.06, Y_TOP, -0.05], scale: [0.062, 0.055], color: shade(color, 1.08), sides: 4 },
+    { pos: [-0.035, Y_TOP, -0.03], scale: [0.07, 0.06], color: shade(color, 1.08), sides: 3 },
   ];
 }
 
@@ -329,7 +483,7 @@ function zoneSoil(
 
 const SOIL_W: Record<Zone, number> = { inner: 0.46, trail: 0.42, shore: 0.44, path: 0.38 };
 
-function kitOf(biome: BiomeId): GdKit {
+function kitRaw(biome: BiomeId): GdKit {
   const pal = BIOMES[biome];
   const g = pal.ground;
   const g0 = g[0] ?? 0x808080;
@@ -340,8 +494,9 @@ function kitOf(biome: BiomeId): GdKit {
   const acc = pal.grain.accentColor;
   /*
    * 바닥 얼룩 색은 전부 **팔레트 램프에서 유도**한다 (직접 하드코딩하지 않는다).
-   * 명도 배율을 0.92~1.07 안에 묶는 것이 규칙 ④(±20%)의 실제 구현부다 —
-   * 이 숫자를 키우고 싶어지는 순간이 이 레이어가 "물건"으로 변하는 순간이다.
+   * 명도 배율을 0.92~1.07 안에 묶어 두는 것은 여전히 맞지만, 그것은 규칙 ④의
+   * 구현이 아니라 **얼룩만의 관습**이다 — 규칙 ④를 실제로 강제하는 것은 이 함수
+   * 바깥의 clampKit 이고, 얼룩·액센트가 **똑같이** 그것을 통과한다.
    */
   const inner = [shade(g0, 0.93), shade(g2, 1.05), shade(g4, 0.96), mix(g0, acc, 0.24)];
   const soil = zoneSoil(inner, path0, sand);
@@ -483,6 +638,15 @@ function kitOf(biome: BiomeId): GdKit {
   }
 }
 
+/**
+ * 편성 = 팔레트에서 유도한 원안(kitRaw) → **대비 밴드 통과**(clampKit).
+ * 이 두 단계를 합치지 않는 것은, 원안 쪽에서는 "바이옴다운 색"만 고르고
+ * 대비 책임은 한 곳에 모아 두기 위해서다.
+ */
+function kitOf(biome: BiomeId): GdKit {
+  return clampKit(kitRaw(biome), gdGroundLuma(biome));
+}
+
 /** 바이옴 편성은 팔레트에서만 유도되므로 한 번 만들면 그대로다 */
 const KITS = new Map<BiomeId, GdKit>();
 function kitFor(biome: BiomeId): GdKit {
@@ -562,6 +726,8 @@ export function buildGroundDetail(
 ): GroundDetailBuild {
   const kit = kitFor(stage.biome);
   const biome = stage.biome;
+  /** 규칙 ④ 기준선 — 굽는 중에 파생되는 색(가장자리 얼룩)도 이 밴드를 지나야 한다 */
+  const refLuma = gdGroundLuma(biome);
   /** 셀 좌표 → 그 셀의 변환 완료 지오메트리 (재병합용 원본) */
   const parts = new Map<string, THREE.BufferGeometry>();
 
@@ -622,7 +788,10 @@ export function buildGroundDetail(
      * 두 칸의 얼룩이 경계를 사이에 두고 만나 직선이 끊겨 보인다.
      */
     const ei = rng.int(0, soils.length - 1);
-    const edgeB = baked(`gd:${biome}:edge:${zone}:${ei}`, blot(shade(soils[ei] as number, 0.97), 0.34, Y_EDGE));
+    const edgeB = baked(
+      `gd:${biome}:edge:${zone}:${ei}`,
+      blot(toBand(shade(soils[ei] as number, 0.97), refLuma), 0.34, Y_EDGE),
+    );
     if (edgeB.tri <= left) {
       const es = rng.range(0.78, 1.14);
       const ea = rng.range(0, Math.PI * 2);
@@ -681,10 +850,17 @@ export function buildGroundDetail(
           : b.oneSided
             ? Math.PI / 2 - a + rng.range(-0.55, 0.55)
             : rng.range(0, Math.PI * 2);
+      /*
+       * 개체별 밝기 흔들기. 예전 폭 ±7% 를 ±5% 로 좁혔다 — 화면에 실제로 나가는 대비는
+       * **밴드(±28%) + 이 지터 + buildFlats 의 면 지터(HSL l ±0.03)** 의 합이고,
+       * ±7% 면 최악 개체가 −38%까지 내려가 클램프를 해 놓고도 규칙 ④ 밖으로 새는
+       * 개체가 남는다. ±5% 는 눈으로 구별되지 않는 차이인데(캡처 A/B 동일) 합계는
+       * 밴드 근처로 묶인다.
+       */
       pieces.push(
         tintGeo(
           placeFlat(b.geo.clone(), cx + Math.cos(a) * rad, cz + Math.sin(a) * rad, yaw, s),
-          rng.range(0.93, 1.07),
+          rng.range(0.95, 1.05),
         ),
       );
       left -= b.tri;
