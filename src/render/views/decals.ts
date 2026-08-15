@@ -253,7 +253,11 @@ export class Decals {
       const geos: THREE.BufferGeometry[] = [];
       for (const p of points) {
         this.cellToWorld(p.x, p.z, v);
-        geos.push(buildMarkerGeo(v));
+        // 기둥 없이 — 사용자 지시로 **목표 표식에서도** 하늘로 솟는 선을 없앴다.
+        // 대가는 알고 받는다: 명령한 칸이 하단 HUD 패널에 덮이면 표식이 안 보인다.
+        // 그래도 이쪽을 고른 이유는 화면이 조용한 편이 낫다는 판단이 사용자 것이기 때문이고,
+        // 실제로 가려지는 경우가 좁다 — 목표는 대개 전선(판 가운데~위쪽)이고 패널은 아래에 있다.
+        geos.push(buildMarkerGeo(v, false));
       }
       this.sortieGeo = mergeGeos(geos);
     }
