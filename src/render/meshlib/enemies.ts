@@ -17,10 +17,13 @@
  */
 import type * as THREE from 'three';
 import type { AllyId, EnemyId } from '@/data/types';
+import { ALLY_DEFS } from '@/data/allies';
 import { clamp } from '@/core/mathx';
 import { C } from '../palette';
 import { buildParts, cachedGeo, type PartSpec } from './factory';
 import {
+  ATK_LAUNCH,
+  ATK_RELEASE,
   ATK_ROLE_HEAD,
   ATK_ROLE_MAIN,
   ATK_ROLE_OFF,
@@ -1385,6 +1388,15 @@ function kitSlinger(ids: RaiderIds): PartSpec[] {
     ...allyLivery(ids),
     ...tag(ids.armR, [
       ...tube(arc([0.12, 0.28, -0.13], [0.36, 0.66, -0.1], [0.07, 0.84, 0.03], 3), 0.024, 0.019, C.rope, { flat: 1 }),
+    ]),
+    /**
+     * 무릿매에 얹힌 돌만 **던져 나가는 그룹**(throwR)에 태운다 — 가죽끈은 손에 남는다.
+     * throwR 은 오른팔과 피벗·축·위상·진폭이 완전히 같아서 걷는 동안에는 끈 끝에 매달린
+     * 것과 구별되지 않고, 놓는 순간에만 접혀 사라졌다 복귀 구간에 돌아온다(gait.ts throwAway).
+     * 던진 돌이 손에 남아 있으면 fx 의 날아가는 돌과 **같은 물건이 둘**이 되고,
+     * 강체 팔이라 휘두르는 내내 돌이 끈을 뚫고 뒤집힌다. 습격대 투창과 같은 처방이다.
+     */
+    ...tag(ids.throwR, [
       { kind: 'ico', pos: [0.06, 0.86, 0.04], scale: [0.115, 0.115, 0.11], color: C.stone },
     ]),
     // 허리에 찬 돌주머니 (몸통 고정) — "던질 것을 들고 다닌다"가 읽힌다
@@ -1412,6 +1424,120 @@ function kitGuardian(ids: RaiderIds): PartSpec[] {
       { kind: 'box', pos: [0.164, 0.442, -0.132], rot: [0, 0, -0.34], scale: [0.17, 0.085, 0.052], color: C.stoneDark },
     ]),
   ];
+}
+
+/**
+ * 아군 3종의 **공격 포즈** (변형 번호 1~3 = ALLY_KITS 순서).
+ *
+ * 11단계까지 아군의 "공격"은 보행 위상을 9rad/s로 굴리는 것 하나뿐이었다 —
+ * 사지가 전부 같은 aGait 를 보므로 팔이 빨라지면 **다리도 같이 빨라져** 제자리
+ * 뜀박질로 읽혔고, 무엇보다 **때리는 순간이 피해가 들어가는 틱과 아무 상관이 없었다**.
+ * 습격대가 쓰는 공격 채널(gait.ts)은 그 둘을 정확히 고치는 물건이라 그대로 얹는다:
+ * 팔·머리만 배역으로 인계되고 다리는 보행/정지 그대로 남으며, 진행도는 sim 의
+ * 쿨다운 잔여 틱에서 나온다(views/enemyview.ts allyAttackProgress).
+ *
+ * 각도는 전부 어깨 피벗 둘레의 z축 회전이고 **+가 앞을 들어올리는 방향**이다.
+ * 감각(오른팔 기준, 쉬는 자세에서 손은 어깨 아래 (0.1, −0.176) = −60°):
+ *   몽둥이 머리는 어깨 기준 +39°/거리 0.215 → back +0.85 면 88°(머리 옆으로 곧게 치켜듦),
+ *   fwd −1.35 면 −38°(앞으로 낮게 내려침). 곧 이 한 쌍이 **치켜들었다 내려치는 호**다.
+ * back 은 **조준 유지 자세이기도 하다** — 사거리 안에 적을 두고 멈춰 선 동안 이 각으로
+ * 굳으므로 "몽둥이를 들고 벼르는" 자세가 쿨다운 내내 보인다(gait.ts 의 aim).
+ *
+ * ⚠ back 을 더 크게(+1.15) 잡아 봤더니 몽둥이가 **머리 뒤로 넘어갔다** — 실측 캡처에서
+ * 무기 끝이 어깨 기준 x −0.15로 가 55° 부감 카메라에서 머리에 통째로 가렸다. 무기를
+ * 화면에 남기려면 "뒤로 젖히기"가 아니라 **세우기**여야 한다. 지금 값은 무기 끝이
+ * x −0.05(거의 수직)라 흰 두건 위로 삐져나온다. 실측 높이는 아래 impact 절 참조.
+ *
+ * 근접 둘과 원거리 하나를 **다른 동작**으로 가른 것이 이 표의 요점이다:
+ *  · 몽둥이꾼/파수꾼 = 내려치기. 치켜든 무기가 앞아래로 떨어지고 몸이 따라 숙인다.
+ *  · 무릿매 = 던지기. 머리 위 무릿매를 앞으로 후려 돌을 놓는다(놓는 순간 돌이 사라진다).
+ *    사거리 2.8칸이라 화면에서 적과 뚝 떨어져 서 있고, 그 거리에서 근접과 같은 모션이면
+ *    "허공을 때리는 사람"이 된다.
+ */
+const ALLY_ATTACKS: readonly (readonly AttackPose[])[] = [
+  // 1) 몽둥이꾼 — 가장 크고 느린 호. 돌 박은 혹이 무거워 보이도록 몸통 기울임도 최대(1.0).
+  [
+    { role: ATK_ROLE_MAIN, back: 0.85, fwd: -1.35 },
+    { role: ATK_ROLE_OFF, back: 0.5, fwd: -0.55, take: 0.85 },
+    { role: ATK_ROLE_HEAD, back: 0.14, fwd: -0.26 },
+  ],
+  // 2) 무릿매꾼 — 머리 위 끈을 앞으로 후린다. 놓는 지점(0.435)에서 돌이 이미 앞으로
+  //    기울어 있어야 "뿌렸다"로 읽히므로 back 은 얕게, fwd 는 깊게 잡는다(−2.3).
+  //    쉬는 자세에서 돌이 이미 머리 위 82°에 있어 조금만 젖혀도 장전으로 보인다.
+  [
+    { role: ATK_ROLE_MAIN, back: 0.45, fwd: -2.3 },
+    { role: ATK_ROLE_OFF, back: -0.4, fwd: 0.7, take: 0.8 },
+    { role: ATK_ROLE_HEAD, back: 0.1, fwd: -0.3 },
+  ],
+  // 3) 파수꾼 — 방패를 세운 채 짧은 돌도끼를 내려친다. 도끼가 손 바로 위라 지렛대가
+  //    짧아(0.166) 같은 각도로도 호가 작다 — 그래서 back 을 몽둥이보다 더 세운다.
+  //    방패 팔(OFF)은 젖힐 때도 놓을 때도 **앞으로 세운 채**라 몸이 계속 가려진다.
+  [
+    { role: ATK_ROLE_MAIN, back: 1.25, fwd: -1.2 },
+    { role: ATK_ROLE_OFF, back: 0.35, fwd: 0.5 },
+    { role: ATK_ROLE_HEAD, back: 0.1, fwd: -0.2 },
+  ],
+];
+
+/**
+ * 아군 공격 동작의 **길이 · 타격 지점 · 몸통 기울임**.
+ *
+ * ── ticks (동작 길이) ──────────────────────────────────────────────────────
+ * 습격대와 같은 12틱(0.4초)을 쓴다. 몸통도 리그도 같은 코드에서 나오는 사람들이라
+ * 박자가 갈리면 같은 화면에서 두 부족이 다른 물리로 움직이는 것처럼 보인다.
+ * 실제 길이는 **쿨다운으로 잘린다**(min) — 쿨다운보다 긴 동작은 다음 동작과 겹쳐
+ * 팔이 두 자세를 오가며 떤다. 지금 값은 24/30틱이라 잘리지 않는다.
+ *
+ * ── impact (피해가 들어가는 틱이 놓이는 진행도) ────────────────────────────
+ * 이 값 하나가 "때리는 순간 = 피해가 들어가는 순간"을 만든다. 렌더는 쿨다운
+ * 잔여 틱에서 진행도를 역산하므로(enemyview) 여기서 고른 지점이 곧 sim 의 타격 틱이다.
+ *  · 근접은 ATK_RELEASE(0.56) — fwd 가 1이 되는, 무기가 가장 앞아래로 내려간 지점이다.
+ *    맞는 순간에 몽둥이가 제일 낮게 내려와 있어야 "맞았다"로 읽힌다.
+ *  · 무릿매는 ATK_LAUNCH(0.435) — 손의 돌이 접혀 사라지는 그 프레임이다(THROW_GONE
+ *    구간의 한가운데). 같은 틱에 fx 가 날아가는 돌을 띄우므로 **같은 물건이 이어진다**.
+ *
+ * 실측(셰이더 식을 CPU 로 재현해 잰 무기 손 최고점, 모델 단위 · 키 0.77 기준):
+ *   몽둥이꾼 벼름 0.750 → 타격 0.374 (0.376 하강) · 무릿매 0.899 → 0.436 (0.463) ·
+ *   파수꾼 0.676 → 0.361 (0.315). tests/render/allies.test.ts ④ 가 이 하강폭을 잠근다.
+ *
+ * ── lean (몸통 기울임 배율) ────────────────────────────────────────────────
+ * 사지는 셰이더가 돌리지만 몸통은 인스턴스 행렬 몫이라 뷰가 이 값을 읽어 간다.
+ * 무거운 무기일수록 크고, 방패 뒤에서 버티는 파수꾼이 가장 작다.
+ */
+export interface AllyAttackAnim {
+  /** 동작 전체 길이 (틱). 쿨다운보다 길지 않다 */
+  ticks: number;
+  /**
+   * sim 이 타격 뒤 채워 넣는 쿨다운 틱 수 = AllyState.attackCdLeft 의 분모.
+   * 뷰는 이 값으로 "지난 타격 이후 흐른 틱"을 복원한다 — 그래서 여기 있어야
+   * 뷰가 데이터 테이블(ALLY_DEFS)을 따로 읽지 않는다.
+   */
+  cooldown: number;
+  /** 피해가 들어가는 틱이 놓이는 진행도 0..1 */
+  impact: number;
+  /** 몸통 기울임 배율 (0 = 고정) */
+  lean: number;
+}
+
+/** 아군 공격 동작의 **최대** 길이 (틱). 실제 길이는 min(이 값, 쿨다운). */
+const ALLY_ATTACK_ANIM_TICKS = 12;
+
+function allyAnim(id: AllyId, impact: number, lean: number): AllyAttackAnim {
+  // sim 이 쿨다운을 잡는 식과 **같은 반올림**을 써야 동작 창이 쿨다운을 삐져나가지 않는다
+  // (sim/allies.ts: attackCdLeft = max(1, round(cooldownTicks)))
+  const cd = Math.max(1, Math.round(ALLY_DEFS[id].cooldownTicks));
+  return { ticks: Math.min(ALLY_ATTACK_ANIM_TICKS, cd), cooldown: cd, impact, lean };
+}
+
+const ALLY_ATTACK_ANIMS: Readonly<Record<AllyId, AllyAttackAnim>> = {
+  clubber: allyAnim('clubber', ATK_RELEASE, 1),
+  slinger: allyAnim('slinger', ATK_LAUNCH, 0.9),
+  guardian: allyAnim('guardian', ATK_RELEASE, 0.75),
+};
+
+/** 그 아군의 공격 동작 파라미터 (뷰가 쿨다운 잔여 틱과 함께 읽는다) */
+export function allyAttackAnim(id: AllyId): AllyAttackAnim {
+  return ALLY_ATTACK_ANIMS[id];
 }
 
 /**
@@ -1470,6 +1596,8 @@ function raiderShared(rig: RigBuilder): PartSpec[] {
 
 /** 전투용 아군 공유 지오메트리 — 같은 몸통 + 장비 3벌 */
 function allyShared(rig: RigBuilder): PartSpec[] {
+  // 공격 포즈는 변형 번호와 **같은 순서**로 등록한다 (ALLY_KITS ↔ ALLY_ATTACKS)
+  ALLY_ATTACKS.forEach((poses, i) => rig.attack(i + 1, poses));
   return sharedWithKits(rig, ALLY_KITS);
 }
 

@@ -1,6 +1,7 @@
 /**
  * 배치/선택 입력 — 탭·호버를 셀 좌표로 변환해 시뮬레이션 커맨드로.
  * 카드 선택 → 슬롯 발광 + 고스트 프리뷰 → 탭 배치.
+ * 부족원 탭 → 그 **종족 전체** 선택 + 각자의 공격 사거리 바운더리 → 셀 탭 → 이동 명령.
  * 타워 탭 → 선택 + 사거리 링.
  * 홈타운(기지 셀) 탭 → 선택 + 사거리 링 + 아군 출격 한계선 봉수대 (마을 패널: 레벨업 + 출동).
  * 소품(나무·바위) 탭 → 선택 + 링(제거 패널).
@@ -11,7 +12,7 @@
  */
 import * as THREE from 'three';
 import type { AllyId, AllyState, BattleSim, StageDef, TowerId, Vec2 } from '@/data/types';
-import { TOWER_DEFS } from '@/data';
+import { ALLY_DEFS, TOWER_DEFS } from '@/data';
 
 /**
  * 부족원을 집는 반경 (타일). 유닛 반경이 0.26뿐이라 그것만 보면 손가락이 거의 못 맞힌다.
@@ -179,8 +180,12 @@ export class PlacementController {
       if (this.selectedAllyDef !== null) {
         const defId = this.selectedAllyDef;
         if (cell && this.sim.applyCommand({ type: 'moveAlly', allyId: -1, cellX: cell.x, cellZ: cell.z, defId })) {
+          // 순서가 중요하다: **먼저** 선택을 풀어 사거리 바운더리를 내리고, 그 자리에
+          // 목표 표식을 세운다. 예전에는 둘이 같은 메시라 showAllyOrder가 덮어썼지만
+          // 이제는 서로 다른 메시다 — 안 내리면 명령을 내린 뒤에도 원이 그 자리에
+          // 얼어붙은 채 남고(유닛은 떠난다) 드로우콜도 하나 더 먹는다.
+          this.clearAllySelection();
           this.showAllyOrder(cell.x, cell.z);
-          this.selectedAllyDef = null;
           return;
         }
         // 판 밖 탭 → 선택만 푼다 (카드 모드가 슬롯 밖 탭을 다루는 것과 같은 규약)
@@ -291,21 +296,31 @@ export class PlacementController {
   }
 
   /**
-   * 종족 선택 — 살아 있는 같은 종 **전원**에게 발밑 표식을 세운다.
-   * 표식은 이동 목표 표식과 같은 메시(decals.showSortieMarker)를 쓴다: 둘은 상호 배타이고
-   * (고르는 중 아니면 보낸 뒤) 여러 지점을 하나로 병합해 굽기 때문에 드로우콜이 안 는다.
+   * 종족 선택 — 살아 있는 같은 종 **전원**의 발밑에 자기 공격 사거리 바운더리를 그린다.
+   *
+   * 사용자 지시: "우리 부족을 선택하면 공격 가능한 바운더리를 표시해 주고, 선택했을 때
+   * 역시 하늘로 올라가는 선은 없애줘". 그 '하늘로 올라가는 선'이 여기서 쓰던
+   * 봉수대(decals.showSortieMarker)의 기둥이다. 봉수대 자체는 **이동 목표 표식**으로
+   * 남는다 — 거기서는 기둥이 값을 한다(빈 길 위의 한 점이라 링만으로는 안 보인다).
+   * 갈아 끼운 것은 **선택 경로뿐**이고, 그 자리에 지면 파선 원(showAllyRanges)이 들어왔다.
+   *
+   * 드로우콜은 늘지 않는다: 선택 중에는 봉수대 메시가 내려가 있고(바로 아래), 원이
+   * 몇 개든 하나로 병합해 굽는다.
    */
   private selectAllyDef(defId: AllyId): void {
     this.selectCard(null);
     this.clearTowerSelection();
     this.clearScenerySelection();
     this.clearBaseSelection();
+    // 직전 이동 명령의 목표 표식은 내린다. 새로 고르는 순간 그건 **지난 명령**이고,
+    // 무엇보다 켠 채로 두면 메시가 하나 더 살아 그만큼 드로우콜이 는다.
+    this.stage3d.decals.hideSortieMarker();
     this.selectedAllyDef = defId;
     this.refreshAllySelection();
     audio.play('uiTap');
   }
 
-  /** 선택된 종족의 지금 위치로 표식을 다시 굽는다 — 유닛이 걸어가면 따라가야 한다 */
+  /** 선택된 종족의 지금 위치로 바운더리를 다시 굽는다 — 유닛이 걸어가면 따라가야 한다 */
   refreshAllySelection(): void {
     if (this.selectedAllyDef === null) return;
     const pts = this.sim.state.allies
@@ -315,13 +330,15 @@ export class PlacementController {
       this.clearAllySelection();
       return;
     }
-    this.stage3d.decals.showSortieMarker(pts);
+    // 반경은 종족 사거리 그대로다 — 타일 단위이고 판의 한 칸이 곧 월드 1이라 배율이 없다
+    // (terrain.cellToWorld는 중심 이동만 한다). 곧 화면의 원이 실제 사정거리다.
+    this.stage3d.decals.showAllyRanges(pts, ALLY_DEFS[this.selectedAllyDef].range);
   }
 
   clearAllySelection(): void {
     if (this.selectedAllyDef === null) return;
     this.selectedAllyDef = null;
-    this.stage3d.decals.hideSortieMarker();
+    this.stage3d.decals.hideAllyRanges();
   }
 
   /** HUD 카드 탭 → 배치 모드 진입/해제 */

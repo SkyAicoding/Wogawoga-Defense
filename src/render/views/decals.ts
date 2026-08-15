@@ -1,5 +1,5 @@
 /**
- * 지면 데칼 — 사거리 링, 슬롯 하이라이트, 경로 셰브런.
+ * 지면 데칼 — 사거리 링, 슬롯 하이라이트, 경로 셰브런, 부족 사거리 바운더리.
  * 전부 polygonOffset으로 지형 z-파이팅 방지, 애디티브/반투명.
  */
 import * as THREE from 'three';
@@ -45,6 +45,14 @@ export class Decals {
   /** 출격선용 지오메트리 (월드 좌표에 경로 수만큼 박아 병합) — 지점이 바뀔 때만 다시 만든다 */
   private sortieGeo: THREE.BufferGeometry | null = null;
   private sortieSig = '';
+  /**
+   * 선택한 부족의 **공격 사거리 바운더리** (메시 1개 = 드로우콜 1, 평소엔 숨김).
+   * 부족원 여럿의 원을 하나로 병합해 굽는다 — 아래 showAllyRanges 참조.
+   */
+  private allyRange: THREE.Mesh;
+  private allyRangeMat: THREE.MeshBasicMaterial;
+  private allyRangeGeo: THREE.BufferGeometry | null = null;
+  private allyRangeSig = '';
   /** 지금 마커가 무엇을 가리키는가 — 호흡 애니메이션 규칙이 갈린다 */
   private markerMode: 'cell' | 'sortie' | 'tower' = 'cell';
   /** 모드별 링 기본 배율 (호흡 스케일이 이 위에 곱해진다) */
@@ -93,9 +101,22 @@ export class Decals {
     this.marker.renderOrder = 5;
     this.group.add(this.marker);
 
+    // 부족 사거리 바운더리 — 지오메트리는 선택할 때 굽는다(메시는 미리 만들어 둔다).
+    // 색은 ALLY_RANGE_COLOR 주석 참조. renderOrder 4 = 타워 사거리 링(3)보다 위,
+    // 선택 마커(5)보다 아래.
+    this.allyRangeMat = groundMat(ALLY_RANGE_COLOR, 0.7);
+    this.allyRange = new THREE.Mesh(new THREE.BufferGeometry(), this.allyRangeMat);
+    this.allyRange.visible = false;
+    this.allyRange.renderOrder = 4;
+    // 좌표를 지오메트리에 구워 넣으므로 메시는 언제나 원점에 있다 — 그러면 바운딩
+    // 스피어가 판 한쪽에 치우쳐 절두체 컬링이 오판할 여지가 없도록 컬링을 끈다
+    // (아군은 애초에 컬링을 끄고 그린다 — enemyview와 같은 규약)
+    this.allyRange.frustumCulled = false;
+    this.group.add(this.allyRange);
+
     this.disposables.push(
       fillGeo, edgeGeo, softGeo, fillMat, edgeMat, softMat,
-      this.slotMat, this.chevronMat, markerGeo, this.markerMat,
+      this.slotMat, this.chevronMat, markerGeo, this.markerMat, this.allyRangeMat,
     );
   }
 
@@ -249,6 +270,51 @@ export class Decals {
     this.marker.visible = false;
   }
 
+  /**
+   * 부족 선택 표시 = **각자의 공격 사거리 바운더리** (사용자 지시 ①).
+   *
+   * 왜 봉수대(showSortieMarker)를 재사용하지 않고 새로 만드는가:
+   *  · 사용자가 "선택했을 때 하늘로 올라가는 선은 없애 달라"고 했다. 그 선은 봉수대의
+   *    기둥이다. 그런데 기둥은 **이동 목표 표식**에서는 여전히 값을 한다(빈 길 위의 한
+   *    점이라 링만으로는 안 보이고, 하단 패널이 그 칸을 덮어도 위로 솟는다). 그래서
+   *    봉수대를 지우는 대신 **선택 경로만** 이 지면 링으로 갈아 끼웠다.
+   *  · 그리고 선택 표시가 해야 할 일이 하나 늘었다: "이 사람이 어디까지 때리는가".
+   *    기존 showRange는 메시 세 개를 **한 곳으로 옮겨** 쓰는 구조라 원을 하나밖에 못
+   *    그린다. 종족 전체가 선택되므로 원은 언제나 여럿이다.
+   *
+   * points는 **셀 좌표**(부족원의 연속 위치), radius는 타일 단위 사거리다.
+   * 원 여럿을 좌표째 구워 **하나로 병합**하므로 몇 명을 골라도 드로우콜은 1이다.
+   * 게다가 선택 중에는 소품/타워 마커가 내려가 있으므로(placement가 상호배타로 관리한다)
+   * 실측 드로우콜 증가는 0이다 — 봉수대 메시 하나가 이 메시 하나로 바뀔 뿐이다.
+   *
+   * 걸어가는 사람을 따라가야 하므로 매 프레임 호출된다. 지점·반경이 그대로면
+   * 서명 비교로 걸러 다시 굽지 않는다(집결해 서 있는 동안이 그 경우다).
+   */
+  showAllyRanges(points: readonly { x: number; z: number }[], radius: number): void {
+    if (points.length === 0 || radius <= 0) {
+      this.hideAllyRanges();
+      return;
+    }
+    const sig = `${radius.toFixed(3)}|${points.map((p) => `${p.x.toFixed(3)},${p.z.toFixed(3)}`).join(';')}`;
+    if (sig !== this.allyRangeSig || !this.allyRangeGeo) {
+      this.allyRangeSig = sig;
+      this.allyRangeGeo?.dispose();
+      const v = new THREE.Vector3();
+      const centers: { x: number; z: number }[] = [];
+      for (const p of points) {
+        this.cellToWorld(p.x, p.z, v);
+        centers.push({ x: v.x, z: v.z });
+      }
+      this.allyRangeGeo = buildAllyRangeGeo(centers, radius);
+      this.allyRange.geometry = this.allyRangeGeo;
+    }
+    this.allyRange.visible = true;
+  }
+
+  hideAllyRanges(): void {
+    this.allyRange.visible = false;
+  }
+
   /** 사거리 링 표시 (셀 좌표 + 타일 단위 반경) */
   showRange(cellX: number, cellZ: number, radius: number): void {
     const v = this.cellToWorld(cellX, cellZ);
@@ -306,6 +372,12 @@ export class Decals {
       }
       this.markerMat.opacity = 0.72 + Math.sin(this.time * 6) * 0.22;
     }
+    // 부족 사거리 바운더리 — 좌표가 지오메트리에 구워져 있어(스케일을 못 쓴다) 밝기만
+    // 호흡시킨다. 선택 마커(6 rad/s)보다 **느리게** 둔 이유: 이건 "여기다" 하고 부르는
+    // 표식이 아니라 계속 읽는 **눈금**이다. 빠르게 깜빡이면 사거리를 가늠하기 어렵다.
+    if (this.allyRange.visible) {
+      this.allyRangeMat.opacity = 0.62 + Math.sin(this.time * 3.2) * 0.16;
+    }
   }
 
   dispose(): void {
@@ -314,6 +386,8 @@ export class Decals {
     this.chevrons?.geometry.dispose();
     this.sortieGeo?.dispose();
     this.sortieGeo = null;
+    this.allyRangeGeo?.dispose();
+    this.allyRangeGeo = null;
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
   }
@@ -357,6 +431,102 @@ function buildMarkerGeo(at?: THREE.Vector3, withBeacon = true): THREE.BufferGeom
   const merged = mergeGeos(parts);
   if (at) merged.translate(at.x, DECAL_Y + 0.04, at.z);
   return merged;
+}
+
+/**
+ * 부족 사거리 바운더리 색 — 하늘빛 파랑.
+ *
+ * 왜 이 색인가 (두 갈래를 다 만족해야 한다):
+ *  1) **타워 사거리 링과 갈려야 한다.** 타워 쪽은 청록(0x7ae8c0/0xa8ffe0)이고 여기는
+ *     파랑이다. 게다가 결정적인 차이는 색이 아니라 **꼴**이다 — 타워 링은 안이 채워진
+ *     원반 + 이어진 테두리이고, 이쪽은 **채움이 없는 파선**이다. 한 화면에 둘이 같이 뜨는
+ *     일은 없지만(선택은 상호배타), 그래도 "이건 타워 게 아니다"가 한눈에 읽혀야 한다.
+ *     파선을 고른 이유가 하나 더 있다: 부족원이 여럿이면 원도 여럿이라 채움을 쓰면
+ *     겹친 자리가 얼룩덜룩해져 정작 **경계**가 안 보인다.
+ *  2) **우리 편으로 읽혀야 한다.** 이 게임에서 아군은 한랭색이다(ALLY_TINT = [0.86,0.98,1.16]
+ *     — 파랑이 가장 높다) 그리고 이동 목표 표식도 같은 축의 하늘색(0x9fdcf7)이다.
+ *     그보다 채도를 올려(초록기를 빼) 청록과의 거리를 벌렸다.
+ */
+const ALLY_RANGE_COLOR = 0x86c8ff;
+/**
+ * 파선 띠의 폭 (월드=타일). 띠의 **바깥 테두리가 곧 실제 사거리**다 — 안쪽으로만
+ * 칠한다. 밖으로 넘치게 그리면 "여기까지 닿는다"가 사거리보다 넓어져 거짓말이 된다.
+ */
+const ALLY_RANGE_BAND = 0.12;
+/**
+ * 파선 한 칸 + 빈칸의 목표 호 길이 (월드). 반경으로 나눠 개수를 정하므로 몽둥이꾼(1.0)과
+ * 돌팔매꾼(2.8)의 눈금이 **같은 크기**로 읽힌다 (개수를 고정하면 큰 원의 눈금만 길어진다).
+ */
+const ALLY_RANGE_DASH_ARC = 0.34;
+/** 파선이 차지하는 비율 (나머지는 빈칸) */
+const ALLY_RANGE_DUTY = 0.62;
+/** 발밑 링 반경 — 선택 마커 링(0.3~0.46)과 같은 크기로 둔다. 같은 뜻("이걸 골랐다")이다 */
+const ALLY_FOOT_IN = 0.3;
+const ALLY_FOOT_OUT = 0.46;
+const ALLY_FOOT_SEGS = 14;
+
+/**
+ * 선택된 부족원 각자의 [발밑 링 + 사거리 파선 원]을 **하나의 버퍼**로 굽는다.
+ *
+ * 왜 mergeGeos(RingGeometry 여러 개)가 아니라 직접 굽는가: 이 지오메트리는 부족원이
+ * 걸어가는 동안 **매 프레임 다시 만들어진다**(위치가 매 프레임 바뀌니 서명이 안 맞는다).
+ * 파선 하나당 RingGeometry 객체를 만들면 프레임마다 수백 개가 태어났다 죽는다.
+ * 여기서는 Float32Array 하나에 삼각형을 바로 써 넣어 그 쓰레기를 없앤다.
+ *
+ * 감김: RingGeometry(...).rotateX(-π/2)와 같은 규약 — 위(+y)를 보는 앞면.
+ * 그 회전이 XY의 각 a를 (cos a, 0, -sin a)로 보내므로 z에 마이너스가 붙는다.
+ *
+ * 삼각형 수: 부족원 1명당 (파선 수 + 발밑 14) × 2. 돌팔매꾼(2.8) 기준 약 128개이고
+ * 정원이 6명이라 최대 800개 남짓 — 예산(150,000)에서 0.5%다.
+ */
+function buildAllyRangeGeo(
+  centers: readonly { x: number; z: number }[],
+  radius: number,
+): THREE.BufferGeometry {
+  const dashes = Math.max(12, Math.min(56, Math.round((2 * Math.PI * radius) / ALLY_RANGE_DASH_ARC)));
+  const rIn = Math.max(0.02, radius - ALLY_RANGE_BAND);
+  const rOut = radius;
+  const triCount = (dashes + ALLY_FOOT_SEGS) * 2;
+  const out = new Float32Array(centers.length * triCount * 9);
+  let off = 0;
+
+  /** 한 칸(반경 rIn~rOut, 각 a0~a1)을 두 삼각형으로 써 넣는다 */
+  const quad = (cx: number, cz: number, ri: number, ro: number, a0: number, a1: number): void => {
+    const c0 = Math.cos(a0), s0 = Math.sin(a0);
+    const c1 = Math.cos(a1), s1 = Math.sin(a1);
+    const oX0 = cx + ro * c0, oZ0 = cz - ro * s0;
+    const oX1 = cx + ro * c1, oZ1 = cz - ro * s1;
+    const iX0 = cx + ri * c0, iZ0 = cz - ri * s0;
+    const iX1 = cx + ri * c1, iZ1 = cz - ri * s1;
+    // (rOut,a0) → (rIn,a1) → (rIn,a0)
+    out[off++] = oX0; out[off++] = DECAL_Y; out[off++] = oZ0;
+    out[off++] = iX1; out[off++] = DECAL_Y; out[off++] = iZ1;
+    out[off++] = iX0; out[off++] = DECAL_Y; out[off++] = iZ0;
+    // (rOut,a0) → (rOut,a1) → (rIn,a1)
+    out[off++] = oX0; out[off++] = DECAL_Y; out[off++] = oZ0;
+    out[off++] = oX1; out[off++] = DECAL_Y; out[off++] = oZ1;
+    out[off++] = iX1; out[off++] = DECAL_Y; out[off++] = iZ1;
+  };
+
+  const slot = (2 * Math.PI) / dashes;
+  const footSlot = (2 * Math.PI) / ALLY_FOOT_SEGS;
+  for (const c of centers) {
+    for (let i = 0; i < dashes; i++) {
+      const a0 = i * slot;
+      quad(c.x, c.z, rIn, rOut, a0, a0 + slot * ALLY_RANGE_DUTY);
+    }
+    // 발밑 링 — 사거리 원만 그리면 **누가 선택됐는지**가 안 읽힌다. 돌팔매꾼은 반경이
+    // 2.8이라 원이 저 멀리 있고, 정작 사람 발밑에는 아무 표시도 없게 된다.
+    for (let i = 0; i < ALLY_FOOT_SEGS; i++) {
+      const a0 = i * footSlot;
+      quad(c.x, c.z, ALLY_FOOT_IN, ALLY_FOOT_OUT, a0, a0 + footSlot);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(out, 3));
+  geo.computeBoundingSphere();
+  return geo;
 }
 
 /** 소규모 병합 헬퍼 (BufferGeometryUtils 의존 없이 non-indexed 위치만) */

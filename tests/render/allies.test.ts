@@ -35,6 +35,7 @@ import { EnemyView } from '@/render/views/enemyview';
 import { HealthBarView } from '@/render/views/healthbars';
 import {
   RAIDER_GEO_KEY,
+  allyAttackAnim,
   allyGeoKey,
   allyRig,
   allyVariant,
@@ -43,7 +44,14 @@ import {
   enemyRig,
   enemyVariant,
 } from '@/render/meshlib/enemies';
-import { VARIANT_ATTR } from '@/render/meshlib/gait';
+import {
+  ATK_RELEASE,
+  ATK_ROLE_MAIN,
+  LIMB_ATTR,
+  VARIANT_ATTR,
+  attackEnvelope,
+  type EnemyRig,
+} from '@/render/meshlib/gait';
 
 const cellToWorld = (x: number, z: number, out?: THREE.Vector3): THREE.Vector3 =>
   (out ?? new THREE.Vector3()).set(x, 0, z);
@@ -380,6 +388,191 @@ describe('아군 체력바 — 오버레이 메시 공유', () => {
     view.update([], [], 1, cellToWorld, [], [ally({ hp: 40, alive: false })]);
     expect(mesh.count).toBe(0);
     view.dispose();
+  });
+});
+
+/**
+ * ── 11단계: 부족원의 **진짜 공격 동작** ────────────────────────────────────────
+ *
+ * 그 전까지 아군의 공격은 "멈춰서 적을 물면 보행 위상을 시간으로 9rad/s 굴린다"가
+ * 전부였다. 사지가 전부 같은 aGait 하나를 보므로 팔을 빠르게 흔들려면 **다리도 같이
+ * 빨라져** 제자리 뜀박질로 읽혔고, 무엇보다 위상이 자유 진동이라 **때리는 순간이
+ * 피해가 들어가는 틱과 아무 상관이 없었다**.
+ *
+ * 지금은 습격대와 같은 공격 채널(gait.ts aAtk)을 쓴다. 아래 넷이 그 계약을 나눠 잠근다:
+ *  ① 진행도가 sim 의 쿨다운 잔여 틱에서 나온다 (= 타격 틱에 물려 있다)
+ *  ② 대기 중에는 0이다 (쿨다운 0에 눌러앉은 아군의 팔이 얼어붙지 않는다)
+ *  ③ 다리는 공격에 관여하지 않는다 (제자리 뜀박질 회귀 방지)
+ *  ④ 무기가 실제로 올라갔다 내려온다 (셰이더 식을 CPU 로 재현해 잰다)
+ */
+describe('아군 공격 동작 — 쿨다운 잔여 틱에 물린 한 번의 타격', () => {
+  const atkOf = (view: EnemyView): THREE.BufferAttribute =>
+    (view as unknown as { atkAttrs: Map<string, THREE.BufferAttribute> }).atkAttrs.get(
+      allyGeoKey(),
+    )!;
+
+  /** 한 프레임 그리고 그 인스턴스의 공격 채널 (진행도, 조준) 을 읽는다 */
+  function drawOne(view: EnemyView, a: AllyState, alpha = 0, dt = 0.016): [number, number] {
+    view.update([], alpha, cellToWorld, dt, [a]);
+    const attr = atkOf(view);
+    return [attr.getX(0), attr.getY(0)];
+  }
+
+  it('① 진행도가 타격 틱에서 impact 이고 쿨다운을 따라 앞뒤로 이어진다', () => {
+    const scene = new THREE.Scene();
+    const view = new EnemyView(scene);
+    const anim = allyAttackAnim('clubber');
+    // sim(allies.ts)이 타격 순간 attackCdLeft 를 쿨다운 전체로 채운다 —
+    // 그 프레임의 진행도가 곧 "피해가 들어가는 지점"이어야 한다.
+    expect(drawOne(view, ally({ attackCdLeft: anim.cooldown, targetId: 7 }))[0]).toBeCloseTo(
+      anim.impact,
+      6,
+    );
+    // 내려친 뒤: 틱이 흐를수록 1을 향해 간다 (복귀 구간)
+    const rec = anim.ticks * (1 - anim.impact);
+    for (let k = 1; k < Math.floor(rec); k++) {
+      expect(
+        drawOne(view, ally({ attackCdLeft: anim.cooldown - k, targetId: 7 }))[0],
+        `복귀 ${k}틱`,
+      ).toBeCloseTo(anim.impact + k / anim.ticks, 6);
+    }
+    // 쿨다운 한가운데는 동작이 없다 — 동작 길이가 쿨다운보다 짧기 때문이다
+    expect(drawOne(view, ally({ attackCdLeft: anim.cooldown - Math.ceil(rec), targetId: 7 }))[0]).toBe(0);
+    // 다음 타격이 다가오면 **미리** 젖히기 시작한다 (impact 를 향해 올라간다)
+    const wind = anim.ticks * anim.impact;
+    for (let cd = Math.floor(wind); cd >= 1; cd--) {
+      expect(drawOne(view, ally({ attackCdLeft: cd, targetId: 7 }))[0], `젖히기 cd=${cd}`).toBeCloseTo(
+        anim.impact - cd / anim.ticks,
+        6,
+      );
+    }
+    view.dispose();
+  });
+
+  it('② 적이 없으면 0 — 쿨다운 0에 눌러앉아도 팔이 얼어붙지 않는다', () => {
+    const scene = new THREE.Scene();
+    const view = new EnemyView(scene);
+    // 대기 중인 아군은 attackCdLeft 가 0에서 멈춰 있다. 그 값을 그대로 "다음 타격까지 0틱"
+    // 으로 읽으면 팔이 내려치기 직전 자세로 굳는다 — 교전(targetId) 을 조건으로 건 이유다.
+    expect(drawOne(view, ally({ attackCdLeft: 0, targetId: -1 }))[0]).toBe(0);
+    expect(drawOne(view, ally({ attackCdLeft: 3, targetId: -1 }))[0]).toBe(0);
+    /**
+     * 다만 **복귀 구간은 교전이 풀려도 끝까지 재생한다.** 마지막 한 대에 적이 죽으면
+     * 그 틱에 targetId 가 −1이 되는데, 여기서 0으로 끊으면 치켜든 팔이 한 프레임 만에
+     * 순간이동해 내려온다. 진행도가 1에 닿으면 포락선이 0이라 저절로 이어진다.
+     */
+    const anim = allyAttackAnim('clubber');
+    expect(drawOne(view, ally({ attackCdLeft: anim.cooldown, targetId: -1 }))[0]).toBeCloseTo(
+      anim.impact,
+      6,
+    );
+    view.dispose();
+  });
+
+  it('③ 다리는 공격에 관여하지 않는다 (제자리 뜀박질 회귀)', () => {
+    // 리그 쪽: 지면에 닿는 그룹은 공격 배역이 없어야 한다 —
+    // 배역이 붙는 순간 포즈 표가 다리를 가져가 접지 보정(groundLift)이 통째로 어긋난다
+    for (const l of allyRig().limbs) {
+      if (l.ground) expect(l.role, '다리에 공격 배역이 붙었다').toBe(0);
+    }
+    // 뷰 쪽: 멈춰 서서 때리는 아군의 보행 위상은 **시간이 흘러도 변하지 않는다**.
+    // (옛 구현은 여기에 this.time × 9rad/s 를 더해 다리를 굴렸다)
+    const scene = new THREE.Scene();
+    const view = new EnemyView(scene);
+    const gaits = (view as unknown as { gaitAttrs: Map<string, THREE.BufferAttribute> }).gaitAttrs;
+    const fighting = ally({ attackCdLeft: 6, targetId: 7, walked: 3.2 });
+    view.update([], 1, cellToWorld, 0.016, [fighting]);
+    const g0 = gaits.get(allyGeoKey())!.getX(0);
+    for (let i = 0; i < 30; i++) view.update([], 1, cellToWorld, 0.05, [fighting]);
+    expect(gaits.get(allyGeoKey())!.getX(0), '멈춰 싸우는데 다리가 걷는다').toBeCloseTo(g0, 6);
+    view.dispose();
+  });
+
+  it('③-b 조준 자세는 멈춰 서서 물었을 때만 든다 (걸으며 팔이 굳지 않는다)', () => {
+    const scene = new THREE.Scene();
+    const view = new EnemyView(scene);
+    // dt 를 크게 주면 블렌드(AIM_RATE)가 한 프레임에 목표까지 간다
+    const still = ally({ targetId: 7, attackCdLeft: 6, x: 8, prevX: 8 });
+    for (let i = 0; i < 3; i++) view.update([], 1, cellToWorld, 0.5, [still]);
+    expect(atkOf(view).getY(0), '멈춰서 물면 겨눈다').toBeGreaterThan(0.9);
+    const walking = ally({ targetId: 7, attackCdLeft: 6, x: 7.9, prevX: 8, walked: 0.1 });
+    for (let i = 0; i < 3; i++) view.update([], 1, cellToWorld, 0.5, [walking]);
+    expect(atkOf(view).getY(0), '걸으면 보행 스윙으로 돌아온다').toBeLessThan(0.1);
+    view.dispose();
+  });
+
+  /**
+   * ④ 셰이더(gait.ts wgdSetup/wgdPos)의 사지 변형을 CPU 로 그대로 재현해
+   * **무기 손(MAIN 배역) 정점이 실제로 올라갔다 내려오는지** 잰다.
+   * 포즈 표에 각도만 적어 두고 배역·변형 번호를 잘못 물리면 화면에서는 아무 일도
+   * 일어나지 않는데 테스트는 통과하는 사고가 나기 쉬워, 굽힌 정점을 직접 본다.
+   */
+  function limbTop(id: AllyId, p: number, aim: number): number {
+    const rig: EnemyRig = allyRig();
+    const geo = buildAlly();
+    const pos = geo.getAttribute('position')!;
+    const limb = geo.getAttribute(LIMB_ATTR)!;
+    const vtag = geo.getAttribute(VARIANT_ATTR)!;
+    const variant = allyVariant(id);
+    const { wb, fw } = attackEnvelope(p);
+    let top = -Infinity;
+    for (let i = 0; i < pos.count; i++) {
+      if (Math.round(vtag.getX(i)) !== variant) continue;
+      const li = Math.round(limb.getX(i)) - 1;
+      const s = rig.limbs[li];
+      if (!s || s.role !== ATK_ROLE_MAIN) continue;
+      // 던져 나간 물건(무릿매 돌)은 놓는 순간 접혀 사라지므로 높이 계산에서 뺀다
+      if (s.throwAway && p > 0.47 && p < 0.85) continue;
+      const o = (variant * 3 + s.role - 1) * 4;
+      const back = Math.max(wb, aim * (1 - fw));
+      const take = rig.attack[o + 2]! * Math.max(aim, wb + fw);
+      const ang = (rig.attack[o]! * back + rig.attack[o + 1]! * fw) * take;
+      // 아군 팔은 전부 +z 축 회전이라 2D 회전으로 충분하다 (축이 바뀌면 이 식을 고쳐라)
+      expect(Math.abs(s.axis[2]), `${id} MAIN 축이 z 가 아니다`).toBeCloseTo(1, 6);
+      const px = pos.getX(i) - s.pivot[0];
+      const py = pos.getY(i) - s.pivot[1];
+      const y = s.pivot[1] + px * Math.sin(ang) + py * Math.cos(ang);
+      if (y > top) top = y;
+    }
+    return top;
+  }
+
+  it('④ 무기가 벼르는 자세에서 치켜들었다가 타격에 앞아래로 떨어진다', () => {
+    for (const id of ALL_ALLY_IDS) {
+      const ready = limbTop(id, 0, 1); // 적을 물고 벼르는 자세 (조준 유지)
+      const rest = limbTop(id, 0, 0); // 그냥 서 있는 자세 (보행 리그 그대로)
+      const hit = limbTop(id, ATK_RELEASE, 1); // 무기가 가장 앞아래로 내려간 지점
+      expect(ready, `${id} 벼르는 자세가 쉬는 자세와 같다`).not.toBeCloseTo(rest, 2);
+      /**
+       * 모델 키가 0.77 남짓(2.5등신)이므로 0.2는 **몸 높이의 1/4 이상** 떨어진다는 뜻이다.
+       * 실측: 몽둥이꾼 0.750 → 0.374 (0.376) · 무릿매 0.899 → 0.436 (0.463) ·
+       *       파수꾼 0.676 → 0.361 (0.315).
+       */
+      expect(ready - hit, `${id} 무기가 내려오지 않는다`).toBeGreaterThan(0.2);
+    }
+  });
+
+  /**
+   * 습격대 회귀 — 아군 포즈 표를 얹어도 적의 표는 한 톨도 움직이지 않아야 한다.
+   * 둘은 같은 셰이더·같은 몸통을 쓰지만 **지오메트리와 리그가 갈려 있다**(5단계).
+   * 여기서 습격대 값을 못 박아 두면, 훗날 아군 포즈를 손보다 적을 건드린 실수가 걸린다.
+   */
+  it('아군 포즈 표를 얹어도 습격대 공격 포즈는 그대로다', () => {
+    const foe = enemyRig('blade');
+    const own = allyRig();
+    expect(foe.attack).not.toBe(own.attack); // 표 자체가 다른 객체다
+    expect(foe.attack.length).toBeGreaterThan(0);
+    // 투창병(변형 1)의 무기 팔: 어깨 뒤로 −2.5rad 젖혔다 +1.75rad 로 뿌린다
+    const o = (1 * 3 + ATK_ROLE_MAIN - 1) * 4;
+    expect(foe.attack[o], 'blade MAIN back').toBeCloseTo(-2.5, 6);
+    expect(foe.attack[o + 1], 'blade MAIN fwd').toBeCloseTo(1.75, 6);
+    // 습격대는 아군과 다른 메시라 인스턴스 커서도 섞이지 않는다
+    const scene = new THREE.Scene();
+    const v = new EnemyView(scene);
+    v.update([enemy({ id: 1, defId: 'blade' })], 1, cellToWorld, 0.016, [ally({ id: 101 })]);
+    expect(viewMeshes(v).get(RAIDER_GEO_KEY)!.count).toBe(1);
+    expect(viewMeshes(v).get(allyGeoKey())!.count).toBe(1);
+    v.dispose();
   });
 });
 

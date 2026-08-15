@@ -47,6 +47,7 @@ import {
   ALL_ENEMY_IDS,
   ALLY_TINT,
   BOSS_ENEMIES,
+  allyAttackAnim,
   allyGeoKey,
   allyRig,
   allyVariant,
@@ -56,6 +57,7 @@ import {
   enemyGeoKey,
   enemyRig,
   enemyVariant,
+  type AllyAttackAnim,
 } from '../meshlib/enemies';
 import {
   ATTACK_ATTR,
@@ -161,6 +163,47 @@ function instAttr(
 function attackProgress(left: number, ticks: number, alpha: number): number {
   if (left <= 0 || ticks <= 0) return 0;
   return clamp01(1 - (left - alpha) / ticks);
+}
+
+/**
+ * 아군 공격 동작 진행도 0..1 — **쿨다운 잔여 틱에서 역산한다.**
+ *
+ * 습격대는 sim 이 동작 전용 카운터(attackAnimLeft)를 실어 보내지만 AllyState 에는
+ * 그런 필드가 없다(sim 은 아군 연출을 모른다). 그래도 필요한 정보는 전부 있다:
+ * `attackCdLeft` 는 타격 순간 쿨다운 전체로 채워져 매 틱 1씩 주므로,
+ *   지난 타격 이후 흐른 틱 = cooldown − attackCdLeft,  다음 타격까지 = attackCdLeft
+ * 두 값을 동시에 준다. 곧 **다음 타격이 언제인지 미리 안다** — 그래서 타격 틱보다
+ * 앞서 팔을 들어 올렸다가(젖히기) 정확히 그 틱에 내려칠 수 있다.
+ * 이것이 this.time 으로 자유 진동시키던 옛 방식과의 결정적 차이다: 자유 진동은
+ * 피해가 들어가는 틱과 영원히 어긋나 "때리는 시늉"으로만 보인다.
+ *
+ * 동작은 타격 지점(anim.impact)을 기준으로 **앞뒤 두 조각**으로 놓인다.
+ *   [타격 − wind틱, 타격]  → 진행도 0 → impact  (치켜드는 구간)
+ *   [타격, 타격 + rec틱]   → 진행도 impact → 1  (내려친 뒤 복귀)
+ * 동작 길이가 쿨다운 이하라(anim.ticks) 두 조각은 절대 겹치지 않고, 그 바깥은 0이다.
+ * 포락선이 진행도 0 과 1 에서 똑같이 0이므로(gait.ts attackEnvelope) 조각과 조각
+ * 사이에서 자세가 튀지 않는다 — 0 은 "동작 없음"과 같은 자세다.
+ *
+ * ⚠ 젖히기는 **적을 물고 있을 때만**(engaged) 켠다. 사거리에 아무도 없는 아군은
+ * 쿨다운이 0에 눌러앉아 있어서, 그대로 두면 "다음 타격까지 0틱"으로 읽혀 팔이
+ * 내려치기 직전 자세로 **얼어붙는다**. 대기 중에는 0(보행/정지 자세)이 맞다.
+ * 반대로 복귀 구간은 조건 없이 끝까지 재생한다 — 마지막 한 대에 적이 죽어 교전이
+ * 풀려도 치켜든 팔이 그 자리에서 사라지지 않고 제대로 내려온다.
+ */
+function allyAttackProgress(
+  cdLeft: number,
+  anim: AllyAttackAnim,
+  engaged: boolean,
+  alpha: number,
+): number {
+  const wind = anim.impact * anim.ticks;
+  const rec = anim.ticks - wind;
+  // 틱 카운터를 렌더 alpha 로 이어 붙인다 (습격대 attackProgress 와 같은 규약)
+  const since = anim.cooldown - cdLeft + alpha;
+  if (since < rec) return anim.impact + since / anim.ticks;
+  const toGo = cdLeft - alpha;
+  if (engaged && toGo >= 0 && toGo < wind) return anim.impact - toGo / anim.ticks;
+  return 0;
 }
 
 /** 인스턴스 어트리뷰트를 앞에서 count 개 요소만 업로드하도록 예약 */
@@ -430,12 +473,17 @@ export class EnemyView {
   }
 
   /**
-   * 아군 인스턴스를 **적 습격대와 같은 메시**의 뒤쪽에 이어 붙인다 (드로우콜 증가 0).
-   * 적 루프와 공유하는 것: counts(인스턴스 커서) · seen(애니 상태 GC) · anims(스폰 팝).
+   * 아군 인스턴스를 아군 전용 메시에 쌓는다 (5단계에 습격대 메시에서 갈렸다 — addAllyMesh 주석).
+   * 적 루프와 공유하는 것: counts(인스턴스 커서) · seen(애니 상태 GC) · anims(스폰 팝/조준 블렌드).
    *
-   * 아군은 판 위를 자유롭게 걷는다(9단계 — 경로 역주행은 폐기됐다). 보행 위상을 e.dist처럼 그대로 쓰면
-   * 위상이 감소해 걸음이 거꾸로 돈다 — 그래서 부호를 뒤집은 -dist를 이동거리로 쓴다.
-   * 그러면 "앞으로 나아간 거리"가 되어 보폭·접지 보정이 적과 완전히 같은 식으로 맞는다.
+   * 아군은 판 위를 자유롭게 걷는다(9단계 — 경로 역주행은 폐기됐다). 그래서 보행 위상은
+   * 좌표가 아니라 **걸은 총 거리**(walked)에서 뽑는다 — 방향과 무관하게 언제나 늘어나므로
+   * 앞뒤로 오가도 다리가 얼거나 거꾸로 돌지 않는다.
+   *
+   * 11단계에 **공격이 이 함수의 두 번째 축**이 됐다. 몸통·리그가 습격대와 같은 코드에서
+   * 나오므로 공격 채널(gait.ts aAtk)도 그대로 쓴다 — 팔·머리만 포즈가 가져가고 다리는
+   * 보행/정지 그대로 남는다. 다른 것은 진행도의 출처 하나뿐이다: 습격대는 sim 이 동작
+   * 카운터를 실어 보내지만 아군은 **쿨다운 잔여 틱에서 역산**한다(allyAttackProgress).
    */
   private updateAllies(
     allies: readonly AllyState[],
@@ -458,9 +506,15 @@ export class EnemyView {
         anim = { age: 0, flash: 0, aim: 0 };
         this.anims.set(a.id, anim);
       }
+      const step = Math.hypot(a.x - a.prevX, a.z - a.prevZ);
       if (dt > 1e-3) {
         anim.age += dt;
         anim.flash = Math.max(0, anim.flash - dt * 5);
+        // 조준 자세는 **멈춰 서서 적을 물고 있을 때만** 든다. 걸어가는 중에는 0이라
+        // 팔이 보행 스윙 그대로 남고, 그 위로 타격 동작만 잠깐 얹힌다(take = wb+fw).
+        // 서서 겨누는 동안에는 젖힌 자세로 굳어 "몽둥이를 들고 벼르는" 그림이 된다.
+        const want = a.targetId >= 0 && step < STOPPED_EPS ? 1 : 0;
+        anim.aim += (want - anim.aim) * Math.min(1, dt * AIM_RATE);
       }
       const idx = counts.get(key) ?? 0;
       if (idx >= CAPACITY) return;
@@ -469,29 +523,33 @@ export class EnemyView {
       const sx = lerp(a.prevX, a.x, alpha);
       const sz = lerp(a.prevZ, a.z, alpha);
       cellToWorld(sx, sz, _pos);
-      const step = Math.hypot(a.x - a.prevX, a.z - a.prevZ);
       // 9단계: 아군이 경로를 떠나면서 `-a.dist`(역주행 호장)가 사라졌다. 대신 태어나서
       // 걸은 총 거리 `walked`를 쓴다 — 방향과 무관하게 **언제나 증가**하므로 앞뒤로
       // 오가도 다리가 얼거나 거꾸로 돌지 않는다. 보간은 적과 같은 규약(한 틱 뒤로 되감기).
       const travel = a.walked - step * (1 - alpha);
       const off = phaseOffset01(a.id) * TAU;
-      // 멈춰 서서 때리는 중 — 적과 같은 규칙으로 팔을 휘두른다
-      const swinging = a.targetId >= 0 && step < STOPPED_EPS;
-      const swing = swinging ? this.time * ATTACK_SWING_RATE : 0;
-      const gait = wrapGait(travel * rig.gaitPerDist + off + swing);
+      /**
+       * 보행 위상은 **오직 걸은 거리**에서 나온다. 11단계까지는 여기에 "멈춰서 때리는
+       * 중이면 시간을 9rad/s로 더한다"는 폴백이 있었는데, 그 위상은 사지 전부가 공유하는
+       * 값이라 팔을 빨리 돌리려다 **다리까지 같이 빨라져 제자리 뜀박질**이 됐다.
+       * 이제 팔·머리는 공격 채널이 배역으로 가져가므로(아래 atkP) 폴백이 필요 없다 —
+       * 멈춘 아군은 이동거리가 늘지 않아 다리가 저절로 정지 자세로 굳는다.
+       */
+      const gait = wrapGait(travel * rig.gaitPerDist + off);
+      // 공격 채널 — 진행도는 쿨다운 잔여 틱에서 역산해 **피해가 들어가는 틱**에 맞춘다
+      const atk = allyAttackAnim(a.defId);
+      const atkP = allyAttackProgress(a.attackCdLeft, atk, a.targetId >= 0, alpha);
       const pop = anim.age < 0.28 ? easeOutBack(anim.age / 0.28) : 1;
       _pos.y = groundLiftAt(rig, Math.abs(Math.sin(gait))) * pop;
-      let pitch = 0;
-      if (swinging) pitch -= Math.max(0, Math.sin(gait)) * ATTACK_LEAN;
+      // 온몸으로 내려친다 — 치켜들 때 뒤로, 내려칠 때 앞으로. 셰이더와 **같은 포락선**이다
+      const pitch = attackLean(atkP, anim.aim, atk.lean);
       _quat.setFromAxisAngle(AXIS_Y, -a.heading);
       _quat2.setFromAxisAngle(AXIS_Z, pitch);
       _quat.multiply(_quat2);
       _mat.compose(_pos, _quat, _scl.setScalar(pop));
       mesh.setMatrixAt(idx, _mat);
       this.gaitAttrs.get(key)?.setX(idx, gait);
-      // 아군은 아직 공격 포즈 표가 비어 있다(ALLY_KITS 미등록) — 채널을 0으로 눌러
-      // 앞 프레임의 값이 남아 돌지 않게 한다. 지금 동작은 위의 swing 폴백이 그대로 낸다.
-      this.atkAttrs.get(key)?.setXY(idx, 0, 0);
+      this.atkAttrs.get(key)?.setXY(idx, atkP, anim.aim);
       this.varAttrs.get(key)?.setX(idx, allyVariant(a.defId));
       // 아군은 한랭 색조로 물들여 적과 즉시 갈린다. 피격 플래시는 그 위에 더한다
       const f = anim.flash * anim.flash * 7;

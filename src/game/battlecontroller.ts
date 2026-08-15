@@ -349,9 +349,9 @@ export class BattleController {
     );
     s3.projectiles.update(st.projectiles, alpha, dt);
     s3.towers.aim(st.towers, st.enemies, alpha);
-    // 부족 선택 표식은 **걸어가는 사람을 따라간다** — 매 프레임 다시 굽지 않으면
-    // 유닛은 떠났는데 발밑 표식만 스폰 자리에 남는다. 지점이 그대로면 굽지 않는다
-    // (decals.showSortieMarker가 서명으로 걸러낸다) 무선택이면 즉시 반환한다.
+    // 부족 사거리 바운더리는 **걸어가는 사람을 따라간다** — 매 프레임 다시 굽지 않으면
+    // 유닛은 떠났는데 원만 스폰 자리에 남는다. 지점·반경이 그대로면 굽지 않는다
+    // (decals.showAllyRanges가 서명으로 걸러낸다) 무선택이면 즉시 반환한다.
     this.placement.refreshAllySelection();
     s3.update(dt);
     this.updatePanelLift();
