@@ -16,7 +16,7 @@ import type {
 export const ENDLESS_UNLOCK_STAGE = 3;
 
 function defaultSettings(): Settings {
-  return { lang: 'ko', music: 0.8, sfx: 0.9, vibration: true, quality: 'auto' };
+  return { lang: 'ko', music: 0.8, sfx: 0.9, vibration: true, quality: 'auto', unlockAll: false };
 }
 
 function defaultProfile(): ProfileData {
@@ -41,6 +41,14 @@ function normalize(data: ProfileData): ProfileData {
     if (!data.towers[id]) data.towers[id] = def.towers[id];
   }
   data.settings = { ...def.settings, ...data.settings };
+  /*
+   * unlockAll은 스프레드만으로는 부족하다. 세이브 버전을 올리지 않고 필드만 늘렸기 때문에
+   * 옛 세이브(v1)가 그대로 들어오는데, 키가 없으면 스프레드가 기본값을 살려 주지만
+   * 키가 **명시적 undefined/null/문자열**로 남아 있으면 그대로 덮어써 버린다
+   * (localStorage를 손댄 세이브나 다른 도구가 만든 세이브에서 실제로 가능하다).
+   * boolean으로 한 번 못박아 "undefined인 unlockAll"이 UI/판정으로 새지 않게 한다.
+   */
+  data.settings.unlockAll = data.settings.unlockAll === true;
   data.stats = { ...def.stats, ...data.stats };
   return data;
 }
@@ -116,11 +124,18 @@ export function createProfile(): Profile {
 
     stageProgress,
 
+    /*
+     * unlockAll이 켜져 있으면 앞 스테이지를 보지 않고 바로 true. stageProgress()는
+     * 없는 항목을 **만들어 넣는** 부수효과가 있어서, 우회 경로에서는 호출조차 하지 않는다
+     * (설정만 켰다 껐다 해도 세이브에 빈 진행도가 쌓이지 않는다).
+     */
     isStageUnlocked(stageId: number) {
+      if (data.settings.unlockAll) return true;
       return stageId === 1 || stageProgress(stageId - 1).cleared;
     },
 
     isEndlessUnlocked() {
+      if (data.settings.unlockAll) return true;
       return stageProgress(ENDLESS_UNLOCK_STAGE).cleared;
     },
 

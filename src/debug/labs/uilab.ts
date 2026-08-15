@@ -49,7 +49,7 @@ function makeProfile(): ProfileApi {
     towers,
     stages,
     milestones: [],
-    settings: { lang: 'ko', music: 0.8, sfx: 0.9, vibration: true, quality: 'auto' },
+    settings: { lang: 'ko', music: 0.8, sfx: 0.9, vibration: true, quality: 'auto', unlockAll: false },
     stats: { kills: 1234, wavesCleared: 87, playMs: 0, bossKills: 3 },
   };
   const stageProgress = (id: number): StageProgress =>
@@ -83,7 +83,8 @@ function makeProfile(): ProfileApi {
       return true;
     },
     stageProgress,
-    isStageUnlocked: (id) => id === 1 || stageProgress(id - 1).cleared,
+    // 목이지만 unlockAll은 실제와 같이 판정한다 — uilab에서 설정→로비 흐름을 그대로 본다
+    isStageUnlocked: (id) => data.settings.unlockAll || id === 1 || stageProgress(id - 1).cleared,
     isEndlessUnlocked: () => true,
     updateSettings(patch) {
       Object.assign(data.settings, patch);

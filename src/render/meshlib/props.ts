@@ -8,11 +8,23 @@
  * 맹그로브·현무암 기둥)이 있다. 종전 구현은 바이옴당 원형 2~4종을 셀 중심에 하나씩,
  * 그것도 스케일 0.62~0.88로 눌러 놓아서 **한 층뿐이고 전부 관목 크기**였다.
  * 그래서 이 파일은 층 구조 자체를 바꾼다:
- *   1층(hero)  셀마다 1개. 타일보다 확실히 큰 실루엣 (월드 높이 1.0~1.7)
- *   2층(mid)   1~2개. 덤불·고사리·갈대·얼음 조각 — 30~40 삼각형
- *   3층(ground) 2~4개. 풀 다발·꽃·자갈·갈라진 땅 — 3~18 삼각형
- * 무성함은 폴리곤이 아니라 **겹침**에서 온다. 셀당 오브젝트 수가 1 → 4~7로 늘었는데
- * 삼각형은 오히려 줄었다(아래 예산표).
+ *   1층(hero)  셀마다 1개 + 밑동 옆 부 소품 1개(조건부). 타일보다 큰 실루엣
+ *   2층(mid)   1~4개. 덤불·고사리·갈대·얼음 조각·덩굴 — 10~40 삼각형
+ *   3층(ground) 3~5개. 풀 다발·꽃·자갈·웅덩이·유황 — 3~18 삼각형
+ * 무성함은 폴리곤이 아니라 **겹침**에서 온다. 셀당 오브젝트 수가 1 → 5~9로 늘었는데
+ * 삼각형은 개정 전 프레임 청구액의 절반 이하다(아래 예산표).
+ *
+ * ── 2차 개정: 크기 계층 ────────────────────────────────────────────────────
+ * 위 3층 구조를 얹고도 판이 허전하다는 지적이 남았고, 정량적 정체는 종류 수가 아니라
+ * **크기 폭**이었다. heroScale 이 ±12%(0.78~1.0)에 원형 높이도 1.37~1.70 이라,
+ * 곱해도 판 위 모든 나무가 28% 밴드 안에 있었다 — 같은 도장을 45번 찍은 그림.
+ * 그래서 셋을 같이 했다:
+ *   (a) 배율을 세 계층으로 나눠 뽑는다 (HERO_TIERS — 구간 **사이에 틈**을 둔다)
+ *   (b) 원형 목록에 2.0급(pineGiant/buttressTree/iceSpireTall/rockSpire/basaltStack)과
+ *       0.3급(그루터기·눕힌 통나무)을 같이 넣는다 — 배율만 넓히면 같은 실루엣이
+ *       커졌다 작아졌다 할 뿐이다
+ *   (c) 1층이 작게 뽑힌 셀에는 부 소품을 붙여 셀이 통째로 비지 않게 한다
+ * 실제 높이 폭은 1.33~1.70(1.3배)에서 0.17~2.32(최대 13배)로 벌어졌다.
  *
  * ── 싸게 만드는 두 가지 수단 ───────────────────────────────────────────────
  * (1) **납작한 것은 폴리곤으로 굽지 않는다** (FlatSpec).
@@ -63,14 +75,38 @@ export const PROTO_TRI_BUDGET = 140;
 /** 소품 셀 **하나**(3층 + 접촉 그림자) 합계 상한 — 실측 최댓값 + 여유 */
 export const CELL_TRI_BUDGET = 300;
 
+/**
+ * 셀을 채울 때 실제로 쓰는 예산 — CELL_TRI_BUDGET 에서 8 만큼 뺀 값.
+ *
+ * 후보 목록을 넓히고 크기 계층까지 섞으면 이론 최악 조합이 바이옴에 따라
+ * 306~377 삼각형까지 튄다. 개정 전처럼 "편성표를 상한에 맞춰 손으로 깎는" 방식은
+ * 후보가 6~10종이 되는 순간 유지가 불가능하다(조합이 수백 가지다). 그래서
+ * buildProps 가 **굽기 전에 세어 가며** 채우고, 이 상수가 그 하드 캡이다.
+ * 곧 CELL_TRI_BUDGET 초과는 확률이 낮은 게 아니라 **구조적으로 불가능**하다.
+ */
+export const CELL_SOFT_BUDGET = CELL_TRI_BUDGET - 8;
+
+/** 접촉 그림자 판 1장(6각형) — 셀 예산에서 미리 뗀다 */
+const SHADOW_TRI = 4;
+
+/** 2·3층 최소 몫 — 부 소품이 이만큼은 남기고 들어와야 한다 (2층 1개 + 3층 3개 급) */
+const UNDER_RESERVE = 68;
+
+/** 3층 몫 — 2층이 여기까지 먹어 들어가지 못하게 막는다 (3층 3~4개 급) */
+const GROUND_RESERVE = 42;
+
 /** 소품(1층)이 셀 중심에서 흩어지는 최대 오프셋 (선택 링이 같은 값을 써서 밑동을 감싼다) */
 export const PROP_JITTER = 0.18;
 
 /** 2·3층이 놓이는 셀 안 반경 상한 — 셀(1×1) 밖으로 새지 않게 */
 const UNDER_RADIUS_MAX = 0.46;
 
-/** 색 명도 배율 — 같은 계열 안에서 면을 나눠 각진 결을 살릴 때 쓴다 */
-function shade(hex: number, f: number): number {
+/**
+ * 색 명도 배율 — 같은 계열 안에서 면을 나눠 각진 결을 살릴 때 쓴다.
+ * (export 인 이유: 맨 셀 바닥 결 레이어(grounddetail.ts)가 **같은 함수**로 색을
+ *  나눠야 두 레이어의 톤이 갈리지 않는다. 복제하면 조용히 어긋난다)
+ */
+export function shade(hex: number, f: number): number {
   const r = Math.min(255, Math.round(((hex >> 16) & 0xff) * f));
   const g = Math.min(255, Math.round(((hex >> 8) & 0xff) * f));
   const b = Math.min(255, Math.round((hex & 0xff) * f));
@@ -139,6 +175,50 @@ const P = {
   lavaHot: 0xff8a2e,
   lavaCore: 0xffc85a,
   lavaDeep: 0xe04a12,
+
+  /*
+   * ── 아래는 "바이옴 **안**의 대비"를 위해 새로 넣은 색 ────────────────────
+   * 캡처를 6장 나란히 놓고 보면 바이옴끼리는 이미 충분히 다른데, **각자 안에서
+   * 단색**인 게 더 큰 병이었다: 초원은 초록 한 톤, 설원은 흰 위의 흰색(지피가
+   * 아예 식별되지 않는다), 화산은 검정+주황 2색뿐이라 색상환에서 두 점만 쓴다.
+   * 그래서 신규 요소의 색은 "새 종류"보다 **다른 명도/색상 악센트**를 먼저 골랐다.
+   */
+  // 초원 — 흰 줄기(자작나무)와 갈색 맨흙이 초록 단색을 깬다
+  birchBark: 0xe4dfcd,
+  birchBarkShade: 0xc9c2ab,
+  birchKnot: 0x413b31,
+  soil: 0x6f5436,
+  soilLit: 0x8a6a45,
+  stumpTop: 0x9a7850,
+  mossPatch: 0x6a9a3e,
+  // 정글 — 회색 노두와 대나무 연두가 초록 한 톤을 끊는다
+  bamboo: 0x9fc158,
+  bambooDark: 0x789c40,
+  jungleRock: 0x6f7a68,
+  jungleRockLit: 0x8b9682,
+  vineGreen: 0x4f9440,
+  // 사막 — 아치 그늘의 진갈색이 주황 감자밭에 어두운 점을 찍는다
+  sandArchShade: 0x8a542c,
+  sandRipple: 0xe2c184,
+  cairnStone: 0xb28454,
+  // 설원 — 고사목 검정과 마른 갈대 갈색. 흰 판에 유일한 어두운 색이다
+  snowRock: 0x8ea6bb,
+  snowRockLit: 0xa9becd,
+  deadWood: 0x3c372f,
+  deadWoodLit: 0x524b40,
+  dryReed: 0xa8935e,
+  // 늪 — 진흙 갈색이 어두운 초록 한 톤에 명도를 올린다
+  mud: 0x4a3a2c,
+  mudBubble: 0x7d6852,
+  puddleLit: 0x4a8a72,
+  cattailHead: 0x7d5a30,
+  // 화산 — 연기 회백색 + 유황 노랑이 검정·주황 사이의 세 번째·네 번째 점이다
+  smokePale: 0xd6d0c6,
+  smokeGray: 0xa7a199,
+  sulfur: 0xd8c24a,
+  sulfurLit: 0xb8c85a,
+  charGrassCol: 0x5a4a38,
+  lavaCrust: 0x2b1712,
 } as const;
 
 // --- 납작한 조각(판) ------------------------------------------------------
@@ -172,8 +252,14 @@ const _v = new THREE.Vector3();
 const _c = new THREE.Color();
 const _hsl = { h: 0, s: 0, l: 0 };
 
-/** 판 목록 → position/color/normal 비인덱스 지오메트리 (buildParts 출력과 같은 어트리뷰트) */
-function buildFlats(flats: readonly FlatSpec[], seed: number, faceJitter = 0.04): THREE.BufferGeometry {
+/**
+ * 판 목록 → position/color/normal 비인덱스 지오메트리 (buildParts 출력과 같은 어트리뷰트)
+ *
+ * export 인 이유: 맨 셀 바닥 결 레이어(grounddetail.ts)가 이 함수를 그대로 쓴다.
+ * 복제하지 않는 것이 중요하다 — 감김 방향(노멀 +Y)과 색 지터 규약이 갈리는 순간
+ * 두 레이어가 다른 톤으로 굽히고, 그건 캡처 한 장으로는 잘 안 보인다.
+ */
+export function buildFlats(flats: readonly FlatSpec[], seed: number, faceJitter = 0.04): THREE.BufferGeometry {
   const rng = new Rng(seed);
   let triTotal = 0;
   for (const f of flats) triTotal += (f.sides ?? 4) - 2;
@@ -637,6 +723,492 @@ function ventCrater(): Element {
   };
 }
 
+/*
+ * ── 신규 1층 ①: **수평 실루엣** ───────────────────────────────────────────
+ * 개정 전 1층 21종이 **전부 수직**(원뿔·기둥·구·이코사)이었다. 통나무처럼 누운 것이
+ * 하나도 없어 판 전체가 "같은 방향으로 선 것들"의 반복이었고, 그게 카메라를 돌려도
+ * 그림이 안 바뀌는 이유였다. 눕힌 통나무는 세 가지를 한꺼번에 준다:
+ *   (a) 가로 실루엣  (b) 1층 최저 높이 0.30 — 그 위 pineGiant(1.94)와 6배 대비
+ *   (c) 잘린 단면 = 사람이 벤 자국이라 원시시대 서사에도 맞는다
+ * 세 바이옴이 같은 골격을 색만 갈아 쓰므로(charTree 가 deadTreeUp 을 재사용한 것과
+ * 같은 수법) 코드는 한 벌이다.
+ */
+function lyingLog(bark: number, cut: number, moss: number, capMushroom: boolean): Element {
+  const solids: PartSpec[] = [
+    // 눕힌 원기둥 — rot z=90° 로 축을 x 로 눕힌다 (scale 은 회전 전 로컬축 기준이다)
+    { kind: 'cyl', pos: [0, 0.15, 0], rot: [0, 0, Math.PI / 2], scale: [0.30, 0.92, 0.30], color: bark, seg: 6, hueJitter: 0.02 },
+    // 부러진 가지 2개 — 통나무가 "쓰러진 나무"로 읽히려면 잔가지가 남아 있어야 한다
+    { kind: 'cone', pos: [0.22, 0.34, 0.16], rot: [0.5, 0, -0.5], scale: [0.09, 0.36, 0.09], color: shade(bark, 1.12), seg: 3 },
+    { kind: 'cone', pos: [-0.18, 0.30, -0.14], rot: [-0.4, 0, 0.6], scale: [0.07, 0.28, 0.07], color: shade(bark, 0.9), seg: 3 },
+  ];
+  if (capMushroom) {
+    // 통나무 위 버섯 — 늪·정글 판의 "썩어 가는 것" 서사를 한 번 더 찍는다
+    solids.push(
+      { kind: 'cone', pos: [0.14, 0.32, -0.09], scale: [0.20, 0.13, 0.20], color: P.glowCap, seg: 3 },
+      { kind: 'cone', pos: [-0.06, 0.31, 0.12], scale: [0.15, 0.10, 0.15], color: P.glowCapDeep, seg: 3 },
+    );
+  }
+  return {
+    solids,
+    flats: [
+      // 잘린 단면 2장 — rz=±90° 로 판을 세워 ∓x 를 보게 한다 (FlatSpec 은 오일러 'YXZ')
+      { pos: [-0.465, 0.15, 0], rot: [0, 0, Math.PI / 2], scale: [0.30, 0.30], color: cut, sides: 6 },
+      { pos: [0.465, 0.15, 0], rot: [0, 0, -Math.PI / 2], scale: [0.29, 0.29], color: shade(cut, 0.88), sides: 6 },
+      // 윗면 이끼 — 통나무 등에 얹혀야 "오래 누워 있었다"가 된다
+      { pos: [0.10, 0.302, 0.02], scale: [0.42, 0.24], color: moss, sides: 5, hueJitter: 0.04 },
+      { pos: [-0.24, 0.302, -0.03], scale: [0.30, 0.20], color: shade(moss, 0.86), sides: 5, hueJitter: 0.04 },
+    ],
+  };
+}
+
+/** 쓰러진 통나무 (초원, 50 tri, 높이 0.30) */
+function fallenLog(): Element {
+  return lyingLog(C.bark, P.stumpTop, P.mossPatch, false);
+}
+
+/** 이끼 통나무 (정글, 62 tri, 높이 0.32) */
+function mossyLog(): Element {
+  return lyingLog(shade(C.bark, 0.92), P.stumpTop, 0x4f9440, true);
+}
+
+/** 썩은 통나무 (늪, 62 tri, 높이 0.32) */
+function swampLog(): Element {
+  return lyingLog(P.swampBark, P.swampBarkLit, P.mossHang, true);
+}
+
+/**
+ * 눈 덮인 쓰러진 나무 (설원, 50 tri, 높이 0.30).
+ * 설원은 1층 최저가 snowBoulder 0.55 라 여섯 바이옴 중 **유일하게 0.3급이 없었고**,
+ * 그래서 눈밭 위 소품이 전부 비슷한 키로 늘어섰다. 검은 줄기 위 흰 이끼(=눈)라
+ * 명도 대비도 같이 얻는다.
+ */
+function snowLog(): Element {
+  /*
+   * 껍질은 **고사목(0x3c372f)보다 두 단 밝게** 잡는다. 처음엔 같은 검회색을 썼는데
+   * 캡처에서 눈밭 위 검은 판자 대여섯 장이 되어, 명도 악센트가 아니라 구멍처럼 보였다.
+   * 고사목은 가는 가지라 검정이 실루엣으로 읽히지만, 통나무는 면적이 넓어 같은 색이면
+   * 그냥 검은 덩어리가 된다 — 면적이 넓을수록 명도를 올려야 같은 대비가 된다.
+   */
+  return lyingLog(0x6a6055, 0x8a7d6c, C.snowCap, false);
+}
+
+/**
+ * 그루터기 — 1층 후보의 **최저 높이**를 0.30 으로 내리는 것이 목적이다 (49 tri).
+ * heroScale 만 넓히면 같은 실루엣이 커졌다 작아졌다 할 뿐이라, 원형 단계에서
+ * 0.3급을 넣어야 크기 계층이 실제로 생긴다.
+ */
+function stumpMossy(): Element {
+  const solids: PartSpec[] = [
+    { kind: 'cyl', pos: [0, 0.14, 0], scale: [0.42, 0.28, 0.40], color: C.bark, seg: 6, hueJitter: 0.02 },
+  ];
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2 + 0.4;
+    solids.push({
+      kind: 'cone',
+      pos: [Math.cos(a) * 0.22, 0.07, Math.sin(a) * 0.22],
+      rot: [Math.sin(a) * 1.2, 0, -Math.cos(a) * 1.2],
+      scale: [0.13, 0.30, 0.13],
+      color: shade(C.bark, 0.82),
+      seg: 3,
+    });
+  }
+  return {
+    solids,
+    flats: [
+      { pos: [0, 0.283, 0], scale: [0.40, 0.38], color: P.stumpTop, sides: 6, hueJitter: 0.02 },
+      { pos: [0.13, 0.288, 0.08], scale: [0.20, 0.16], color: P.mossPatch, sides: 5, hueJitter: 0.04 },
+    ],
+  };
+}
+
+/*
+ * ── 신규 1층 ②: **크기 계층의 꼭대기** ────────────────────────────────────
+ * 개정 전 1층 최고 높이는 pineTall 1.70 / broadleaf 1.37 이었고 heroScale 이 ±12%
+ * 라 판 위 모든 나무가 1.33~1.70 안에 들어왔다 — 28% 밴드. 그러니 "큰 나무"가
+ * 하나도 없고 45번 찍은 같은 도장으로 보였다. 아래 셋은 전부 1.9~2.1 급이다.
+ */
+
+/** 큰 소나무 — pineTall 을 5단으로 늘린 확대판 (108 tri, 높이 1.94) */
+function pineGiant(): Element {
+  return {
+    solids: [
+      { kind: 'cyl', pos: [0, 0.26, 0], scale: [0.19, 0.52, 0.19], color: C.bark, seg: 5 },
+      flare(0, 0.10, 0, 0.36, 0.20, shade(C.bark, 0.78)),
+      { kind: 'cone', pos: [0, 0.74, 0], scale: [1.02, 0.66, 1.02], color: P.pineDark, seg: 7, hueJitter: 0.025 },
+      { kind: 'cone', pos: [0, 1.08, 0], scale: [0.86, 0.60, 0.86], color: P.pineMid, seg: 7, hueJitter: 0.025 },
+      { kind: 'cone', pos: [0, 1.36, 0], scale: [0.68, 0.54, 0.68], color: P.pineLit, seg: 6, hueJitter: 0.02 },
+      { kind: 'cone', pos: [0, 1.60, 0], scale: [0.48, 0.44, 0.48], color: P.pineMid, seg: 6, hueJitter: 0.02 },
+      { kind: 'cone', pos: [0, 1.78, 0], scale: [0.28, 0.32, 0.28], color: shade(P.pineLit, 1.12), seg: 5 },
+      { kind: 'cone', pos: [-0.36, 0.86, 0.12], rot: [0, 0, 0.7], scale: [0.30, 0.34, 0.30], color: P.pineDark, seg: 4 },
+      { kind: 'cone', pos: [0.34, 0.98, -0.14], rot: [0, 0, -0.6], scale: [0.26, 0.30, 0.26], color: P.pineDark, seg: 4 },
+    ],
+  };
+}
+
+/**
+ * 자작나무 — **흰 줄기** (78 tri, 높이 1.58).
+ * 판 위 나무 줄기가 전부 C.bark 갈색 한 톤이라 밑동이 지면에 먹혔다. 밝은 수직선
+ * 하나가 초원의 초록 단색을 깨는 가장 싼 방법이다 (검은 옹이가 흰 줄기를 살린다).
+ */
+function birchSlim(): Element {
+  return {
+    solids: [
+      { kind: 'cyl', pos: [0, 0.36, 0], scale: [0.14, 0.72, 0.14], color: P.birchBark, seg: 4 },
+      { kind: 'cyl', pos: [0.03, 0.94, 0.01], rot: [0, 0.6, 0.05], scale: [0.11, 0.48, 0.11], color: P.birchBarkShade, seg: 4 },
+      { kind: 'ico', pos: [0.06, 1.24, 0], rot: [0.3, 0.6, 0.2], scale: [0.72, 0.52, 0.68], color: C.leaf, hueJitter: 0.035 },
+      { kind: 'ico', pos: [-0.16, 1.42, 0.08], rot: [1.0, 0.2, 0.7], scale: [0.46, 0.36, 0.44], color: P.leafWarm, hueJitter: 0.035 },
+    ],
+    // 옹이는 **세운 판**이라야 보인다 — rx=90° 로 세우고 ry 로 줄기 둘레 각도를 준다
+    flats: [
+      { pos: [0.075, 0.52, 0], rot: [Math.PI / 2, Math.PI / 2, 0], scale: [0.10, 0.05], color: P.birchKnot },
+      { pos: [-0.075, 0.30, 0], rot: [Math.PI / 2, -Math.PI / 2, 0], scale: [0.12, 0.045], color: P.birchKnot },
+      { pos: [0, 0.66, 0.075], rot: [Math.PI / 2, 0, 0], scale: [0.09, 0.04], color: P.birchKnot },
+    ],
+  };
+}
+
+/**
+ * 바위 무리 — boulder 는 4덩이 스케일이 0.62/0.38/0.32/0.26 으로 다 비슷해서
+ * 뭉친 회색 감자로 보였다. 큰 것 하나 + 확 작은 것 둘로 **대비를 크게** 주면
+ * 같은 값에 "바위 무리"가 된다 (76 tri, 높이 0.78).
+ */
+function rockPile(color: number): Element {
+  return {
+    solids: [
+      { kind: 'ico', pos: [0, 0.30, 0], rot: [0.35, 0.7, 0.15], scale: [0.76, 0.64, 0.70], color, hueJitter: 0.016 },
+      { kind: 'ico', pos: [0.08, 0.62, -0.06], rot: [1.0, 0.3, 0.8], scale: [0.34, 0.30, 0.32], color: shade(color, 1.16), hueJitter: 0.016 },
+      { kind: 'ico', pos: [0.36, 0.10, 0.22], rot: [1.2, 1.1, 0.4], scale: [0.24, 0.20, 0.22], color: shade(color, 0.82), hueJitter: 0.016 },
+      { kind: 'cone', pos: [-0.34, 0.12, -0.18], rot: [0.2, 0.5, 0.35], scale: [0.26, 0.24, 0.24], color: shade(color, 0.9), seg: 4 },
+      { kind: 'cone', pos: [-0.10, 0.08, 0.36], rot: [0.3, 1.2, -0.25], scale: [0.20, 0.16, 0.19], color, seg: 4 },
+    ],
+  };
+}
+
+/**
+ * 버팀뿌리 거목 — 정글 크기 계층의 꼭대기 (112 tri, 높이 2.04).
+ * 개정 전 정글 1층 최고가 palmTall 1.55 / jungleTree 1.50 으로 **사실상 같은 키**라
+ * 캐노피가 한 층에 나란히 깔렸다. 썸네일은 캐노피가 섬 밖으로 넘칠 만큼 큰 나무가
+ * 하나 있고 나머지가 그 밑에 깔린다 — 그 한 그루가 정글을 정글로 만든다.
+ * ⚠ 정글은 셀 예산이 가장 빡빡하다. 이걸 넣는 대신 jungleTree 중복 하나를 뺐다.
+ */
+function buttressTree(): Element {
+  const solids: PartSpec[] = [
+    { kind: 'cyl', pos: [0, 0.46, 0], scale: [0.24, 0.92, 0.24], color: shade(C.bark, 0.88), seg: 5 },
+    { kind: 'cyl', pos: [0.03, 1.16, 0], rot: [0, 0.5, 0.04], scale: [0.18, 0.56, 0.18], color: shade(C.bark, 1.02), seg: 5 },
+    { kind: 'ico', pos: [0, 1.58, 0], rot: [0.2, 0.5, 0.1], scale: [1.06, 0.58, 1.00], color: P.jungleCanopy, hueJitter: 0.035 },
+    { kind: 'ico', pos: [0.16, 1.80, -0.08], rot: [0.9, 0.3, 0.6], scale: [0.66, 0.46, 0.62], color: P.jungleCanopyLit, hueJitter: 0.035 },
+  ];
+  // 버팀뿌리 4장 — mangrove 의 뿌리 루프와 같은 코드. 밑동을 넓혀 "거목"의 무게를 만든다
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + 0.7;
+    solids.push({
+      kind: 'cone',
+      pos: [Math.cos(a) * 0.22, 0.22, Math.sin(a) * 0.22],
+      rot: [Math.sin(a) * 0.42, 0, -Math.cos(a) * 0.42],
+      scale: [0.20, 0.60, 0.20],
+      color: shade(C.bark, 0.74),
+      seg: 3,
+    });
+  }
+  const flats: FlatSpec[] = [];
+  // 늘어진 덩굴 — 캐노피에서 아래로. rx=90° 면 판의 길이축(z)이 -y 로 향한다
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + 0.3;
+    const len = 0.54 + (i % 2) * 0.26;
+    flats.push({
+      pos: [Math.cos(a) * 0.62, 1.46 - len * 0.5, Math.sin(a) * 0.62],
+      rot: [Math.PI / 2, a + Math.PI / 2, 0],
+      scale: [0.07, len],
+      color: i % 2 ? P.vineGreen : shade(P.vineGreen, 0.82),
+      hueJitter: 0.03,
+    });
+  }
+  return { solids, flats };
+}
+
+/**
+ * 대나무 다발 — **한 요소 안에서 5단 높이 차** (72 tri, 높이 1.85).
+ * 정글에 가늘고 곧은 수직선이 하나도 없었다(전부 둥근 캐노피 아니면 별 모양 팜).
+ * seg3 이라 대 하나가 12 삼각형뿐이라 크기 계층을 셀 하나 값으로 산다.
+ */
+function bambooClump(): Element {
+  const H = [1.85, 1.55, 1.30, 1.05, 0.80];
+  const solids: PartSpec[] = H.map((h, i) => {
+    const a = (i / 5) * Math.PI * 2 + 0.5;
+    return {
+      kind: 'cyl' as const,
+      pos: [Math.cos(a) * 0.17, h * 0.5, Math.sin(a) * 0.17] as [number, number, number],
+      rot: [Math.sin(a) * 0.08, 0, -Math.cos(a) * 0.08] as [number, number, number],
+      scale: [0.09, h, 0.09] as [number, number, number],
+      color: i % 2 ? P.bamboo : P.bambooDark,
+      seg: 3,
+      hueJitter: 0.03,
+    };
+  });
+  const flats: FlatSpec[] = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2 + 0.9;
+    flats.push({
+      pos: [Math.cos(a) * 0.30, 1.02 + (i % 3) * 0.26, Math.sin(a) * 0.30],
+      rot: [-0.30, Math.PI / 2 - a, 0],
+      scale: [0.11, 0.44],
+      color: i % 2 ? P.bamboo : P.frondLit,
+      hueJitter: 0.03,
+    });
+  }
+  return { solids, flats };
+}
+
+/**
+ * 사암 아치 — **실루엣 안에 하늘이 보이는** 첫 소품 (104 tri, 높이 1.42).
+ * 개정 전 41종이 전부 꽉 찬 덩어리라 판 어디를 봐도 "막힌 것"뿐이었다. 구멍이
+ * 하나 뚫리면 그 뒤 지면이 비쳐 판에 숨구멍이 생긴다 — 썸네일 사막에서 눈이 가장
+ * 먼저 가는 것도 선인장이 아니라 이 아치다.
+ */
+function sandArch(): Element {
+  return {
+    solids: [
+      { kind: 'cyl', pos: [-0.34, 0.46, 0], rot: [0, 0.3, 0.06], scale: [0.30, 0.92, 0.26], color: P.sandRock, seg: 5, hueJitter: 0.015 },
+      { kind: 'cyl', pos: [0.34, 0.42, 0.04], rot: [0, -0.4, -0.08], scale: [0.27, 0.84, 0.24], color: P.sandRockDeep, seg: 5, hueJitter: 0.015 },
+      // 상판 2장을 서로 기울여 걸친다 — 가운데서 만나 아치 이마를 만든다
+      { kind: 'box', pos: [-0.20, 1.06, 0], rot: [0, 0, 0.42], scale: [0.46, 0.20, 0.30], color: P.sandRockLit },
+      { kind: 'box', pos: [0.20, 1.04, 0.02], rot: [0, 0, -0.38], scale: [0.44, 0.19, 0.29], color: P.sandRock },
+      // 밑동 마감 — 기둥이 지면에서 그냥 잘리면 세워 둔 파이프로 보인다
+      { kind: 'ico', pos: [-0.36, 0.10, 0.02], rot: [0.5, 0.9, 0.2], scale: [0.44, 0.24, 0.40], color: P.sandRockDeep, hueJitter: 0.015 },
+      { kind: 'ico', pos: [0.36, 0.09, -0.04], rot: [0.7, 0.3, 0.4], scale: [0.40, 0.22, 0.36], color: P.sandArchShade, hueJitter: 0.015 },
+    ],
+  };
+}
+
+/**
+ * 첨탑 바위 — 실제 캡처에서 mesaRock(0.92)이 전부 같은 크기의 둥근 주황 덩어리로
+ * 반복돼 감자밭이 됐다. 사막에 **수직 리듬**을 주는 솟은 사암 (72 tri, 높이 1.70).
+ */
+function rockSpire(): Element {
+  return {
+    solids: [
+      { kind: 'cyl', pos: [0, 0.18, 0], scale: [0.68, 0.36, 0.62], color: P.sandRockDeep, seg: 6, hueJitter: 0.015 },
+      { kind: 'cone', pos: [0, 0.64, 0], scale: [0.54, 0.64, 0.52], color: P.sandRock, seg: 5, hueJitter: 0.015 },
+      { kind: 'cone', pos: [0.02, 1.08, 0.01], scale: [0.38, 0.56, 0.36], color: P.sandRockLit, seg: 5, hueJitter: 0.015 },
+      { kind: 'cone', pos: [0.03, 1.44, 0], scale: [0.23, 0.52, 0.23], color: P.sandRock, seg: 4 },
+      { kind: 'ico', pos: [-0.36, 0.18, 0.18], rot: [0.6, 0.5, 0.3], scale: [0.36, 0.32, 0.34], color: P.sandArchShade, hueJitter: 0.015 },
+    ],
+  };
+}
+
+/**
+ * 돌탑(케언) — 위로 갈수록 좁아지는 형태가 mesaRock 의 뭉툭함과 정반대라 실루엣이
+ * 겹치지 않는다. 길잡이 돌탑은 "사람이 지나갔다"는 신호라 서사에도 맞는다
+ * (53 tri, 높이 0.76).
+ */
+function cairnStack(): Element {
+  return {
+    solids: [
+      { kind: 'ico', pos: [0, 0.16, 0], rot: [0.4, 0.8, 0.2], scale: [0.48, 0.32, 0.44], color: P.cairnStone, hueJitter: 0.02 },
+      { kind: 'ico', pos: [0.03, 0.42, -0.02], rot: [1.0, 0.4, 0.7], scale: [0.34, 0.24, 0.32], color: shade(P.cairnStone, 0.86), hueJitter: 0.02 },
+      { kind: 'cone', pos: [0.01, 0.64, 0], rot: [0, 0.6, 0.05], scale: [0.24, 0.24, 0.23], color: shade(P.cairnStone, 1.1), seg: 5 },
+    ],
+    flats: [{ pos: [0.22, 0.033, 0.14], scale: [0.42, 0.30], color: P.sandArchShade, sides: 5, hueJitter: 0.02 }],
+  };
+}
+
+/**
+ * 눈 덮인 바위 노두 — 썸네일 설원의 시각 중심은 눈을 뒤집어쓴 **큰** 바위 덩어리다.
+ * snowBoulder(0.50)는 흰 지면에 파묻혀 캡처에서 흰 얼룩으로만 보였다.
+ * 높이를 2.6배로 올려야 실루엣이 생긴다 (86 tri, 높이 1.28).
+ */
+function snowRockOutcrop(): Element {
+  return {
+    solids: [
+      { kind: 'ico', pos: [0, 0.40, 0], rot: [0.35, 0.7, 0.2], scale: [0.86, 0.86, 0.78], color: P.snowRock, hueJitter: 0.015 },
+      { kind: 'ico', pos: [0.34, 0.22, 0.18], rot: [1.1, 0.4, 0.6], scale: [0.52, 0.44, 0.48], color: shade(P.snowRock, 0.86), hueJitter: 0.015 },
+      { kind: 'ico', pos: [-0.32, 0.16, -0.14], rot: [0.8, 1.2, 0.3], scale: [0.40, 0.32, 0.38], color: P.snowRockLit, hueJitter: 0.015 },
+      // 눈 모자 — 넓고 납작하게 얹어야 "쌓인 눈"이 된다
+      { kind: 'ico', pos: [-0.02, 0.76, 0.02], rot: [0.15, 0.5, 0.1], scale: [0.82, 0.30, 0.74], color: C.snowCap },
+    ],
+    flats: [
+      { pos: [0.30, 0.034, 0.24], scale: [0.40, 0.32], color: C.snowCap, sides: 5, hueJitter: 0.01 },
+      { pos: [-0.28, 0.034, -0.22], scale: [0.34, 0.28], color: 0xdce9f2, sides: 5, hueJitter: 0.01 },
+    ],
+  };
+}
+
+/**
+ * 큰 얼음 첨탑 — 설원 크기 계층의 꼭대기 (61 tri, 높이 1.92).
+ * 개정 전 얼음(iceCrystal 1.11)이 소나무(1.57)보다 작아 배경으로 밀렸다. 썸네일은
+ * 얼음이 나무보다 크고, 그게 설원을 "얼음 땅"으로 읽히게 하는 유일한 장치다.
+ */
+function iceSpireTall(): Element {
+  const H = [1.92, 1.38, 0.94, 0.60];
+  return {
+    ao: 0.10, // 얼음은 밑동까지 밝아야 빛난다 (iceCrystal 과 같은 원칙)
+    solids: [
+      { kind: 'ico', pos: [0, 0.08, 0], rot: [0.3, 0.6, 0.1], scale: [0.60, 0.18, 0.56], color: C.snowCap },
+      ...H.map((h, i) => {
+        const a = (i / 4) * Math.PI * 2 + 0.4;
+        const off = i === 0 ? 0 : 0.20 + i * 0.05;
+        return {
+          kind: 'cone' as const,
+          pos: [Math.cos(a) * off, h * 0.5, Math.sin(a) * off] as [number, number, number],
+          rot: [Math.sin(a) * 0.1, 0, -Math.cos(a) * 0.1] as [number, number, number],
+          scale: [0.13 + h * 0.08, h, 0.13 + h * 0.08] as [number, number, number],
+          color: [C.crystal, C.ice, C.iceDeep, C.crystal][i] ?? C.ice,
+          seg: 4,
+          hueJitter: 0.02,
+        };
+      }),
+    ],
+    flats: [
+      { pos: [0.26, 0.033, 0.18], scale: [0.34, 0.26], color: C.ice, sides: 5, hueJitter: 0.02 },
+      { pos: [-0.24, 0.033, 0.14], scale: [0.26, 0.20], color: C.iceDeep, sides: 5, hueJitter: 0.02 },
+      { pos: [0.06, 0.033, -0.28], scale: [0.22, 0.18], color: C.ice, sides: 5, hueJitter: 0.02 },
+    ],
+  };
+}
+
+/**
+ * 눈 덮인 고사목 — 설원 1층이 전부 짙은 초록·청록이라 **어두운 색이 0개**였다.
+ * 흰 배경에 검은 가지 실루엣이 들어가면 명도 폭이 단번에 두 배가 된다.
+ * charTree 가 deadTreeUp 을 색만 갈아 재사용한 것과 같은 수법 (82 tri, 높이 1.38).
+ */
+function snowDeadTree(): Element {
+  const el = deadTreeUp();
+  const solids = (el.solids ?? []).map((p, i) => ({ ...p, color: i % 2 ? P.deadWood : P.deadWoodLit }));
+  return {
+    solids,
+    // 가지에 얹힌 눈 — 검은 골격만 두면 죽은 나무가 아니라 그을린 나무로 읽힌다
+    flats: [
+      { pos: [0.20, 1.06, 0.08], scale: [0.28, 0.16], color: C.snowCap, hueJitter: 0.01 },
+      { pos: [-0.22, 0.94, -0.10], scale: [0.24, 0.14], color: 0xdce9f2, hueJitter: 0.01 },
+      { pos: [0.04, 1.26, -0.06], scale: [0.20, 0.12], color: C.snowCap, hueJitter: 0.01 },
+    ],
+  };
+}
+
+/**
+ * 거대 발광 버섯 — 썸네일 늪의 **주인공**이다 (82 tri, 높이 1.50).
+ * 개정 전 glowMushroom(0.64)은 reeds(0.58)와 키가 같아 사실상 2층으로 내려앉았고,
+ * 실제 캡처에서 청록 점으로만 보였다. 2.3배로 키워야 판의 광원이자 랜드마크가 된다.
+ */
+function giantGlowCap(): Element {
+  const flats: FlatSpec[] = [];
+  // 갓 아래 주름 — 세운 판 4장. 아래에서 올려다보는 각이 아니라도 갓 테두리를 두껍게 만든다
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + 0.4;
+    flats.push({
+      pos: [Math.cos(a) * 0.40, 1.02, Math.sin(a) * 0.40],
+      rot: [Math.PI / 2, a + Math.PI / 2, 0],
+      scale: [0.30, 0.18],
+      color: P.glowCapDeep,
+      sides: 6,
+      hueJitter: 0.03,
+    });
+  }
+  // 포자 점 — 갓 위에 흩어진 밝은 점
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + 1.2;
+    flats.push({
+      pos: [Math.cos(a) * 0.30, 1.34 + (i % 2) * 0.03, Math.sin(a) * 0.30],
+      scale: [0.14, 0.13],
+      color: P.glowStem,
+      hueJitter: 0.02,
+    });
+  }
+  return {
+    ao: 0.06, // 발광체는 밑동이 어두우면 안 빛난다
+    solids: [
+      { kind: 'cyl', pos: [0, 0.52, 0], rot: [0, 0, 0.04], scale: [0.24, 1.04, 0.24], color: P.glowStem, seg: 6 },
+      { kind: 'ico', pos: [0, 1.20, 0], rot: [0.1, 0.5, 0.05], scale: [1.00, 0.56, 0.96], color: P.glowCap, hueJitter: 0.03 },
+      // 뒤집힌 원뿔 = 갓 테두리. 갓이 구 하나면 위에서 봤을 때 그냥 초록 공이다
+      { kind: 'cone', pos: [0, 1.14, 0], rot: [Math.PI, 0, 0], scale: [0.94, 0.30, 0.90], color: P.glowCapDeep, seg: 7, hueJitter: 0.03 },
+    ],
+    flats,
+  };
+}
+
+/**
+ * 뿌리 아치 — sandArch 와 함께 **실루엣 안에 하늘이 보이는** 두 번째 소품
+ * (72 tri, 높이 0.92). 썸네일 늪은 절벽에서 뿌리가 뻗어 나와 구멍 난 그림을 만든다.
+ */
+function rootArch(): Element {
+  const solids: PartSpec[] = [
+    { kind: 'ico', pos: [0, 0.14, 0], rot: [0.5, 0.7, 0.2], scale: [0.52, 0.28, 0.48], color: shade(P.swampBark, 0.8), hueJitter: 0.02 },
+  ];
+  // 굽은 뿌리 3개 — 각도를 달리해 서로 걸치면 아래에 구멍이 남는다
+  const ARC: [number, number, number][] = [
+    // [방위각, 기울기, 길이]
+    [0.4, 1.05, 0.92],
+    [2.5, 0.90, 0.78],
+    [4.4, 1.15, 0.70],
+  ];
+  for (const [a, lean, len] of ARC) {
+    solids.push({
+      kind: 'cyl',
+      pos: [Math.cos(a) * len * 0.22, len * 0.40, Math.sin(a) * len * 0.22],
+      rot: [Math.sin(a) * lean, 0, -Math.cos(a) * lean],
+      scale: [0.15, len, 0.15],
+      color: P.swampBarkLit,
+      seg: 4,
+      hueJitter: 0.02,
+    });
+  }
+  return {
+    solids,
+    flats: [{ pos: [0.08, 0.033, 0.10], scale: [0.56, 0.44], color: P.mossHang, sides: 6, hueJitter: 0.04 }],
+  };
+}
+
+/**
+ * 계단식 현무암 — 실제 캡처에서 basaltColumn 이 굵기(0.34/0.27/0.23)·높이가 비슷해
+ * 똑같은 검은 말뚝 40개로 보였다. 썸네일 화산은 각진 암반이 **계단처럼 층지고**
+ * 단마다 지름이 줄어든다 — 그 형태가 인상을 직접 만든다 (88 tri, 높이 1.46).
+ */
+function basaltStack(): Element {
+  return {
+    solids: [
+      { kind: 'cyl', pos: [0, 0.24, 0], rot: [0, 0.0, 0], scale: [0.78, 0.48, 0.74], color: P.basaltDeep, seg: 6, hueJitter: 0.015 },
+      { kind: 'cyl', pos: [0.04, 0.66, -0.03], rot: [0, 0.5, 0.02], scale: [0.62, 0.40, 0.58], color: P.basalt, seg: 5, hueJitter: 0.015 },
+      { kind: 'cyl', pos: [-0.02, 1.02, 0.04], rot: [0, 1.0, -0.03], scale: [0.46, 0.34, 0.44], color: P.basaltLit, seg: 5, hueJitter: 0.015 },
+      { kind: 'cyl', pos: [0.03, 1.32, 0], rot: [0, 0.3, 0.04], scale: [0.31, 0.28, 0.30], color: P.basalt, seg: 4, hueJitter: 0.015 },
+    ],
+    flats: [
+      { pos: [0.03, 1.462, 0], scale: [0.30, 0.28], color: P.basaltLit, sides: 6, hueJitter: 0.02 },
+      { pos: [0.30, 0.034, 0.22], rot: [0, 0.7, 0], scale: [0.10, 0.40], color: P.lavaDeep, sides: 4 },
+      { pos: [-0.26, 0.034, -0.20], rot: [0, -0.5, 0], scale: [0.08, 0.32], color: P.lavaHot, sides: 4 },
+    ],
+  };
+}
+
+/**
+ * 분기공 — 썸네일 화산 인상의 절반이 **흰 연기 기둥**이다 (76 tri, 높이 1.22).
+ * 지금 판에 밝은 색이 용암 주황뿐이라 검정 위 주황 2색으로 눈이 쉴 데가 없었다.
+ * 연기 판은 4 삼각형씩이라 세 번째 명도를 아주 싸게 산다.
+ */
+function fumarole(): Element {
+  /*
+   * ⚠ 연기를 **판으로 만들면 안 된다.** 처음엔 3층과 같은 수법(수평 6각 판을 층층이
+   * 띄우기)으로 짰는데, 캡처에서 굴뚝 위에 **흰 종이접시 4장이 떠 있는** 그림이 됐다.
+   * 판은 지면에 붙어 있을 때만 두께 없는 게 자연스럽고, 공중에 뜨면 두께가 없다는
+   * 사실이 그대로 드러난다. 그래서 연기만 이코사 3덩이로 굽는다(60 삼각형).
+   * 화산은 셀 실측이 6개 중 가장 낮아 이 값을 쓸 여유가 있다.
+   */
+  return {
+    solids: [
+      { kind: 'cyl', pos: [0, 0.36, 0], rot: [0, 0.4, 0.03], scale: [0.40, 0.72, 0.38], color: P.basaltDeep, seg: 6, hueJitter: 0.015 },
+      { kind: 'cone', pos: [0, 0.78, 0], rot: [Math.PI, 0, 0], scale: [0.44, 0.20, 0.42], color: P.basalt, seg: 6 },
+      { kind: 'ico', pos: [0.38, 0.12, 0.20], rot: [0.7, 0.5, 0.3], scale: [0.36, 0.26, 0.34], color: P.basaltLit, hueJitter: 0.02 },
+      // 연기 3덩이 — 위로 갈수록 크고 밝게, 옆으로 조금씩 밀려 기울어진 기둥이 된다
+      { kind: 'ico', pos: [0.03, 0.98, -0.02], rot: [0.4, 0.6, 0.2], scale: [0.34, 0.30, 0.32], color: P.smokeGray, hueJitter: 0.012 },
+      { kind: 'ico', pos: [0.11, 1.20, -0.08], rot: [1.0, 0.2, 0.7], scale: [0.46, 0.38, 0.44], color: shade(P.smokeGray, 1.08), hueJitter: 0.012 },
+      { kind: 'ico', pos: [0.22, 1.44, -0.16], rot: [0.6, 1.2, 0.3], scale: [0.56, 0.44, 0.52], color: P.smokePale, hueJitter: 0.012 },
+    ],
+    flats: [
+      { pos: [0.30, 0.034, -0.26], rot: [0, 0.9, 0], scale: [0.11, 0.36], color: P.lavaHot, sides: 4 },
+      { pos: [-0.28, 0.034, 0.24], rot: [0, -0.6, 0], scale: [0.09, 0.30], color: P.lavaDeep, sides: 4 },
+    ],
+  };
+}
+
 // ── 2층: 중간 덤불 ─────────────────────────────────────────────────────────
 
 /** 둥근 덤불 (40 tri, 높이 0.50) */
@@ -810,6 +1382,266 @@ function basaltShard(): Element {
   };
 }
 
+/*
+ * ── 신규 2층 ─────────────────────────────────────────────────────────────
+ * 2층의 병은 "종류가 적다"가 아니라 **높이가 다 같다**였다. 개정 전 2층 12종의
+ * 높이가 0.24~0.62 안에 전부 들어가, 3층(0.14~0.36)과 1층(1.3~1.7) 사이의
+ * 0.6~1.0 구간이 통째로 비어 있었다. 그 구간이 비면 1층 밑동이 지면에서 떠 보인다.
+ * 아래 신규 2층은 절반이 0.55~0.95 급이다.
+ */
+
+/** 키 큰 풀 다발 — grassTuft(0.36)와 bushRound(0.50) 사이를 메운다 (24 tri, 높이 0.74) */
+function grassClumpTall(color: number): Element {
+  const solids: PartSpec[] = [];
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + 0.55;
+    solids.push({
+      kind: 'cone',
+      pos: [Math.cos(a) * 0.09, 0.34, Math.sin(a) * 0.09],
+      rot: [Math.sin(a) * 0.30, 0, -Math.cos(a) * 0.30],
+      scale: [0.11, 0.72, 0.11],
+      // 같은 다발 안에서 명도 2단 — 단색 원뿔 4개는 초록 부채로 뭉친다
+      color: i % 2 ? color : shade(color, 0.84),
+      seg: 3,
+      hueJitter: 0.04,
+    });
+  }
+  return { solids, ao: 0.12 };
+}
+
+/**
+ * 덩굴 커튼 — 썸네일 정글의 시그니처(위에서 늘어진 초록 줄)가 판에 0개였다.
+ * 14 삼각형에 정글 정체성을 사는 가장 싼 거래다 (높이 0.92).
+ */
+function vineCurtain(): Element {
+  const flats: FlatSpec[] = [];
+  for (let i = 0; i < 5; i++) {
+    const len = 0.42 + ((i * 7) % 5) * 0.10;
+    const x = (i - 2) * 0.11;
+    flats.push({
+      // rx=90° 면 판의 길이축(로컬 z)이 -y 를 향한다 → 위에서 아래로 늘어진다
+      pos: [x, 0.92 - len * 0.5, (i % 2) * 0.06 - 0.03],
+      rot: [Math.PI / 2, 0.1 * i, 0],
+      scale: [0.055, len],
+      color: i % 2 ? P.vineGreen : shade(P.vineGreen, 0.82),
+      hueJitter: 0.03,
+    });
+  }
+  flats.push(
+    { pos: [0.14, 0.50, 0.05], rot: [-0.4, 0.8, 0], scale: [0.16, 0.26], color: P.frondLit, hueJitter: 0.03 },
+    { pos: [-0.16, 0.62, -0.04], rot: [-0.4, -1.1, 0], scale: [0.14, 0.24], color: P.frond, hueJitter: 0.03 },
+  );
+  return { flats, ao: 0.10 };
+}
+
+/**
+ * 넓은 잎 식물(토란) — fernBush 는 폭 0.22 의 가늘고 뾰족한 잎뿐이라 판 위 잎이
+ * 전부 같은 크기로 읽혔다. 폭 0.6급 잎이 **잎 자체의 크기 계층**을 만든다
+ * (18 tri, 높이 0.58).
+ */
+function elephantEar(): Element {
+  return {
+    ao: 0.12,
+    solids: [{ kind: 'cone', pos: [0, 0.16, 0], scale: [0.09, 0.32, 0.09], color: P.frondDark, seg: 3 }],
+    flats: [
+      { pos: [0.16, 0.50, 0.04], rot: [-0.55, 0.4, 0], scale: [0.58, 0.52], color: P.frond, sides: 6, hueJitter: 0.035 },
+      { pos: [-0.18, 0.42, -0.08], rot: [-0.45, 2.3, 0], scale: [0.50, 0.46], color: P.frondLit, sides: 6, hueJitter: 0.035 },
+      { pos: [0.02, 0.30, -0.22], rot: [-0.35, 4.1, 0], scale: [0.42, 0.38], color: P.frondDark, sides: 6, hueJitter: 0.035 },
+    ],
+  };
+}
+
+/**
+ * 정글 암석 노두 — 정글이 초록 한 톤이라 눈이 밀도를 못 읽었다. 회색 하나가 명도를
+ * 끊어 주면 그 주변 초록이 오히려 더 무성해 보인다 — **대비가 밀도를 만든다**
+ * (26 tri, 높이 0.36).
+ */
+function jungleOutcrop(): Element {
+  return {
+    solids: [{ kind: 'ico', pos: [0, 0.14, 0], rot: [0.5, 0.9, 0.25], scale: [0.52, 0.34, 0.46], color: P.jungleRock, hueJitter: 0.02 }],
+    flats: [
+      { pos: [0.10, 0.30, 0.05], scale: [0.30, 0.24], color: 0x4f9440, sides: 5, hueJitter: 0.04 },
+      { pos: [-0.14, 0.24, -0.10], scale: [0.22, 0.18], color: P.jungleRockLit, sides: 5, hueJitter: 0.02 },
+    ],
+  };
+}
+
+/**
+ * 오코티요 — dryShrub 와 **코드가 같고 상수 둘만 다르다**(길이 0.34 → 0.92,
+ * 벌어짐 0.55 → 0.22). 지면에 먹히던 마른 덤불이 키 큰 회초리가 된다.
+ * 가장 싼 변주 (30 tri, 높이 0.94).
+ */
+function ocotillo(color: number): Element {
+  const solids: PartSpec[] = [];
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 + 0.3;
+    solids.push({
+      kind: 'cone',
+      pos: [Math.cos(a) * 0.09, 0.44, Math.sin(a) * 0.09],
+      rot: [Math.sin(a) * 0.22, 0, -Math.cos(a) * 0.22],
+      scale: [0.08, 0.92, 0.08],
+      color: i % 2 ? color : shade(color, 0.86),
+      seg: 3,
+      hueJitter: 0.03,
+    });
+  }
+  return { solids, ao: 0.12 };
+}
+
+/**
+ * 단독 두개골 — boneFossil 은 134 삼각형이라 1층 슬롯을 통째로 먹어 자주 못 뿌린다.
+ * 32 짜리면 "메마름"이라는 사막 서사를 판 전역에 반복할 수 있다 (높이 0.26).
+ */
+function skullAlone(): Element {
+  return {
+    solids: [
+      { kind: 'ico', pos: [0, 0.14, 0], rot: [0.25, 0.5, 0.1], scale: [0.34, 0.28, 0.30], color: C.bone },
+      { kind: 'box', pos: [-0.21, 0.10, 0.01], rot: [0, 0.1, 0.14], scale: [0.24, 0.13, 0.15], color: C.boneDark },
+    ],
+  };
+}
+
+/**
+ * 모래 두덕 — 사막 지면이 완전 평면이라 소품 없는 곳이 종이처럼 보였다.
+ * 낮고 **비대칭으로** 눌린 볼륨이 태양광에 명암 띠를 만들면 평면이 지형으로 읽힌다
+ * (14 tri, 높이 0.26).
+ */
+function duneMound(): Element {
+  return {
+    solids: [{ kind: 'cone', pos: [0, 0.11, 0], rot: [0, 0.6, 0.06], scale: [0.72, 0.26, 0.52], color: P.sandRipple, seg: 5, hueJitter: 0.02 }],
+    flats: [{ pos: [0.16, 0.033, -0.12], rot: [0, 0.6, 0], scale: [0.52, 0.30], color: shade(P.sandRipple, 0.92), sides: 6, hueJitter: 0.02 }],
+  };
+}
+
+/**
+ * 고드름 — 판 위 41종이 **전부 위로 뾰족했다**. 아래로 향한 형태 하나가 방향성
+ * 대비를 만든다 (18 tri, 높이 0.46). flare 와 같이 rot[π,0,0] 으로 원뿔을 뒤집는다.
+ */
+function icicleCluster(): Element {
+  const L = [0.46, 0.34, 0.24];
+  return {
+    ao: 0.06,
+    solids: L.map((h, i) => {
+      const a = (i / 3) * Math.PI * 2 + 0.8;
+      return {
+        kind: 'cone' as const,
+        pos: [Math.cos(a) * 0.10, h * 0.5, Math.sin(a) * 0.10] as [number, number, number],
+        rot: [Math.PI, 0, 0] as [number, number, number],
+        scale: [0.12, h, 0.12] as [number, number, number],
+        color: i % 2 ? C.ice : C.crystal,
+        seg: 3,
+        hueJitter: 0.02,
+      };
+    }),
+  };
+}
+
+/**
+ * 바람에 밀린 눈 능선 — snowMound 는 대칭 ico 라 어디서 봐도 같은 흰 혹이다.
+ * **한쪽이 긴** 비대칭이면 방향이 생겨, 여러 개가 같은 방향으로 깔렸을 때
+ * "바람이 분 자리"로 읽힌다 (16 tri, 높이 0.32).
+ */
+function snowDrift(): Element {
+  return {
+    solids: [
+      { kind: 'cone', pos: [0, 0.14, 0], rot: [0, 0.5, 0.10], scale: [0.62, 0.32, 0.38], color: C.snowCap, seg: 5, hueJitter: 0.008 },
+      { kind: 'cone', pos: [0.28, 0.06, 0.16], rot: [0, 0.5, 0.45], scale: [0.30, 0.24, 0.22], color: 0xdce9f2, seg: 3 },
+    ],
+  };
+}
+
+/**
+ * 마른 갈대 — 설원에 갈색이 **0개**였다. 눈 위로 삐죽 나온 마른 풀이 흰 면을 끊고
+ * "눈 밑에 땅이 있다"는 정보를 준다 (18 tri, 높이 0.56).
+ */
+function snowReeds(): Element {
+  const solids: PartSpec[] = [];
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2 + 0.9;
+    solids.push({
+      kind: 'cone',
+      pos: [Math.cos(a) * 0.07, 0.27, Math.sin(a) * 0.07],
+      rot: [Math.sin(a) * 0.26, 0, -Math.cos(a) * 0.26],
+      scale: [0.07, 0.56, 0.07],
+      color: i === 1 ? shade(P.dryReed, 1.14) : P.dryReed,
+      seg: 3,
+      hueJitter: 0.03,
+    });
+  }
+  return { solids, ao: 0.10 };
+}
+
+/**
+ * 사이프러스 무릎뿌리 — reeds 와 **코드 구조가 같고 굵기·색·높이만 다르다**.
+ * 늪 2층이 갈대·버섯·고사리 셋뿐이라 갈색 볼륨이 없었다 (30 tri, 높이 0.56).
+ */
+function cypressKnees(): Element {
+  const H = [0.56, 0.43, 0.34, 0.27, 0.20];
+  return {
+    solids: H.map((h, i) => {
+      const a = (i / 5) * Math.PI * 2 + 0.4;
+      return {
+        kind: 'cone' as const,
+        pos: [Math.cos(a) * 0.16, h * 0.5, Math.sin(a) * 0.16] as [number, number, number],
+        rot: [Math.sin(a) * 0.14, 0, -Math.cos(a) * 0.14] as [number, number, number],
+        scale: [0.15, h, 0.15] as [number, number, number],
+        color: i % 2 ? P.swampBark : P.swampBarkLit,
+        seg: 3,
+        hueJitter: 0.025,
+      };
+    }),
+    ao: 0.14,
+  };
+}
+
+/**
+ * 부들 — reeds 는 끝이 뾰족해 갈대밭이 전부 같은 삼각으로 읽힌다. 끝이 **뭉툭한**
+ * 이삭 하나가 붙으면 같은 갈대밭 안에서 형태가 갈라진다 (32 tri, 높이 0.72).
+ */
+function cattail(): Element {
+  return {
+    ao: 0.12,
+    solids: [
+      { kind: 'cone', pos: [0.06, 0.30, 0.02], rot: [0, 0, -0.08], scale: [0.05, 0.60, 0.05], color: P.reed, seg: 3 },
+      { kind: 'cone', pos: [-0.09, 0.25, -0.05], rot: [0, 0, 0.12], scale: [0.045, 0.50, 0.045], color: shade(P.reed, 0.86), seg: 3 },
+      // 이삭 — 원뿔을 뒤집어 얹으면 끝이 뭉툭해진다
+      { kind: 'cyl', pos: [0.08, 0.64, 0.02], scale: [0.10, 0.18, 0.10], color: P.cattailHead, seg: 4 },
+      { kind: 'cyl', pos: [-0.11, 0.54, -0.05], scale: [0.085, 0.15, 0.085], color: shade(P.cattailHead, 1.14), seg: 4 },
+    ],
+    flats: [
+      { pos: [0.20, 0.22, 0.10], rot: [-0.9, 0.6, 0], scale: [0.09, 0.44], color: P.reed, hueJitter: 0.03 },
+      { pos: [-0.20, 0.20, 0.12], rot: [-0.9, -1.2, 0], scale: [0.08, 0.38], color: shade(P.reed, 0.88), hueJitter: 0.03 },
+    ],
+  };
+}
+
+/**
+ * 화산탄 — 화산 1·2층 9종이 전부 각기둥 아니면 가시라 실루엣이 뾰족한 것뿐이었다.
+ * **둥근 것 하나**가 들어가면 각진 것들이 오히려 더 각져 보인다 (26 tri, 높이 0.40).
+ */
+function volcanicBomb(): Element {
+  return {
+    solids: [{ kind: 'ico', pos: [0, 0.19, 0], rot: [0.5, 0.4, 0.7], scale: [0.40, 0.38, 0.39], color: P.obsidian, hueJitter: 0.02 }],
+    flats: [
+      { pos: [0.09, 0.36, 0.04], rot: [0, 0.5, 0], scale: [0.05, 0.20], color: P.lavaHot, hueJitter: 0.03 },
+      { pos: [-0.11, 0.32, -0.06], rot: [0, 1.4, 0], scale: [0.04, 0.16], color: P.lavaDeep },
+      { pos: [0.02, 0.30, 0.15], rot: [0, -0.7, 0], scale: [0.035, 0.13], color: P.lavaCore },
+    ],
+  };
+}
+
+/**
+ * 재 원뿔 — 화산 2층이 emberRock·basaltShard 를 두 번씩 넣은 **실질 2종**이었다.
+ * 13 삼각형짜리 재 더미면 밀도를 거의 공짜로 올리면서 회색 중간 명도도 채운다
+ * (높이 0.34).
+ */
+function ashCone(): Element {
+  return {
+    solids: [{ kind: 'cone', pos: [0, 0.15, 0], rot: [0, 0.4, 0.05], scale: [0.46, 0.34, 0.42], color: P.ash, seg: 5, hueJitter: 0.02 }],
+    flats: [{ pos: [0.06, 0.033, 0.04], scale: [0.52, 0.44], color: shade(P.ash, 0.82), sides: 5, hueJitter: 0.02 }],
+  };
+}
+
 // ── 3층: 바닥 ──────────────────────────────────────────────────────────────
 
 /** 풀 다발 — 잎 3장 (18 tri, 높이 0.36) */
@@ -909,13 +1741,200 @@ function crackLines(color: number, wid = 0.05): Element {
   };
 }
 
+/*
+ * ── 신규 3층 ─────────────────────────────────────────────────────────────
+ * 3층은 **판이 압도적으로 싸다**(n각형 = n-2 삼각형). 그래서 여기서는 삼각형을
+ * 아끼는 것보다 "게임 카메라 거리에서 실제로 식별되느냐"가 유일한 기준이다.
+ * 개정 전 캡처에서 3층이 한 개도 식별되지 않은 바이옴이 둘 있었다:
+ *   · 설원 — 지피 4종이 전부 흰~연회색 판이라 흰 지면 위에서 사라진다
+ *   · 늪  — 지피 4종이 전부 어두운 초록/회색이라 판 전체가 뭉갠 그림자로 보인다
+ * 그래서 신규 3층은 **지면과 색상이 다른 것**을 우선했다 (얼음 파랑 / 진흙 갈색 /
+ * 유황 노랑). 같은 색 계열을 더 넣는 것은 밀도가 아니라 노이즈다.
+ */
+
+/** 야생화 군락 — flowerPatch 보다 꽃 수·색 수를 늘린 판 (14 tri) */
+function wildflowerBunch(leaf: number): Element {
+  return {
+    ao: 0,
+    flats: [
+      { pos: [0.02, 0.036, 0.01], scale: [0.44, 0.38], color: leaf, sides: 5, hueJitter: 0.04 },
+      { pos: [-0.14, 0.036, -0.11], scale: [0.30, 0.26], color: shade(leaf, 0.86), sides: 5, hueJitter: 0.04 },
+      // 꽃 4송이 3색 — flowerPatch(3송이 2색)는 게임 거리에서 점 하나로 뭉쳤다
+      { pos: [0.11, 0.053, 0.05], scale: [0.11, 0.11], color: P.flowerWhite, hueJitter: 0.02 },
+      { pos: [-0.09, 0.053, 0.11], scale: [0.10, 0.10], color: P.flowerYellow, hueJitter: 0.02 },
+      { pos: [0.03, 0.053, -0.13], scale: [0.095, 0.095], color: P.flowerPink, hueJitter: 0.02 },
+      { pos: [-0.16, 0.053, -0.02], scale: [0.085, 0.085], color: P.flowerWhite, hueJitter: 0.02 },
+    ],
+  };
+}
+
+/**
+ * 흙두덕 — 초원 지피가 초록·초록·회색뿐이라 갈색 악센트가 없었다. 길(tan)과
+ * 잔디(green) 사이 중간색을 판에 뿌려 주는 역할도 한다 (11 tri, 높이 0.11).
+ */
+function dirtMound(): Element {
+  return {
+    solids: [{ kind: 'cone', pos: [0, 0.05, 0], rot: [0, 0.5, 0], scale: [0.34, 0.14, 0.30], color: P.soil, seg: 4, hueJitter: 0.03 }],
+    flats: [{ pos: [0.05, 0.033, 0.03], scale: [0.44, 0.36], color: P.soilLit, sides: 5, hueJitter: 0.03 }],
+  };
+}
+
+/** 브로멜리아드 — 썸네일 정글에 흩어진 **빨간 점**이 화면을 살린다 (11 tri) */
+function bromeliad(): Element {
+  return {
+    ao: 0,
+    flats: [
+      { pos: [0, 0.036, 0], scale: [0.32, 0.28], color: P.frondDark, sides: 6, hueJitter: 0.04 },
+      { pos: [-0.10, 0.038, -0.08], scale: [0.22, 0.19], color: P.frond, sides: 5, hueJitter: 0.04 },
+      { pos: [0.02, 0.054, 0.01], scale: [0.12, 0.12], color: P.flowerRed, hueJitter: 0.02 },
+      { pos: [-0.07, 0.054, 0.06], scale: [0.085, 0.085], color: shade(P.flowerRed, 1.2), hueJitter: 0.02 },
+    ],
+  };
+}
+
+/**
+ * 모래 물결 — crackLines 는 균열용이라 세 가닥이 **갈라진다**. 바람이 만든 결은
+ * 평행해야 결로 읽힌다 — 그래서 각도를 공유하고 위치만 어긋나게 둔다 (9 tri).
+ */
+function sandRipple(): Element {
+  const a = 0.42;
+  const line = (off: number, len: number, w: number, col: number): FlatSpec => ({
+    pos: [Math.cos(a) * off, 0.033, -Math.sin(a) * off],
+    rot: [0, a, 0],
+    scale: [w, len],
+    color: col,
+    sides: 4,
+    hueJitter: 0.02,
+  });
+  return {
+    ao: 0,
+    flats: [
+      { pos: [0, 0.032, 0], rot: [0, a, 0], scale: [0.50, 0.44], color: shade(P.sandRipple, 0.94), sides: 5, hueJitter: 0.02 },
+      line(0.0, 0.56, 0.055, P.sandRipple),
+      line(0.17, 0.46, 0.045, shade(P.sandRipple, 0.9)),
+      line(-0.16, 0.42, 0.04, P.sandRipple),
+    ],
+  };
+}
+
+/**
+ * 얼어붙은 연못 — 설원 3층에서 **유일하게 흰 지면과 대비되는 것**이다.
+ * lavaSeam 의 2겹 수법(어두운 테 + 밝은 심)을 그대로 가져왔다 (11 tri).
+ */
+function frozenPond(): Element {
+  return {
+    ao: 0,
+    flats: [
+      { pos: [0, 0.032, 0], scale: [0.62, 0.54], color: C.iceDeep, sides: 7, hueJitter: 0.02 },
+      { pos: [0.03, 0.036, 0.02], scale: [0.42, 0.36], color: C.ice, sides: 6, hueJitter: 0.02 },
+      { pos: [-0.06, 0.040, 0.05], rot: [0, 0.8, 0], scale: [0.04, 0.34], color: C.snowCap, sides: 4 },
+    ],
+  };
+}
+
+/**
+ * 넓은 물웅덩이 — groundPatch(P.puddle)는 5각 단색 3삼각형이라 웅덩이가 아니라
+ * 색 얼룩이었다. 어두운 테 + 밝은 심 2겹이면 같은 값에 물이 고인 것으로 읽힌다
+ * (lavaSeam 주석이 정확히 같은 병을 이미 진단해 뒀다) (9 tri).
+ */
+function puddleWide(): Element {
+  return {
+    ao: 0,
+    flats: [
+      { pos: [0, 0.032, 0], scale: [0.66, 0.56], color: P.puddle, sides: 7, hueJitter: 0.03 },
+      { pos: [0.04, 0.036, -0.03], scale: [0.40, 0.34], color: P.puddleLit, sides: 6, hueJitter: 0.03 },
+    ],
+  };
+}
+
+/**
+ * 부글거리는 진흙 — 늪 지피 4종이 전부 어두운 초록/회색이라 판 전체가 뭉갠
+ * 그림자로 보였다. 갈색 진흙 + 밝은 기포가 유일하게 명도를 올려 준다 (13 tri).
+ */
+function bubblingMud(): Element {
+  return {
+    ao: 0,
+    flats: [
+      { pos: [0, 0.032, 0], scale: [0.58, 0.50], color: P.mud, sides: 7, hueJitter: 0.03 },
+      { pos: [0.10, 0.037, 0.06], scale: [0.20, 0.18], color: P.mudBubble, sides: 5, hueJitter: 0.03 },
+      { pos: [-0.12, 0.037, -0.05], scale: [0.15, 0.14], color: shade(P.mudBubble, 1.12), sides: 5, hueJitter: 0.03 },
+      { pos: [0.02, 0.040, -0.14], scale: [0.09, 0.09], color: P.mudBubble },
+    ],
+  };
+}
+
+/**
+ * 용암 줄기 — lavaSeam 은 폭 0.17 막대 두 쌍이라 캡처에서 여전히 바닥에 흩뿌린
+ * **주황 성냥개비**로 보였다. 같은 처방(어두운 탄 자국을 넓게, 심을 좁게)을
+ * 폭 3배로 제대로 적용한 버전이다 (14 tri).
+ */
+function lavaFlow(): Element {
+  return {
+    ao: 0,
+    flats: [
+      { pos: [0.02, 0.032, 0.04], rot: [0, 0.5, 0], scale: [0.50, 0.62], color: P.lavaCrust, sides: 6, hueJitter: 0.02 },
+      { pos: [-0.16, 0.032, -0.22], rot: [0, 0.9, 0], scale: [0.38, 0.46], color: shade(P.lavaCrust, 1.3), sides: 6, hueJitter: 0.02 },
+      { pos: [0.02, 0.038, 0.04], rot: [0, 0.5, 0], scale: [0.14, 0.50], color: P.lavaHot, sides: 4, hueJitter: 0.03 },
+      { pos: [-0.14, 0.038, -0.20], rot: [0, 0.9, 0], scale: [0.10, 0.36], color: P.lavaCore, sides: 4, hueJitter: 0.03 },
+      { pos: [-0.06, 0.040, -0.08], rot: [0, 0.7, 0], scale: [0.07, 0.22], color: P.lavaCore, sides: 4 },
+    ],
+  };
+}
+
+/**
+ * 유황 결정 — 화산 판이 검정+주황 2색뿐이라 색상환에서 두 점만 쓰고 있었다.
+ * 유황 노랑-연두는 용암 주황과 **이웃이면서 명도가 훨씬 높아**, 검은 지면을
+ * 깨면서도 색이 튀지 않는다 (10 tri).
+ */
+function sulfurCrust(): Element {
+  return {
+    ao: 0,
+    flats: [
+      { pos: [0, 0.032, 0], scale: [0.52, 0.44], color: P.sulfur, sides: 6, hueJitter: 0.03 },
+      { pos: [0.13, 0.036, 0.08], scale: [0.26, 0.22], color: P.sulfurLit, sides: 5, hueJitter: 0.03 },
+      { pos: [-0.14, 0.036, -0.06], scale: [0.20, 0.17], color: shade(P.sulfur, 0.84), sides: 5, hueJitter: 0.03 },
+    ],
+  };
+}
+
+/**
+ * 탄 마른 풀 — 화산 지피 4종이 전부 판이라 **두께가 있는 것이 0개**였다.
+ * 작아도 입체가 하나 있어야 지면이 평면으로 안 보인다 (12 tri, 높이 0.30).
+ */
+function charGrass(): Element {
+  const solids: PartSpec[] = [];
+  for (let i = 0; i < 2; i++) {
+    const a = i * Math.PI + 0.6;
+    solids.push({
+      kind: 'cone',
+      pos: [Math.cos(a) * 0.07, 0.14, Math.sin(a) * 0.07],
+      rot: [Math.sin(a) * 0.44, 0, -Math.cos(a) * 0.44],
+      scale: [0.09, 0.30, 0.09],
+      color: i ? P.charGrassCol : shade(P.charGrassCol, 1.2),
+      seg: 3,
+      hueJitter: 0.04,
+    });
+  }
+  return { solids, ao: 0.10 };
+}
+
 // --- 바이옴 편성 -----------------------------------------------------------
 
 export interface BiomeKit {
   /** 1층 후보 (배열에 여러 번 넣으면 그만큼 자주 나온다) */
   hero: Element[];
-  /** 1층 크기 배율 범위 */
+  /**
+   * 1층 크기 배율 **봉투** [최소, 최대].
+   * 이 구간에서 균등하게 뽑지 않는다 — HERO_TIERS 가 세 계층으로 나눠 뽑는다.
+   */
   heroScale: [number, number];
+  /**
+   * 1층 **부 소품** 후보 — 밑동 옆(반경 0.26~0.40)에 0.42~0.62배로 붙는 작은 것.
+   * 개정 전에는 셀당 1층이 **1개 고정**이라 "큰 나무 옆에 작은 나무"가 구조적으로
+   * 불가능했고, 그래서 판 위 나무가 전부 등거리로 흩어진 점무늬로 보였다.
+   * 값이 비싸므로 셀 삼각형 예산이 남을 때만 놓인다(아래 CELL_SOFT_BUDGET).
+   */
+  companion: Element[];
   /** 2층 후보 / 개수 범위 */
   mid: Element[];
   midCount: [number, number];
@@ -929,34 +1948,107 @@ export interface BiomeKit {
 }
 
 /**
+ * 1층 **크기 계층** — heroScale 봉투를 세 구간으로 자르고 가중치로 뽑는다.
+ *
+ * 개정 전에는 `rng.range(heroScale[0], heroScale[1])` 균등 분포였고, 봉투 자체가
+ * ±12%(초원 0.78~1.0)라 판 위 모든 나무가 1.33~1.70 안에 들어왔다 — 28% 밴드.
+ * 그게 "같은 도장을 45번 찍은" 그림의 정체다.
+ *
+ * 봉투를 [0.58, 1.18] 급으로 넓히는 것만으로는 부족하다. **균등 분포는 계층을
+ * 만들지 않는다** — 0.58부터 1.18까지 고르게 흩으면 눈에는 그냥 "크기가 제각각인
+ * 연속체"로 보이고, 어느 것도 "큰 것"으로 읽히지 않는다. 크기가 계층으로 읽히려면
+ * 구간 **사이에 빈 틈**이 있어야 한다. 그래서 t(정규화 위치)를 0.18~0.38 과
+ * 0.62~0.82 두 곳에서 끊었다:
+ *   작은 것 t∈[0.00,0.18] 26%  ·  보통 t∈[0.38,0.62] 46%  ·  큰 것 t∈[0.82,1.00] 28%
+ * 가중치는 "보통이 절반, 나머지를 큰 것/작은 것이 비슷하게" — 큰 것이 이보다 잦으면
+ * 판이 나무로 꽉 차 적 이동이 안 보이고, 작은 것이 잦으면 다시 허전해진다.
+ *
+ * ⚠ 스케일만으로는 계층이 절반만 산다. 같은 실루엣이 커졌다 작아졌다 할 뿐이기
+ * 때문이다. 그래서 hero **원형** 목록에도 2.0급(pineGiant/buttressTree/iceSpireTall/
+ * rockSpire)과 0.3급(그루터기·통나무)을 같이 넣었다. 둘을 곱해야 실제 높이 폭이
+ * 0.17~2.29(13배)가 된다 — 개정 전은 1.33~1.70(1.3배)였다.
+ */
+const HERO_TIERS: readonly { readonly w: number; readonly t0: number; readonly t1: number }[] = [
+  { w: 26, t0: 0.0, t1: 0.18 },
+  { w: 46, t0: 0.38, t1: 0.62 },
+  { w: 28, t0: 0.82, t1: 1.0 },
+];
+const HERO_TIER_W = HERO_TIERS.reduce((s, t) => s + t.w, 0);
+
+/** 계층 하나를 뽑아 봉투 안 실제 배율로 편다 */
+function drawHeroScale(rng: Rng, envelope: readonly [number, number]): number {
+  let r = rng.range(0, HERO_TIER_W);
+  for (const tier of HERO_TIERS) {
+    r -= tier.w;
+    if (r <= 0) {
+      const t = rng.range(tier.t0, tier.t1);
+      return envelope[0] + (envelope[1] - envelope[0]) * t;
+    }
+  }
+  return envelope[1];
+}
+
+/**
  * 바이옴 편성표 — **각 바이옴에 그곳에만 있는 실루엣**을 하나씩 박아 넣는 것이 목적이다.
  * (종전에는 여섯 곳이 팔레트 색만 달랐다: 설원은 48개 소품이 단 2종이었다)
+ *
+ * 이번 개정에서 각 바이옴에 넣은 것은 "종류"가 아니라 **없던 축** 넷이다:
+ *   ① 2.0급 큰 것 (크기 계층의 꼭대기)   ② 0.3급 누운 것 (수평 실루엣)
+ *   ③ 바이옴 안에서 명도/색상이 튀는 것  ④ 0.6~0.95 구간의 2층 (1층과 3층 사이)
  */
 const BIOME_KITS: Record<BiomeId, BiomeKit> = {
   grassland: {
-    hero: [pineTall(), pineTall(), broadleaf(), broadleaf(), boulder(C.rock)],
-    heroScale: [0.78, 1.0],
-    mid: [bushRound(P.bushDark, P.bushLit), sapling(), fieldRock(C.rock), bushRound(C.leafDark, P.leafWarm)],
-    midCount: [1, 2],
+    // ① pineGiant  ② fallenLog/stumpMossy  ③ birchSlim(흰 줄기)  ④ grassClumpTall
+    hero: [
+      pineTall(),
+      pineTall(),
+      pineGiant(),
+      broadleaf(),
+      broadleaf(),
+      birchSlim(),
+      boulder(C.rock),
+      rockPile(C.rock),
+      fallenLog(),
+      stumpMossy(),
+    ],
+    heroScale: [0.58, 1.18],
+    companion: [sapling(), stumpMossy(), fallenLog(), bushRound(P.bushDark, P.bushLit)],
+    mid: [
+      bushRound(P.bushDark, P.bushLit),
+      sapling(),
+      fieldRock(C.rock),
+      bushRound(C.leafDark, P.leafWarm),
+      grassClumpTall(P.grassBlade),
+      grassClumpTall(shade(P.grassBlade, 0.88)),
+    ],
+    midCount: [1, 3],
     ground: [
       grassTuft(P.grassBlade),
       grassTuft(shade(P.grassBlade, 0.86)),
       flowerPatch(P.grassBlade, P.flowerWhite, P.flowerYellow),
+      wildflowerBunch(P.grassBlade),
+      dirtMound(),
       pebbles(C.rock),
       groundPatch(0x6fb444),
     ],
-    groundCount: [2, 4],
+    groundCount: [3, 5],
     shadowTint: 0x2a4a5e,
     shadowMul: 0.56,
   },
   jungle: {
-    hero: [palmTall(), palmTall(), palmTall(), jungleTree(), jungleTree(), fernTree()],
-    heroScale: [0.80, 1.02],
+    // ⚠ 정글은 셀 예산이 6개 중 가장 빡빡하다(1층 최고가 112). buttressTree 를 넣는
+    //   대신 jungleTree(110) 중복 하나를 뺐다 — 종류는 늘고 최악값은 그대로다.
+    hero: [palmTall(), palmTall(), jungleTree(), buttressTree(), bambooClump(), fernTree(), mossyLog()],
+    heroScale: [0.60, 1.12],
+    companion: [fernTree(), mossyLog(), elephantEar(), fernBush(P.frond)],
     mid: [
       fernBush(P.frond),
       fernBush(P.frondDark),
       bushRound(P.jungleCanopy, P.frondLit),
       flowerBush(C.leafDark, P.flowerRed),
+      vineCurtain(),
+      elephantEar(),
+      jungleOutcrop(),
     ],
     midCount: [2, 3],
     ground: [
@@ -964,70 +2056,103 @@ const BIOME_KITS: Record<BiomeId, BiomeKit> = {
       fernBush(P.frondLit),
       groundPatch(0x2f8f45),
       flowerPatch(P.frondDark, P.flowerRed, P.flowerYellow),
+      bromeliad(),
       pebbles(0x6f7a68),
     ],
-    groundCount: [2, 4],
+    groundCount: [3, 4],
     shadowTint: 0x11384a,
     shadowMul: 0.52,
   },
   desert: {
-    hero: [saguaro(), saguaro(), mesaRock(), mesaRock(), boneFossil(), barrelCactus()],
-    heroScale: [0.80, 1.02],
-    mid: [dryShrub(P.dryBrush), smallCactus(), fieldRock(P.sandRock), dryShrub(shade(P.dryBrush, 0.88))],
-    midCount: [1, 2],
+    // ① rockSpire  ② sandArch(구멍 뚫린 실루엣)  ③ cairnStack  ④ ocotillo
+    hero: [saguaro(), saguaro(), mesaRock(), rockSpire(), sandArch(), cairnStack(), boneFossil(), barrelCactus()],
+    heroScale: [0.62, 1.22],
+    companion: [smallCactus(), barrelCactus(), skullAlone(), cairnStack()],
+    mid: [
+      dryShrub(P.dryBrush),
+      smallCactus(),
+      fieldRock(P.sandRock),
+      ocotillo(P.dryBrush),
+      skullAlone(),
+      duneMound(),
+    ],
+    midCount: [2, 3],
     ground: [
       crackLines(P.sandCrack, 0.035),
       grassTuft(P.dryBrush),
       pebbles(P.sandRock),
       groundPatch(0xdcb462),
-      groundPatch(0xd0a154, 0.62),
+      sandRipple(),
+      sandRipple(),
     ],
-    groundCount: [2, 4],
+    groundCount: [3, 5],
     shadowTint: 0x7a5240,
     shadowMul: 0.60,
   },
   snow: {
-    hero: [snowPineTall(), snowPineTall(), snowPineTall(), iceCrystal(), iceCrystal(), snowBoulder()],
-    heroScale: [0.86, 1.08],
-    mid: [frozenShrub(), iceShard(), snowMound(), iceShard()],
-    midCount: [2, 3],
+    // ① iceSpireTall(나무보다 큰 얼음)  ② snowRockOutcrop  ③ snowDeadTree(검정)·snowReeds(갈색)
+    hero: [
+      snowPineTall(),
+      snowPineTall(),
+      iceCrystal(),
+      iceSpireTall(),
+      snowRockOutcrop(),
+      snowDeadTree(),
+      snowBoulder(),
+      snowLog(),
+    ],
+    heroScale: [0.62, 1.18],
+    companion: [frozenShrub(), icicleCluster(), snowDrift(), snowLog()],
+    mid: [frozenShrub(), iceShard(), snowMound(), icicleCluster(), snowDrift(), snowReeds()],
+    midCount: [2, 4],
     ground: [
       groundPatch(0xdce9f2, 0.6),
       pebbles(0x9db4c4),
       { ao: 0.06, flats: [{ pos: [0.08, 0.034, 0.05], scale: [0.24, 0.20], color: C.ice, sides: 4 }, { pos: [-0.10, 0.034, -0.09], scale: [0.18, 0.15], color: C.iceDeep, sides: 4 }] },
       groundPatch(0xc9dced, 0.44),
+      frozenPond(),
+      frozenPond(),
     ],
-    groundCount: [2, 4],
+    groundCount: [3, 5],
     shadowTint: 0x6f92c4,
     shadowMul: 0.74,
   },
   swamp: {
-    hero: [mangrove(), mangrove(), deadTreeUp(), deadTreeUp(), glowMushroom(), glowMushroom(), mossBoulder()],
-    heroScale: [0.80, 1.02],
-    mid: [reeds(), glowCluster(), fernBush(P.swampLeaf), reeds()],
-    midCount: [1, 3],
+    // ① giantGlowCap(판의 광원이자 랜드마크)  ② swampLog  ③ bubblingMud(갈색)  ④ cattail
+    hero: [mangrove(), mangrove(), deadTreeUp(), giantGlowCap(), rootArch(), swampLog(), glowMushroom(), mossBoulder()],
+    heroScale: [0.60, 1.26],
+    companion: [glowCluster(), cypressKnees(), mossBoulder(), swampLog()],
+    mid: [reeds(), glowCluster(), fernBush(P.swampLeaf), cypressKnees(), cattail()],
+    midCount: [2, 3],
     ground: [
-      groundPatch(P.puddle, 0.58),
+      puddleWide(),
       grassTuft(P.reed),
       { ao: 0, flats: [{ pos: [0.10, 0.033, 0.06], scale: [0.30, 0.26], color: 0x4a7a3c, sides: 6, hueJitter: 0.03 }] },
       pebbles(0x6a7060),
+      bubblingMud(),
     ],
-    groundCount: [2, 4],
+    groundCount: [3, 5],
     shadowTint: 0x17323c,
     shadowMul: 0.55,
   },
   volcano: {
-    hero: [basaltColumn(), basaltColumn(), basaltColumn(), charTree(), charTree(), obsidianSpike(), ventCrater()],
-    heroScale: [0.84, 1.08],
-    mid: [emberRock(), basaltShard(), emberRock(), basaltShard()],
-    midCount: [2, 3],
+    // ① basaltStack(계단식)  ③ fumarole(흰 연기)·sulfurCrust(노랑)  ④ volcanicBomb(둥근 것)
+    hero: [basaltColumn(), basaltColumn(), basaltStack(), charTree(), fumarole(), obsidianSpike(), ventCrater()],
+    heroScale: [0.62, 1.24],
+    companion: [obsidianSpike(), volcanicBomb(), ashCone(), emberRock()],
+    mid: [emberRock(), basaltShard(), volcanicBomb(), ashCone(), emberRock()],
+    // 화산 2층은 6개 중 가장 싸다(최대 26). 셀 실측이 172로 가장 낮게 나와 한 개 더
+    // 얹었다 — 화산은 원래 "검은 벌판"이 콘셉트라 밀도가 낮으면 곧장 허전함이 된다.
+    midCount: [3, 4],
     ground: [
-      lavaSeam(),
+      lavaFlow(),
       groundPatch(P.ash, 0.54),
       pebbles(P.basaltDeep),
+      sulfurCrust(),
+      charGrass(),
       groundPatch(0x3f322c, 0.46),
     ],
-    groundCount: [2, 4],
+    groundCount: [3, 5],
     shadowTint: 0x1a1218,
     shadowMul: 0.58,
   },
@@ -1045,8 +2170,14 @@ const SUN_FLAT = Math.hypot(SUN.x, SUN.z);
 const SHADOW_LEN = SUN_FLAT / SUN.y;
 /** 그림자가 뻗는 지면 방향 (태양 반대쪽) */
 const SHADOW_DIR = { x: -SUN.x / SUN_FLAT, z: -SUN.z / SUN_FLAT } as const;
-/** 지면에서 띄우는 높이 — 타일 상면 지터(최대 +0.02)보다 확실히 위 */
+/** 지면에서 띄우는 높이 — 타일 상면(y=0)과 지형 장식 무늬(0.012)보다 확실히 위 */
 const SHADOW_Y = 0.035;
+/** 그림자 판이 놓이는 방위 (태양 반대쪽) — 셀 밖으로 새는지 재려면 회전을 알아야 한다 */
+const SHADOW_YAW = Math.atan2(SHADOW_DIR.x, SHADOW_DIR.z);
+const SHADOW_COS = Math.abs(Math.cos(SHADOW_YAW));
+const SHADOW_SIN = Math.abs(Math.sin(SHADOW_YAW));
+/** 셀(1×1) 안쪽 안전 반경 — 판 꼭짓점이 여기를 못 넘는다 */
+const SHADOW_FIT = 0.47;
 
 /**
  * 소품 1개의 접촉 그림자 판 (6각형 4 삼각형).
@@ -1069,9 +2200,21 @@ function contactShadowSpec(
   let oz = dz + SHADOW_DIR.z * reach;
   let halfW = Math.max(0.16, r * 1.02);
   let halfL = halfW + reach * 0.8;
-  const ext = Math.max(Math.abs(ox), Math.abs(oz)) + halfL;
-  if (ext > 0.47) {
-    const k = 0.47 / ext;
+  /*
+   * 셀 밖으로 새지 않게 줄이는 계수.
+   *
+   * ⚠ 종전 식은 `max(|ox|,|oz|) + halfL <= 0.47` 이었는데 이건 **판이 돌아가 있다는
+   * 사실을 빼먹은** 식이다. 판의 긴 축은 태양 반대 방향(약 -30°)을 보므로 월드 x 로
+   * 재면 halfL·cos + halfW·sin 만큼 뻗는다. 소품이 작을 때는 halfW 가 작아 종전 식도
+   * 우연히 맞았지만, 이번에 1층 원형이 커지면서(rockPile·snowRockOutcrop 등 반경 0.5급)
+   * halfW 항이 커져 실제로 셀 밖 0.54까지 새는 셀이 나왔다(s3 (7,12) 실측).
+   * 지금은 회전을 반영한 실제 반폭으로 잰다.
+   */
+  const extX = Math.abs(ox) + halfL * SHADOW_SIN + halfW * SHADOW_COS;
+  const extZ = Math.abs(oz) + halfL * SHADOW_COS + halfW * SHADOW_SIN;
+  const ext = Math.max(extX, extZ);
+  if (ext > SHADOW_FIT) {
+    const k = SHADOW_FIT / ext;
     ox *= k;
     oz *= k;
     halfW *= k;
@@ -1080,7 +2223,7 @@ function contactShadowSpec(
   return {
     pos: [wx + ox, SHADOW_Y, wz + oz],
     // 6각형은 z 방향이 1.155배 길다 — 길이를 그만큼 되돌린다
-    rot: [0, Math.atan2(SHADOW_DIR.x, SHADOW_DIR.z), 0],
+    rot: [0, SHADOW_YAW, 0],
     scale: [halfW * 2, halfL * 1.73],
     color,
     sides: 6,
@@ -1112,13 +2255,20 @@ function shiftGeoColor(geo: THREE.BufferGeometry, dh: number, lm: number): void 
   }
 }
 
-/** 캐시된 원형 지오메트리 + 크기(그림자 계산용) */
+/** 캐시된 원형 지오메트리 + 크기(그림자 계산용) + 원가(셀 예산 계산용) */
 interface Baked {
   geo: THREE.BufferGeometry;
-  /** XZ 최대 반경 */
+  /** XZ 최대 반경 (축 정렬) */
   r: number;
+  /**
+   * XZ 외접 반경 — 배치할 때 **yaw 를 무작위로 돌리므로**(place) 축 정렬 반경으로
+   * 재면 최대 √2배까지 과소평가한다. 셀 밖으로 새는지 따질 때는 이쪽을 써야 한다.
+   */
+  rc: number;
   /** 최고 높이 */
   h: number;
+  /** 삼각형 수 — 셀 예산을 굽기 전에 세는 데 쓴다 */
+  tri: number;
 }
 
 function bakedOf(biome: BiomeId, layer: string, idx: number, el: Element): Baked {
@@ -1126,8 +2276,9 @@ function bakedOf(biome: BiomeId, layer: string, idx: number, el: Element): Baked
   const geo = cachedGeo(key, () => bakeElement(el, hashSeed(key)));
   const bb = geo.boundingBox ?? (geo.computeBoundingBox(), geo.boundingBox);
   const r = bb ? Math.max(bb.max.x, -bb.min.x, bb.max.z, -bb.min.z) : 0.4;
+  const rc = bb ? Math.hypot(Math.max(bb.max.x, -bb.min.x), Math.max(bb.max.z, -bb.min.z)) : 0.56;
   const h = bb ? bb.max.y : 0.5;
-  return { geo, r, h };
+  return { geo, r, rc, h, tri: geo.getAttribute('position').count / 3 };
 }
 
 export interface PropsBuild {
@@ -1181,47 +2332,108 @@ export function buildProps(
     const cx = _v.x;
     const cz = _v.z;
     const pieces: THREE.BufferGeometry[] = [];
+    /**
+     * 이 셀에 남은 삼각형. 후보 목록을 넓히고 계층까지 섞으면 **이론 최악 조합**이
+     * 바이옴에 따라 306~377까지 튄다(1층 최대 + 부 소품 + 2층 최대×N + 3층 최대×N).
+     * 그 조합이 실제로 뽑힐 확률은 낮지만 6판 270셀이면 몇 번은 뽑힌다 — 그래서
+     * 확률에 기대지 않고 **굽기 전에 세어 가며 채운다**. 밑에서 층마다 몫을 떼는
+     * 순서가 곧 "무엇을 먼저 포기하는가"의 선언이다.
+     */
+    let left = CELL_SOFT_BUDGET;
 
-    // ── 1층: 큰 실루엣 ──
+    // ── 1층: 큰 실루엣 (무조건 놓는다 — 1층이 빠지면 그냥 빈 칸이다) ──
     const hi = rng.int(0, kit.hero.length - 1);
     const hero = bakedOf(biome, 'h', hi, kit.hero[hi] as Element);
     const dx = rng.range(-PROP_JITTER, PROP_JITTER);
     const dz = rng.range(-PROP_JITTER, PROP_JITTER);
-    const hs = rng.range(kit.heroScale[0], kit.heroScale[1]);
+    const hs = drawHeroScale(rng, kit.heroScale);
     pieces.push(place(hero, cx + dx, cz + dz, hs, rng.range(-0.022, 0.022), rng.range(0.9, 1.1)));
+    left -= hero.tri + SHADOW_TRI;
 
     // ── 접촉 그림자 (소품이 그림자를 굽지 않는 대신) ──
     pieces.push(
       buildFlats([contactShadowSpec(cx, cz, dx, dz, hero.r * hs, hero.h * hs, shColor)], hashSeed(`sh:${cell.x},${cell.z}`), 0.02),
     );
 
+    /*
+     * ── 1층 보조: 밑동 옆 부 소품 ──
+     * 언제 붙이느냐가 이 개정의 핵심이다.
+     *  · 1층 월드 높이가 0.60 미만 = 작은 원형이 작은 계층으로 뽑힌 경우.
+     *    그대로 두면 셀이 **통째로 작아져** 그냥 빈 칸으로 보인다 — 반드시 붙인다.
+     *  · 큰 계층(1.35 이상)이면 40% — 썸네일처럼 "큰 나무 밑에 작은 나무"가 된다.
+     *  · 그 외 20% — 너무 잦으면 모든 셀이 쌍둥이 배치가 되어 다시 규칙적으로 보인다.
+     */
+    const heroH = hero.h * hs;
+    const compRoll = rng.next();
+    const compWant = heroH < 0.6 ? true : heroH > 1.35 ? compRoll < 0.4 : compRoll < 0.2;
+    if (compWant && kit.companion.length > 0) {
+      const ci = rng.int(0, kit.companion.length - 1);
+      const comp = bakedOf(biome, 'c', ci, kit.companion[ci] as Element);
+      // 2·3층 몫을 먼저 떼고 남을 때만 — 부 소품 때문에 지피가 사라지면 밑동이 뜬다
+      if (comp.tri <= left - UNDER_RESERVE) {
+        const a = rng.range(0, Math.PI * 2);
+        const rad = rng.range(0.26, 0.40);
+        pieces.push(
+          place(
+            comp,
+            cx + dx + Math.cos(a) * rad,
+            cz + dz + Math.sin(a) * rad,
+            rng.range(0.42, 0.62),
+            rng.range(-0.03, 0.03),
+            rng.range(0.88, 1.12),
+          ),
+        );
+        left -= comp.tri;
+      }
+    }
+
     // ── 2층·3층: 셀 안 고리에 흩는다 (1층 밑동과는 겹치지 않게 민다) ──
-    const scatter = (list: Element[], layer: string, n: number, rMin: number, sMin: number, sMax: number): void => {
+    const scatter = (
+      list: Element[],
+      layer: string,
+      n: number,
+      rMin: number,
+      rMax: number,
+      sMin: number,
+      sMax: number,
+      reserve: number,
+      fitInCell: boolean,
+    ): void => {
       for (let i = 0; i < n; i++) {
         const idx = rng.int(0, list.length - 1);
         const el = list[idx];
         if (!el) continue;
         const b = bakedOf(biome, layer, idx, el);
         const a = rng.range(0, Math.PI * 2);
-        let rad = rng.range(rMin, UNDER_RADIUS_MAX);
+        let rad = rng.range(rMin, rMax);
+        const s = rng.range(sMin, sMax);
+        const dh = rng.range(-0.03, 0.03);
+        const lm = rng.range(0.86, 1.14);
+        // 예산이 모자라면 **이번 하나만** 건너뛴다 (더 싼 게 다음에 뽑힐 수 있다)
+        if (b.tri > left - reserve) continue;
         const px = Math.cos(a) * rad;
         const pz = Math.sin(a) * rad;
         // 1층 밑동에 파묻히면 밖으로 민다
-        if (Math.hypot(px - dx, pz - dz) < 0.22) rad = Math.min(UNDER_RADIUS_MAX, rad + 0.22);
-        pieces.push(
-          place(
-            b,
-            cx + Math.cos(a) * rad,
-            cz + Math.sin(a) * rad,
-            rng.range(sMin, sMax),
-            rng.range(-0.03, 0.03),
-            rng.range(0.86, 1.14),
-          ),
-        );
+        if (Math.hypot(px - dx, pz - dz) < 0.22) rad = Math.min(rMax, rad + 0.22);
+        /*
+         * 3층만 셀 안으로 **완전히** 접어 넣는다.
+         * 1·2층(나무·덤불)이 이웃 칸 위로 넘치는 건 오히려 좋다 — 캐노피가 겹쳐야
+         * 숲으로 읽힌다. 그런데 3층은 지면에 붙은 판이라 넘치는 순간 **이웃 칸 바닥
+         * 무늬**가 되고, 그러면 (a) 어느 칸이 소품 칸인지 흐려지고 (b) 이웃 칸끼리
+         * 이어붙어 타일 격자가 지워진다(카펫화). 실제로 개정 직후 s1 (7,12)에서
+         * 흙두덕 판이 이웃 칸으로 넘어가 접촉 그림자 계약 테스트가 잡아냈다.
+         */
+        if (fitInCell) rad = Math.max(0, Math.min(rad, SHADOW_FIT - b.rc * s));
+        pieces.push(place(b, cx + Math.cos(a) * rad, cz + Math.sin(a) * rad, s, dh, lm));
+        left -= b.tri;
       }
     };
-    scatter(kit.mid, 'm', rng.int(kit.midCount[0], kit.midCount[1]), 0.24, 0.8, 1.15);
-    scatter(kit.ground, 'g', rng.int(kit.groundCount[0], kit.groundCount[1]), 0.14, 0.75, 1.25);
+    // 2층은 3층 몫(GROUND_RESERVE)을 남기고 쓴다 — 3층이 잘리면 밑동이 지면에서 뜬다
+    scatter(kit.mid, 'm', rng.int(kit.midCount[0], kit.midCount[1]), 0.24, UNDER_RADIUS_MAX, 0.8, 1.15, GROUND_RESERVE, false);
+    // 3층 rMin 을 0.14 → 0.26 으로 밀었다: 개정 전에는 지피가 1층 밑동 그늘에 파묻혀
+    // 게임 카메라 거리 캡처에서 **한 개도 식별되지 않았다**. 대신 rMax 를 0.42 로
+    // 당겨 셀 밖으로 새는 양은 그대로 둔다.
+    scatter(kit.ground, 'g', rng.int(kit.groundCount[0], kit.groundCount[1]), 0.26, 0.42, 0.75, 1.25, 0, true);
 
     const merged = mergeGeometries(pieces, false);
     for (const p of pieces) p.dispose();
@@ -1280,6 +2492,13 @@ export function buildProps(
   };
 }
 
+/**
+ * 소품 전용 색 — 맨 셀 바닥 결 레이어(grounddetail.ts)가 **같은 색표**를 쓰도록 연다.
+ * 지피(3층)와 맨 셀 장식은 화면에서 나란히 놓이므로 색이 다른 표에서 나오면
+ * "소품 칸과 빈 칸의 풀이 서로 다른 종"으로 보인다.
+ */
+export const PROP_COLORS = P;
+
 /** 테스트/계측용 — 층 요소 전체 (이름 → 설계도). 삼각형 원가표를 여기서 뽑는다 */
 export const PROP_ELEMENTS: Readonly<Record<string, Element>> = {
   pineTall: pineTall(),
@@ -1323,6 +2542,51 @@ export const PROP_ELEMENTS: Readonly<Record<string, Element>> = {
   groundPatch: groundPatch(0x6fb444),
   crackLines: crackLines(P.sandCrack, 0.035),
   lavaSeam: lavaSeam(),
+  // ── 이번 개정에서 추가한 것 (1층 13 · 2층 12 · 3층 8) ──
+  pineGiant: pineGiant(),
+  birchSlim: birchSlim(),
+  rockPile: rockPile(C.rock),
+  fallenLog: fallenLog(),
+  stumpMossy: stumpMossy(),
+  buttressTree: buttressTree(),
+  bambooClump: bambooClump(),
+  mossyLog: mossyLog(),
+  sandArch: sandArch(),
+  rockSpire: rockSpire(),
+  cairnStack: cairnStack(),
+  snowRockOutcrop: snowRockOutcrop(),
+  iceSpireTall: iceSpireTall(),
+  snowDeadTree: snowDeadTree(),
+  snowLog: snowLog(),
+  giantGlowCap: giantGlowCap(),
+  rootArch: rootArch(),
+  swampLog: swampLog(),
+  basaltStack: basaltStack(),
+  fumarole: fumarole(),
+  grassClumpTall: grassClumpTall(P.grassBlade),
+  vineCurtain: vineCurtain(),
+  elephantEar: elephantEar(),
+  jungleOutcrop: jungleOutcrop(),
+  ocotillo: ocotillo(P.dryBrush),
+  skullAlone: skullAlone(),
+  duneMound: duneMound(),
+  icicleCluster: icicleCluster(),
+  snowDrift: snowDrift(),
+  snowReeds: snowReeds(),
+  cypressKnees: cypressKnees(),
+  cattail: cattail(),
+  volcanicBomb: volcanicBomb(),
+  ashCone: ashCone(),
+  wildflowerBunch: wildflowerBunch(P.grassBlade),
+  dirtMound: dirtMound(),
+  bromeliad: bromeliad(),
+  sandRipple: sandRipple(),
+  frozenPond: frozenPond(),
+  puddleWide: puddleWide(),
+  bubblingMud: bubblingMud(),
+  lavaFlow: lavaFlow(),
+  sulfurCrust: sulfurCrust(),
+  charGrass: charGrass(),
 };
 
 /** 설계도의 삼각형 수 (실제로 굽지 않고 센다 — 원가표 테스트용) */
@@ -1334,6 +2598,19 @@ export function elementTriCount(el: Element): number {
   }
   for (const f of el.flats ?? []) n += (f.sides ?? 4) - 2;
   return n;
+}
+
+/**
+ * 설계도의 실제 높이 (테스트/계측용).
+ * elementTriCount 와 달리 **굽고 나서 잰다** — 눕힌 통나무처럼 회전이 실루엣을
+ * 결정하는 원형은 pos/scale 만 봐서는 높이를 알 수 없기 때문이다.
+ */
+export function elementHeight(el: Element): number {
+  const geo = bakeElement(el, 1);
+  geo.computeBoundingBox();
+  const h = geo.boundingBox?.max.y ?? 0;
+  geo.dispose();
+  return h;
 }
 
 /** 바이옴 편성 (테스트/계측용) */

@@ -14,6 +14,7 @@ import {
   type CellToWorld,
 } from './meshlib/terrain';
 import { buildProps } from './meshlib/props';
+import { buildGroundDetail } from './meshlib/grounddetail';
 import { createBasecamp, type Basecamp } from './meshlib/basecamp';
 import { EnemyView } from './views/enemyview';
 import { TowerView } from './views/towerview';
@@ -83,6 +84,21 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
   const sceneryList = [...scenery].map((k) => ({ x: k % stage.gridW, z: Math.floor(k / stage.gridW) }));
   const props = buildProps(stage.biome, sceneryList, terrain.cellToWorld, stage.id);
   root.add(props.group);
+  /*
+   * 소품이 없는 건설 가능 셀 = **맨 셀**. 건설 가능 셀의 70%가 여기이고, 개편 전에는
+   * 그 칸이 쿼드 한 장 + 타일색 하나뿐이라 화면 절반이 단색 체커보드였다.
+   * ⚠ 이 배열은 아래 decals.init 과 **같은 것을 쓴다**(따로 계산하지 않는다).
+   *   두 곳이 갈리면 "장식은 있는데 배치 하이라이트가 없는 칸"이 생긴다.
+   */
+  const bareCells = terrain.buildableCells.filter((c) => !scenery.has(cellKey(stage, c.x, c.z)));
+  const groundDetail = buildGroundDetail(
+    stage,
+    terrain.pathCells,
+    bareCells,
+    terrain.cellToWorld,
+    q.groundDetail,
+  );
+  root.add(groundDetail.group);
   const basecamp = createBasecamp();
   const baseV = terrain.cellToWorld(stage.baseCell.x, stage.baseCell.z);
   basecamp.group.position.set(baseV.x, 0, baseV.z);
@@ -130,11 +146,8 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
   const healthbars = new HealthBarView(scene);
   const decals = new Decals(scene, terrain.cellToWorld);
   const towerStatus = new TowerMarksView();
-  // 자유 배치: 배치 모드 하이라이트는 건설 가능한 셀(소품 제외)에
-  decals.init(
-    terrain.buildableCells.filter((c) => !scenery.has(cellKey(stage, c.x, c.z))),
-    stage.paths,
-  );
+  // 자유 배치: 배치 모드 하이라이트는 건설 가능한 셀(소품 제외) — 바닥 결과 같은 목록
+  decals.init(bareCells, stage.paths);
   const particles = new ParticleSystem(scene, q.particleMax);
   if (q.ambientParticles) particles.setEnvironment(stage.biome, terrain.aabb);
 
@@ -158,6 +171,9 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
     setBaseLevel: (level) => basecamp.setLevel(level, BASE_LEVEL_MAX),
     clearScenery(cellX: number, cellZ: number): boolean {
       if (!props.removeCell(cellX, cellZ)) return false;
+      // 치운 자리도 이제 맨 셀이다 — 결을 얹지 않으면 그 칸만 대머리로 남아
+      // "치운 자리"가 아니라 렌더 버그로 보인다
+      groundDetail.addCell(cellX, cellZ);
       decals.addSlotCell(cellX, cellZ);
       towerStatus.clearCell(cellX, cellZ);
       return true;
@@ -191,6 +207,7 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
       particles.dispose();
       terrain.dispose();
       props.dispose();
+      groundDetail.dispose();
       basecamp.dispose();
       waterBuild.geo.dispose();
       // 그림자 맵(렌더 타깃)은 씬을 버려도 GPU에 남는다 — 전투를 반복하면

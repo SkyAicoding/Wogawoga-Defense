@@ -56,17 +56,37 @@ export function createApp(): void {
   const backdropCam = new DioramaCamera();
   let backdropStageId = 0;
 
-  const highestUnlockedStage = (): StageDef => {
+  /**
+   * 배경 디오라마가 쓸 스테이지 — **실제 진행도**를 따른다.
+   *
+   * isStageUnlocked()를 쓰면 안 된다. 설정의 '모든 스테이지 열기'가 켜져 있으면 그건
+   * 무조건 true라 루프가 한 번도 break하지 않고 **언제나 마지막 스테이지(화산)** 가
+   * 남는다. 실측: 진행도 0인 새 프로필에서 토글만 켜도 타이틀 배경이 초원 → 용암으로
+   * 바뀌어 화면 색조가 파랑에서 붉은색으로 뒤집혔다. 문제가 둘이다 —
+   * 설정 설명은 "진행도와 호박은 그대로 유지됩니다"라 배경이 바뀐다는 예고가 없고,
+   * 최종 바이옴을 첫 화면에서 스포일한다.
+   *
+   * 그래서 unlockAll이 우회하는 것은 "플레이할 수 있는가"뿐이고, "어디까지 왔는가"는
+   * 여기서 cleared 기록으로 따로 읽는다. 해금 규칙(스테이지 n은 n-1 클리어 시)은
+   * profile.isStageUnlocked와 같게 유지한다.
+   *
+   * profile.stageProgress()가 아니라 data.stages를 직접 읽는 이유: 그 함수는 없는
+   * 항목을 **만들어 넣는** 부수효과가 있다(meta/profile.ts). buildBackdrop은 초기화와
+   * 화면 전환마다 불리므로, 그걸 쓰면 배경을 그릴 때마다 세이브에 빈 진행도 6개가
+   * 쌓인다 — 배경 계산은 읽기만 해야 한다.
+   */
+  const backdropStage = (): StageDef => {
     let last = STAGES[0] as StageDef;
-    for (const s of STAGES) {
-      if (profile.isStageUnlocked(s.id)) last = s;
-      else break;
+    for (let i = 1; i < STAGES.length; i++) {
+      const prev = STAGES[i - 1] as StageDef;
+      if (profile.data.stages[prev.id]?.cleared !== true) break;
+      last = STAGES[i] as StageDef;
     }
     return last;
   };
 
   const buildBackdrop = (): void => {
-    const stage = highestUnlockedStage();
+    const stage = backdropStage();
     if (backdrop && backdropStageId === stage.id) return;
     backdrop?.dispose();
     backdrop = build(stage, qm.flags);

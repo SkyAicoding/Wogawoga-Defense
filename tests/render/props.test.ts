@@ -15,11 +15,13 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
+  CELL_SOFT_BUDGET,
   CELL_TRI_BUDGET,
   PROP_ELEMENTS,
   PROP_KITS,
   PROTO_TRI_BUDGET,
   buildProps,
+  elementHeight,
   elementTriCount,
 } from '@/render/meshlib/props';
 import { rasterizePathCells, sceneryCells } from '@/data/grid';
@@ -33,13 +35,20 @@ import type { StageDef, Vec2 } from '@/data/types';
  * s5 7,576 / s6 5,714 였고 **섀도 패스 때문에 프레임에서 2배로** 청구됐다.
  * 지금은 셀 하나에 4~7개(3층)가 들어가는데도 총량이 그때와 비슷하거나 적고,
  * 청구는 1배다 — 곧 스테이지마다 프레임 삼각형이 순수하게 줄었다.
+ *
+ * ── 소품 다양화 개정(크기 계층 + 부 소품 + 신규 33종) 후 재실측 ──────────────
+ *   s1 8,635(216/셀) · s2 8,636(196) · s3 11,029(216) · s4 8,733(182) ·
+ *   s5 9,712(231) · s6 7,913(198)   ← 아래 상한은 이 값 + 6~7%
+ * 개정 전 대비 증가분은 s1 +1,186 / s3 +2,849 / s6 +2,111 이고, 최악 프레임
+ * 실측(s1 127,378 / s3 133,110 / s6 128,740)에 그대로 더해도 예산 150,000 대비
+ * 9~14% 여유가 남는다. 이 여유는 맨 셀 장식 레이어와 이후 LOD 작업의 몫이다.
  */
 const STAGE_CAP: Record<number, number> = {
-  1: 8_400,
-  2: 10_500,
-  3: 10_500,
-  4: 9_000,
-  5: 9_500,
+  1: 9_200,
+  2: 9_200,
+  3: 11_700,
+  4: 9_300,
+  5: 10_400,
   6: 8_400,
 };
 
@@ -117,6 +126,43 @@ describe('층 요소 원가표', () => {
       expect(kit.midCount[0], `${biome} 2층이 0개일 수 있다`).toBeGreaterThanOrEqual(1);
       expect(kit.groundCount[0], `${biome} 3층이 0개일 수 있다`).toBeGreaterThanOrEqual(2);
     }
+  });
+
+  /**
+   * 사용자가 지적한 것("나무, 바위, 이것밖에 없어")의 정량적 정체는 종류 수가 아니라
+   * **크기 폭**이었다. 개정 전 초원은 heroScale [0.78, 1.0](±12%)에 원형 높이도
+   * 1.37~1.70 이라, 곱해도 판 위 모든 나무가 28% 밴드 안에 있었다.
+   * 여기서 잠그는 것은 "그 밴드가 다시 좁아지지 않는다"이다.
+   */
+  it('1층에 크기 계층이 있다 — 배율 봉투와 원형 높이가 둘 다 넓다', () => {
+    const rows: string[] = [];
+    for (const [biome, kit] of Object.entries(PROP_KITS)) {
+      const [lo, hi] = kit.heroScale;
+      expect(hi / lo, `${biome} heroScale 봉투가 좁다 — 다시 한 크기로 보인다`).toBeGreaterThanOrEqual(1.7);
+
+      // 원형 자체의 높이 폭. 배율만 넓히면 같은 실루엣이 커졌다 작아졌다 할 뿐이다.
+      const heights = kit.hero.map(elementHeight);
+      const minH = Math.min(...heights);
+      const maxH = Math.max(...heights);
+      expect(maxH, `${biome} 1층에 2.0급 큰 원형이 없다`).toBeGreaterThanOrEqual(1.4);
+      expect(minH, `${biome} 1층에 0.3급 낮은 원형이 없다`).toBeLessThanOrEqual(0.5);
+      // 배율까지 곱한 실제 세계 높이 폭 — 여기가 눈에 보이는 값이다
+      expect((maxH * hi) / (minH * lo), `${biome} 실제 높이 폭이 좁다`).toBeGreaterThanOrEqual(5);
+      rows.push(`${biome} 배율 ${lo}~${hi} · 원형 h ${minH.toFixed(2)}~${maxH.toFixed(2)} · 실제 ${(minH * lo).toFixed(2)}~${(maxH * hi).toFixed(2)}`);
+
+      // 부 소품(밑동 옆 작은 것) — 없으면 셀당 1층이 다시 1개 고정이 된다
+      expect(kit.companion.length, `${biome} 부 소품 후보 없음`).toBeGreaterThanOrEqual(2);
+      for (const el of kit.companion) {
+        expect(elementTriCount(el), `${biome} 부 소품이 너무 비싸다`).toBeLessThanOrEqual(80);
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.log('크기 계층:\n  ' + rows.join('\n  '));
+  });
+
+  it('셀 채우기 예산은 셀 상한 안에 있다 (구조적으로 초과 불가)', () => {
+    expect(CELL_SOFT_BUDGET).toBeLessThan(CELL_TRI_BUDGET);
+    expect(CELL_SOFT_BUDGET).toBeGreaterThan(CELL_TRI_BUDGET * 0.9);
   });
 });
 

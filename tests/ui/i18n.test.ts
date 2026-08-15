@@ -81,6 +81,13 @@ describe('i18n 문자열', () => {
     expect(t('ally.guardian.desc', { n: ALLY_BLOCK_CAPACITY })).toContain(String(ALLY_BLOCK_CAPACITY));
   });
 
+  it("설정 '모든 스테이지 열기' 문자열이 양쪽에 있다", () => {
+    for (const k of ['settings.unlockAll', 'settings.unlockAllDesc']) {
+      expect(ko[k], `ko.${k}`).toBeTruthy();
+      expect(en[k], `en.${k}`).toBeTruthy();
+    }
+  });
+
   it('지형지물 제거 문자열이 양쪽에 있다', () => {
     for (const k of [
       'battle.scenery.title',

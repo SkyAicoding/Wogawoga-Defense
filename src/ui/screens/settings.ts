@@ -135,6 +135,16 @@ function render(facade: GameFacade, root: HTMLElement): void {
             true, // 4개 옵션 — 라벨 위/버튼 아래 스택 레이아웃
           ),
         ),
+        /*
+         * 스테이지 잠금 해제 — 로비 카드/무한 토글이 화면에 들어올 때마다 프로필을
+         * 다시 읽으므로(lobby.enter가 카드를 새로 만든다) 여기서 값만 바꾸면 즉시 반영된다.
+         * 설명 줄은 "진행도는 안 건드린다"를 분명히 해 둔다 — 데이터 초기화 카드 바로
+         * 위라서 파괴적인 버튼으로 오해할 자리다.
+         */
+        h('div', { class: 'set-card' },
+          toggle(t('settings.unlockAll'), s.unlockAll, (v) => apply({ unlockAll: v })),
+          h('p', { class: 'set-desc', text: t('settings.unlockAllDesc') }),
+        ),
         h('div', { class: 'set-card' },
           h('button', {
             class: 'btn btn--danger set-reset',

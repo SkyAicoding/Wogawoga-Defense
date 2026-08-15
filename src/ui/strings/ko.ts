@@ -75,6 +75,9 @@ export const ko: Record<string, string> = {
   'settings.quality.low': '낮음',
   'settings.quality.med': '중간',
   'settings.quality.high': '높음',
+  'settings.unlockAll': '모든 스테이지 열기',
+  'settings.unlockAllDesc':
+    '잠금과 상관없이 6개 스테이지와 무한 모드를 바로 플레이합니다. 진행도와 호박은 그대로 유지됩니다.',
   'settings.reset': '데이터 초기화',
   'settings.resetBody1': '모든 진행 상황이 삭제됩니다. 계속할까요?',
   'settings.resetBody2': '정말로요? 삭제하면 되돌릴 수 없어요!',

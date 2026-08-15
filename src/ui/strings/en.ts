@@ -74,6 +74,9 @@ export const en: Record<string, string> = {
   'settings.quality.low': 'Low',
   'settings.quality.med': 'Medium',
   'settings.quality.high': 'High',
+  'settings.unlockAll': 'Unlock All Stages',
+  'settings.unlockAllDesc':
+    'Play all 6 stages and Endless mode right away, ignoring locks. Your progress and amber are kept intact.',
   'settings.reset': 'Reset Data',
   'settings.resetBody1': 'All progress will be deleted. Continue?',
   'settings.resetBody2': 'Really? This cannot be undone!',

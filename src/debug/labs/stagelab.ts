@@ -233,7 +233,12 @@ export function run(): void {
   ];
   for (const s of slots) stage3d.towers.add(s.id, s.defId, s.tier, s.cell.x, s.cell.z);
   stage3d.decals.showRange(4, 6, 2.5);
-  stage3d.decals.setSlotsVisible(true);
+  /*
+   * 배치 슬롯 원판은 랩 전용 표시라 실게임 화면에는 없다. 그런데 반투명 흰 원판이
+   * 건설 가능 칸 **전부**에 깔리므로, 지면 자체(타일 색·바닥 결)를 눈으로 볼 때는
+   * 그 원판이 그림을 통째로 덮어 버린다. ?slots=0 으로 끄고 볼 수 있게 한다.
+   */
+  stage3d.decals.setSlotsVisible(params.get('slots') !== '0');
   stage3d.towers.setGhost('ballista', 6, 11, true);
 
   // --- 카메라 fit: 하단 30%는 카드 핸드 영역으로 가정. ?fit=0.5 로 줌 검사 ---

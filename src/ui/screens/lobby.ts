@@ -97,6 +97,15 @@ export function createLobbyScreen(): Screen<GameFacade> {
       const p = facade.profile;
       const stages = facade.stages;
 
+      /*
+       * 무한 모드는 원래 "그 스테이지를 클리어했을 때만" 켤 수 있다. 설정의
+       * '모든 스테이지 열기'는 그 조건까지 우회한다 — isEndlessUnlocked()만 열어 주면
+       * 칩이 보이기만 하고 스테이지별 cleared에 막혀 여전히 못 누른다(회색 + pointer-events:none).
+       * 진행도(cleared)는 읽기만 하고 쓰지 않으므로 토글을 꺼도 그대로다.
+       */
+      const endlessReady = (stageId: number): boolean =>
+        p.stageProgress(stageId).cleared || p.data.settings.unlockAll;
+
       // --- 스테이지 카드들 -------------------------------------------------
       const cards = stages.map((stage) => {
         const unlocked = p.isStageUnlocked(stage.id);
@@ -139,7 +148,7 @@ export function createLobbyScreen(): Screen<GameFacade> {
           onClick: () => {
             const stage = stages[selectedIdx];
             if (!stage || !p.isStageUnlocked(stage.id)) return;
-            facade.startBattle(stage.id, endlessOn && p.stageProgress(stage.id).cleared);
+            facade.startBattle(stage.id, endlessOn && endlessReady(stage.id));
           },
         },
         battleLabel,
@@ -159,9 +168,10 @@ export function createLobbyScreen(): Screen<GameFacade> {
         const stage = stages[selectedIdx];
         if (!stage) return;
         const unlocked = p.isStageUnlocked(stage.id);
-        const cleared = p.stageProgress(stage.id).cleared;
+        const cleared = endlessReady(stage.id);
         cls(battleBtn, 'is-disabled', !unlocked);
-        // 무한 토글: 무한 해금 && 해당 스테이지 클리어 시에만 노출/활성
+        // 무한 토글: 무한 해금 시 노출, 해당 스테이지가 endlessReady일 때만 활성
+        // (원래는 cleared 단독 조건 — unlockAll이 켜지면 그것까지 우회한다)
         endlessBtn.style.display = p.isEndlessUnlocked() ? '' : 'none';
         cls(endlessBtn, 'is-disabled', !cleared);
         cls(endlessBtn, 'is-on', endlessOn && cleared);

@@ -1062,6 +1062,14 @@ export interface Settings {
   sfx: number; // 0~1
   vibration: boolean;
   quality: 'auto' | 'low' | 'med' | 'high';
+  /**
+   * 잠금 무시하고 6개 스테이지 + 무한 모드를 전부 연다 (기본 false).
+   * **진행도는 건드리지 않는다** — stages[].cleared/bestWave는 그대로 두고
+   * isStageUnlocked/isEndlessUnlocked의 판정만 우회한다. 그래서 껐다 켜도
+   * 클리어 기록이 손상되지 않는다.
+   * 옛 세이브에는 이 키가 아예 없다 → profile.normalize()가 false로 못박는다.
+   */
+  unlockAll: boolean;
 }
 
 export interface ProfileData {
