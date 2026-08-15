@@ -303,16 +303,29 @@ describe('대비 밴드 (규칙 ④)', () => {
      */
     expect(GD_ELEMENTS['twig']?.length, 'twig 이 다시 여러 획이 됐다').toBe(1);
     expect(flatsTriCount(GD_ELEMENTS['twig'] as never), 'twig 은 1 tri 여야 한다').toBe(1);
-    // shoreCommon 에 실린 잔가지도 같은 규약인지 — 6판 전부의 물가 편성을 훑는다
+
+    /*
+     * "획이 셋이면 부채라 안전하다"도 **선언만으로는 부족**하다. crackFleck 은 가닥이
+     * 셋이었는데 길이가 0.30/0.17/0.11 이라 셋째가 화면에서 사라졌고, 남은 둘이
+     * 화산 판에서 빨간 ✓ 가 됐다. 그래서 개수와 함께 **보이는지**를 잠근다:
+     * 최단 획이 최장 획의 45% 미만이면 그 획은 없는 것과 같다.
+     */
+    const strokesOf = (flats: readonly { sides?: number; scale?: readonly number[] }[]) =>
+      flats.filter((f) => f.sides === 3).map((f) => (f.scale?.[0] ?? 1) * 1.5); // blade: scale.x = len/1.5
+    for (const [name, flats] of Object.entries(GD_ELEMENTS)) {
+      const len = strokesOf(flats);
+      expect(len.length, `${name}: 획이 정확히 둘이다 — ✓ 글리프가 된다`).not.toBe(2);
+      if (len.length < 2) continue;
+      const lo = Math.min(...len);
+      const hi = Math.max(...len);
+      expect(lo / hi, `${name}: 짧은 획이 안 보여 사실상 ${len.length - 1}획이다`).toBeGreaterThanOrEqual(0.45);
+    }
+    // 6판 전부의 편성에 같은 규약을 건다 (shoreCommon 의 잔가지는 6판이 공유한다)
     for (const biome of ALL_BIOMES) {
-      for (const flats of gdKit(biome).accent.shore) {
-        // 잎/획 요소(sides:3)만 골라 본다: 한 요소 안에서 원점을 공유하는 획이
-        // 2개뿐이면 그게 정확히 ✓ 다. 3개 이상(풀 포기·균열)은 부채라 글리프가 아니다.
-        const strokes = flats.filter((f) => f.sides === 3);
-        expect(
-          strokes.length,
-          `${biome}/shore 에 2획 요소가 있다 — ✓ 글리프가 된다`,
-        ).not.toBe(2);
+      for (const zone of GD_ZONES) {
+        for (const flats of gdKit(biome).accent[zone]) {
+          expect(strokesOf(flats).length, `${biome}/${zone} 에 2획 요소가 있다`).not.toBe(2);
+        }
       }
     }
   });
