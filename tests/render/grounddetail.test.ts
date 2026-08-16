@@ -128,6 +128,31 @@ describe('바닥 결 원가표', () => {
 const ALL_BIOMES = ['grassland', 'jungle', 'desert', 'snow', 'swamp', 'volcano'] as const;
 
 /**
+ * 모양 규칙이 훑어야 하는 **전부** — 요소 표(GD_ELEMENTS) + **실제 편성**(gdKit).
+ *
+ * ⚠ 이 함수가 생긴 이유가 이 파일의 결함이었다. 직각 판 금지·3각 판 용도·획 개수·
+ *   요소 원가 네 규칙이 오래 **손으로 관리하는 GD_ELEMENTS 표만** 훑었다. 그런데
+ *   화면에 나가는 것은 kitRaw 가 편성한 목록이고, 둘은 사람이 맞춰 줘야 이어진다 —
+ *   kitRaw 에 새 액센트를 넣으면서 GD_ELEMENTS 등록을 깜빡하면 정사각형도 화살촉도
+ *   전부 통과했다. 대비 밴드는 이미 clampKit 으로 **편성표 전체가 반드시 지나가는데**
+ *   모양 규칙만 그러지 않았던 것이다.
+ *   (변이 테스트로 확인했다: kitRaw 의 grassland/inner 에 `sides: 4` 판 하나를
+ *    GD_ELEMENTS 등록 없이 넣으면 아래 "직각 판" 케이스가 즉시 빨개진다. 예전
+ *    코드에서는 초록이었다.)
+ */
+function allShapeSpecs(): [string, readonly { sides?: number; pos: readonly number[]; rot?: readonly number[]; scale?: readonly number[] }[]][] {
+  const out: [string, never][] = [];
+  for (const [name, flats] of Object.entries(GD_ELEMENTS)) out.push([`GD_ELEMENTS.${name}`, flats as never]);
+  for (const biome of ALL_BIOMES) {
+    const kit = gdKit(biome);
+    for (const zone of GD_ZONES) {
+      kit.accent[zone].forEach((flats, i) => out.push([`${biome}/${zone}#${i}`, flats as never]));
+    }
+  }
+  return out;
+}
+
+/**
  * 규칙 ④ — **명도 대비**.
  *
  * 이 파일에는 오랫동안 색/휘도 어서션이 **한 건도** 없었다. 그동안 grounddetail.ts
@@ -146,10 +171,22 @@ const ALL_BIOMES = ['grassland', 'jungle', 'desert', 'snow', 'swamp', 'volcano']
  */
 describe('대비 밴드 (규칙 ④)', () => {
   it('밴드 폭이 선언값 그대로다 — 넓히려면 주석·구현·테스트를 같이 고쳐라', () => {
-    expect(GD_CONTRAST_BAND, '규칙 ④ 밴드 폭이 바뀌었다').toBeCloseTo(0.28, 6);
-    // 0.30 을 넘기면 캡처에서 하드 엣지가 생겨 "칸 안의 물건"으로 읽히기 시작한다
-    // (수정 전 잔가지 −53% / 흰 꽃 +30% 이 정확히 그 상태였다).
-    expect(GD_CONTRAST_BAND, '이 이상은 골드 제거 대상 오인이 시작된다').toBeLessThanOrEqual(0.30);
+    /*
+     * 0.28 → 0.38. 심판이 "데스크톱 1280×800·폰 390×844 어느 쪽에서도 얼룩·잔가지·
+     * 꽃이 판독되지 않는다"고 했고, 대비를 올리지 않고는 안 되는 일이었다.
+     *
+     * 다만 **밴드만 열지는 않았다.** 밴드는 설계 단계 값이고 화면에 나가는 정점 색은
+     * 굽는 중의 세 항(buildFlats faceJitter · 요소 hueJitter · tintGeo)이 더 민다.
+     * 그래서 지배항인 faceJitter 를 0.03 → 0.018 로, 요소 hueJitter 상한을 0.05 →
+     * 0.028 로 같이 내렸다. 실측 결과:
+     *   정점 색 분포(6판, p0~p100)  수정 전 −45~+45%  →  수정 후 −47~+49%
+     * 즉 **꼬리는 그대로인데 평균 대비만 올랐다**. 밴드만 0.38 로 열고 지터를 두었다면
+     * 화면 값이 −60% 대로 내려가 1순위 실패 모드(수정 전 잔가지 −53% = "칸 안의 물건")로
+     * 되돌아간다. 그래서 이 상수만 보고 판단하지 마라 — GD_FACE_JITTER 와 한 쌍이다.
+     */
+    expect(GD_CONTRAST_BAND, '규칙 ④ 밴드 폭이 바뀌었다').toBeCloseTo(0.38, 6);
+    // 이 이상은 화면 값이 −55%를 넘어 골드 제거 대상 오인이 시작된다
+    expect(GD_CONTRAST_BAND, '이 이상은 골드 제거 대상 오인이 시작된다').toBeLessThanOrEqual(0.42);
     expect(GD_CONTRAST_BAND, '너무 조이면 레이어가 통째로 증발한다').toBeGreaterThanOrEqual(0.18);
   });
 
@@ -226,12 +263,17 @@ describe('대비 밴드 (규칙 ④)', () => {
      * 에서는 안티에일리어싱을 거쳐도 직각만 살아남기 때문이다. 5각 이상이면 같은
      * 픽셀 수에서 둥글게 뭉개진다 — 원가는 판당 +1 tri 뿐이다.
      */
-    for (const [name, flats] of Object.entries(GD_ELEMENTS)) {
+    // GD_ELEMENTS 표가 아니라 **실제 편성까지** 훑는다 (allShapeSpecs 주석 참고)
+    let n = 0;
+    for (const [name, flats] of allShapeSpecs()) {
       for (const f of flats) {
         expect(f.sides ?? 4, `${name}: 직각 판이 남아 있다`).toBeGreaterThanOrEqual(3);
         expect(f.sides ?? 4, `${name}: 사각 판은 색종이 조각으로 읽힌다`).not.toBe(4);
+        n++;
       }
     }
+    // 편성을 못 훑고 조용히 0개를 통과시키는 회귀 방지 (요소 표만 훑으면 30개 남짓이다)
+    expect(n, '모양 규칙이 편성을 안 훑었다').toBeGreaterThan(120);
   });
 
   /**
@@ -281,7 +323,7 @@ describe('대비 밴드 (규칙 ④)', () => {
       return true;
     };
 
-    for (const [name, flats] of Object.entries(GD_ELEMENTS)) {
+    for (const [name, flats] of allShapeSpecs()) {
       // (a) 획 요소 — 판이 전부 3각이면 통과 (twig·grassSprig·litter·crackFleck)
       if (flats.every((f) => f.sides === 3)) continue;
       for (const f of flats) {
@@ -290,6 +332,28 @@ describe('대비 밴드 (규칙 ④)', () => {
         const host = flats.some((g) => g !== f && (g.sides ?? 4) > 3 && tri.every((p) => inside(p, ring(g))));
         expect(host, `${name}: 3각 판이 큰 판 밖으로 삐져나왔다 — 화살촉(➤)이 된다`).toBe(true);
       }
+    }
+  });
+
+  it('요소 하나의 원가·y 스택을 실제 편성에서도 지킨다', () => {
+    /*
+     * 원가(GD_ELEMENT_TRI_BUDGET)와 y 스택도 예전엔 GD_ELEMENTS 표만 봤다.
+     * 셀 예산(GD_CELL_TRI_BUDGET)은 굽는 중에 세므로 구조적으로 안전하지만, 요소 하나가
+     * 8을 넘으면 셀에 하나밖에 못 들어가 편성이 조용히 망가진다 — 그건 예산이 아니라
+     * 그림 문제라 굽기 테스트가 못 잡는다.
+     */
+    for (const [name, flats] of allShapeSpecs()) {
+      let tri = 0;
+      for (const f of flats) {
+        tri += (f.sides ?? 4) - 2;
+        const [rx, , rz] = f.rot ?? [0, 0, 0];
+        expect(rx, `${name}: 판이 x축으로 기울었다`).toBe(0);
+        expect(rz, `${name}: 판이 z축으로 기울었다`).toBe(0);
+        expect(f.pos[1], `${name}: y 가 스택 아래로 내려갔다`).toBeGreaterThanOrEqual(0.015);
+        expect(f.pos[1], `${name}: y 가 데칼 층(0.030)을 침범했다`).toBeLessThan(0.030);
+      }
+      expect(tri, `${name}: 요소 원가 초과`).toBeLessThanOrEqual(GD_ELEMENT_TRI_BUDGET);
+      expect(tri, `${name}: 요소가 비어 있다`).toBeGreaterThan(0);
     }
   });
 
@@ -305,28 +369,43 @@ describe('대비 밴드 (규칙 ④)', () => {
     expect(flatsTriCount(GD_ELEMENTS['twig'] as never), 'twig 은 1 tri 여야 한다').toBe(1);
 
     /*
-     * "획이 셋이면 부채라 안전하다"도 **선언만으로는 부족**하다. crackFleck 은 가닥이
-     * 셋이었는데 길이가 0.30/0.17/0.11 이라 셋째가 화면에서 사라졌고, 남은 둘이
-     * 화산 판에서 빨간 ✓ 가 됐다. 그래서 개수와 함께 **보이는지**를 잠근다:
-     * 최단 획이 최장 획의 45% 미만이면 그 획은 없는 것과 같다.
+     * "획이 셋이면 부채라 안전하다"는 **틀렸다**. crackFleck 은 가닥이 셋이고 길이도
+     * 0.28/0.22/0.16(최단/최장 0.57)이라 셋이 다 보였는데도 화산 판에서 빨간 ✓ 였다.
+     * 재리뷰는 아이소메트릭 투영이 부채를 눌렀다고 봤지만, 화면 공간에서 계산하면
+     * (grounddetail.ts:crackFleck 주석에 식이 있다) 눌림은 sin55° = 0.819 뿐이고
+     * 세 획의 화면 각은 153.3° / 188.0° / 222.4° 로 34° 씩 고르게 벌어져 있었다.
+     * 남는 원인은 **한 점에서 만나는 것 자체**다. 그래서 잠그는 것을 바꾼다:
+     * 획이 여럿이면 **원점을 공유하면 안 된다** (litter·crackFleck 처럼 흩어 놓거나,
+     * grassSprig 처럼 부채로 두려면 획이 5개 이상이어야 부채로 읽힌다).
      */
-    const strokesOf = (flats: readonly { sides?: number; scale?: readonly number[] }[]) =>
-      flats.filter((f) => f.sides === 3).map((f) => (f.scale?.[0] ?? 1) * 1.5); // blade: scale.x = len/1.5
-    for (const [name, flats] of Object.entries(GD_ELEMENTS)) {
-      const len = strokesOf(flats);
-      expect(len.length, `${name}: 획이 정확히 둘이다 — ✓ 글리프가 된다`).not.toBe(2);
-      if (len.length < 2) continue;
+    const strokesOf = (flats: readonly { sides?: number; scale?: readonly number[]; pos: readonly number[] }[]) =>
+      flats.filter((f) => f.sides === 3);
+    /** blade 는 밑동이 원점에서 sx/2 만큼 나간 자리에 중심을 둔다 → 밑동 = pos − 방향·sx/2 */
+    const rootOf = (f: { scale?: readonly number[]; pos: readonly number[]; rot?: readonly number[] }) => {
+      const sx = f.scale?.[0] ?? 1;
+      const a = (f.rot?.[1] ?? 0) - Math.PI / 2;
+      return [(f.pos[0] as number) - Math.sin(a) * sx * 0.5, (f.pos[2] as number) - Math.cos(a) * sx * 0.5];
+    };
+    for (const [name, flats] of allShapeSpecs()) {
+      const st = strokesOf(flats);
+      expect(st.length, `${name}: 획이 정확히 둘이다 — ✓ 글리프가 된다`).not.toBe(2);
+      if (st.length < 3) continue;
+      const len = st.map((f) => (f.scale?.[0] ?? 1) * 1.5); // blade: scale.x = len/1.5
       const lo = Math.min(...len);
       const hi = Math.max(...len);
-      expect(lo / hi, `${name}: 짧은 획이 안 보여 사실상 ${len.length - 1}획이다`).toBeGreaterThanOrEqual(0.45);
-    }
-    // 6판 전부의 편성에 같은 규약을 건다 (shoreCommon 의 잔가지는 6판이 공유한다)
-    for (const biome of ALL_BIOMES) {
-      for (const zone of GD_ZONES) {
-        for (const flats of gdKit(biome).accent[zone]) {
-          expect(strokesOf(flats).length, `${biome}/${zone} 에 2획 요소가 있다`).not.toBe(2);
+      expect(lo / hi, `${name}: 짧은 획이 안 보여 사실상 ${st.length - 1}획이다`).toBeGreaterThanOrEqual(0.45);
+      if (st.length >= 5) continue; // 5획 이상은 부채(풀 포기)로 읽힌다
+      // 3~4획은 원점을 공유하면 안 된다 — 만나는 점이 곧 글리프다
+      const roots = st.map(rootOf);
+      let worst = 0;
+      for (let i = 0; i < roots.length; i++) {
+        for (let j = i + 1; j < roots.length; j++) {
+          const a = roots[i] as number[];
+          const b = roots[j] as number[];
+          worst = Math.max(worst, Math.hypot((a[0] as number) - (b[0] as number), (a[1] as number) - (b[1] as number)));
         }
       }
+      expect(worst, `${name}: 3~4획이 한 점에서 만난다 — ✓ ➤ ⌐ 중 하나가 된다`).toBeGreaterThan(0.08);
     }
   });
 });

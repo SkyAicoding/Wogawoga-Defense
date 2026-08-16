@@ -14,8 +14,13 @@
  *    s6   |  148 |  40 | **108** | 55 / 38
  * 6판 합계 577칸이 민무늬였다. 그리고 캡처(bare-before.png)로 확인한 그림은 "빈 땅"이
  * 아니라 **격자무늬로 읽히는 빈 땅**이었다 — terrain 이 상면을 쿼드로 바꾸면서 결을
- * "타일 단위 색 지터"로만 내다 보니 이 카메라에서 타일 경계가 하드 엣지로 보인다.
- * 그래서 이 레이어의 목적은 "물건을 놓는 것"이 아니라 **타일 경계를 흐리는 것**이다.
+ * "타일 단위 색 지터"로만 내다 보니 이 카메라에서 타일 경계가 하드 엣지로 보였다.
+ *
+ * ⚠ **그 전제는 이제 낡았다.** terrain 이 지면색을 타일 픽에서 **좌표의 연속 함수**로
+ *   갈아엎어(terrain.ts:groundColor) 타일 경계가 원리적으로 사라졌다. 곧 이 레이어의
+ *   목적도 바뀌었다 — "경계를 흐리는 것"이 아니라 **매끄러운 지면 위에 반점과 잔물건을
+ *   놓는 것**이다. 목적이 바뀐 줄 모르고 남아 있던 구조("셀마다 얼룩 한 장을 중앙에",
+ *   "액센트는 반경 0.24~0.38 고리에만")가 정확히 격자를 다시 그리고 있었다.
  *
  * ⚠ 소품 셀 개수는 곧 건설 가능 칸 수 = 밸런스라 **한 개도 바꾸지 않는다**.
  *   sceneryCells()/SCENERY_DENSITY/isBuildableCell 어느 것도 이 파일은 건드리지 않고,
@@ -71,7 +76,9 @@
  *  ④ **명도 대비 ±38%(GD_CONTRAST_BAND) 이내 — 단, 이건 설계 단계 값이다.**
  *     기준선은 **바이옴 지면 램프의 평균 휘도**(gdGroundLuma), 재는 자는 Rec.709 이고,
  *     실제로 당기는 곳은 clampKit — 편성표(kitOf)를 통과한 **FlatSpec 색**에는 밴드
- *     밖이 없다. 그러나 **화면 정점 색은 밴드 밖으로 나간다**(정직하게: 실측 −47~+48%).
+ *     밖이 없다(면 얼룩은 그 앞에 stretchRamp 로 **폭을 늘리는** 단계를 하나 더 지난다 —
+ *     밴드는 상한만 정하지 하한을 보장하지 않기 때문이다).
+ *     그러나 **화면 정점 색은 밴드 밖으로 나간다**(정직하게: 실측 −47~+49%).
  *     굽는 도중 색을 흔드는 항이 셋 더 있기 때문이고, 그 셋의 크기는 GD_CONTRAST_BAND
  *     주석에 실측표로 적어 뒀다. 이보다 세면 "칸 안에 물건이 있다"로 읽혀 유저가
  *     골드 제거 대상으로 오인한다 — 이 레이어의 1순위 실패 모드다. 그래서 세로로
@@ -79,10 +86,10 @@
  *
  * ── 격자에 안 매이게 하는 법 (규칙 ③을 지키면서) ──────────────────────────
  * 판을 놓는 자리를 **셀 좌표에서 뽑지 않는다.** 월드 좌표계에 깔린 지터 격자
- * (gdSites — 간격 0.78/0.55칸, 칸 격자와 어긋난 각도로 회전)에서 사이트를 뽑고,
+ * (gdSites — 간격 0.60/0.50칸, 칸 격자와 어긋난 각도로 회전)에서 사이트를 뽑고,
  * 그중 **자기 셀 안에 떨어진 것만** 굽는다. 소유는 셀이 갖되 **패턴은 셀을 모른다**:
  *   · 사이트 간격이 1칸의 약수가 아니라 칸마다 위상이 어긋난다 → 같은 도장이 안 된다.
- *   · 경계 양쪽 사이트가 0.55칸 간격으로 이어지므로 **얼룩 무리가 칸을 가로질러** 보인다.
+ *   · 경계 양쪽 사이트가 0.5~0.6칸 간격으로 이어지므로 **얼룩 무리가 칸을 가로질러** 보인다.
  *     (판 하나하나는 자기 칸 안에 있는데, 무리는 두세 칸 폭이다 — 이게 핵심이다.)
  *   · 개수·크기·색은 **저주파 필드**에서 온다(gdField). 이웃 사이트가 같은 값을 읽으니
  *     인접한 얼룩이 같은 톤·같은 크기로 나와 **하나의 큰 얼룩**으로 붙어 읽힌다.
@@ -124,12 +131,19 @@ export const GD_ELEMENT_TRI_BUDGET = 8;
  * 이후 작업(타워 LOD·적 추가)에 여유를 남긴다. props.ts 와 같은 방식으로 굽기 전에
  * 세어 가며 채우므로 초과는 확률이 낮은 게 아니라 **구조적으로 불가능**하다.
  *
- * 이 값이 실제로 걸리는 곳은 **정글 내부 셀 하나뿐**이다(얼룩 2장 7 + 액센트 6개
- * 최대 7 = 49). 나머지 다섯 바이옴은 액센트 상한이 3~5라 여기 닿지 않는다.
+ * 실측 최악 셀은 **32 tri (s2 정글 5,10)** 이다. 배치가 월드 격자로 바뀌면서 셀에
+ * 몇 장이 떨어지느냐가 확률적이 됐고(면 얼룩 0~4장 + 액센트 0~7개), 그래서 상한이
+ * 예전보다 더 여유롭게 남는다. 상한을 32 로 조이지 않는 이유는 그 확률 꼬리 때문이다 —
+ * 사이트가 우연히 여섯 개 떨어진 칸이 언제든 나올 수 있고, 그때 잘리는 것은 예산이
+ * 아니라 그림이다.
  */
 export const GD_CELL_TRI_BUDGET = 52;
 
-/** 스테이지 전체 상한 — s6(맨셀 108 + 경로 42)가 가장 크다 */
+/**
+ * 스테이지 전체 상한 — s6(맨셀 108 + 경로 42)가 가장 크다.
+ * 실측 1,208(s3)~1,516(s2). 예전 구조(1,902~2,476)보다 **적은데 화면에서는 더 보인다** —
+ * 셀마다 작은 것을 여러 개 놓는 대신 큰 면 얼룩을 흩었기 때문이다.
+ */
 export const GD_STAGE_CAP = 4_800;
 
 /**
@@ -208,7 +222,9 @@ function gdField(x: number, z: number, len: number, seed: number): number {
  * 월드 좌표 지터 격자 — **셀 격자와 어긋난** 사이트 생성기.
  *
  * pitch 를 1칸의 약수로 두면 칸마다 같은 자리에 사이트가 생겨 예전 고리와 똑같아진다.
- * 그래서 0.78 / 0.55 처럼 1과 공약수가 없는 값을 쓰고, 위에 각도를 얹어 축까지 튼다.
+ * 그래서 0.60 / 0.50 처럼 1과 공약수가 없는 값을 쓰고, 위에 각도를 얹어 축까지 튼다.
+ * (0.5 는 1의 약수지만 격자를 1.07/0.41 rad 로 돌려 두어 칸 축과 절대 안 맞물린다 —
+ *  간격만 보고 고르지 말고 회전까지 같이 보라는 뜻이다.)
  */
 interface SiteLattice {
   /** 사이트 간격 (칸 단위) */
@@ -354,8 +370,14 @@ function mix(a: number, b: number, t: number): number {
  * (수정 전 잔가지 −53% / 설원 마른가지 −68% = "칸 안의 물건")로 돌아가는 길이다.
  * 그래서 밴드만 열지 않고 **지배항을 같이 줄였다**:
  *   faceJitter 0.03 → GD_FACE_JITTER 0.018,  요소 hueJitter 최대 0.05 → 0.028.
- * 결과: 설계 밴드는 ±28% → ±38%로 넓어졌는데 화면 분포는 −45~+45% → −47~+48% 로
- * 사실상 제자리다. **평균 대비는 오르고 꼬리는 안 늘었다** — 이게 노린 지점이다.
+ * 결과: 설계 밴드는 ±28% → ±38%로 넓어졌는데 화면 분포는 −45~+45% → −47~+49% 로
+ * 사실상 제자리다. **평균 대비는 오르고 꼬리는 안 늘었다** — 이게 노린 지점이다
+ * (중앙값이 초원 −11% → −19%, 사막 −13% → −19% 로 내려간 것이 그 증거다).
+ *
+ * ⚠ 밴드를 넓히는 것만으로는 **설원이 안 고쳐진다.** 밴드는 안으로 당기기만 하고
+ *   설원 램프는 자기 폭이 7%뿐이라 얼룩 다섯이 한 색이었다. 그건 stretchRamp 가 —
+ *   램프의 자기 명암 폭을 늘리는 별도의 단계가 — 고친다. 두 장치의 역할이 다르다:
+ *   **밴드는 상한, 스트레치는 하한.**
  *
  * ⚠ 이 밴드는 **휘도만** 잰다. 채도는 안 잰다. 어두운 재 위의 새빨간 균열처럼
  *   휘도가 밴드 안이어도 색으로 튀는 경우가 있고, 그건 **모양**과 **채도 선택**으로
@@ -399,15 +421,11 @@ const _hsl = { h: 0, s: 0, l: 0 };
  * l → 휘도는 (h·s 고정 시) 단조증가라 이분 탐색이 항상 수렴한다. 색은 kit 을 만들 때
  * 한 번만 통과하고 KITS 에 캐시되므로 프레임 비용은 0이다.
  */
-function toBand(hex: number, refLuma: number, band = GD_CONTRAST_BAND): number {
-  const lo = refLuma * (1 - band);
-  const hi = refLuma * (1 + band);
-  const l = gdLuma(hex);
-  if (l >= lo && l <= hi) return hex;
-  const target = l < lo ? lo : hi;
-  // 도달 불가능한 상한(밝은 판에서 hi > 1) — 흰색이 갈 수 있는 끝이다
+function withLuma(hex: number, target: number, inward: boolean): number {
+  // 도달 불가능한 상한(밝은 판에서 target > 1) — 흰색이 갈 수 있는 끝이다
   if (target >= 1) return 0xffffff;
-  const up = target > l;
+  if (target <= 0) return 0x000000;
+  const up = target > gdLuma(hex);
   _ca.setHex(hex).getHSL(_hsl);
   let a = 0;
   let b = 1;
@@ -418,17 +436,66 @@ function toBand(hex: number, refLuma: number, band = GD_CONTRAST_BAND): number {
   }
   /*
    * 마지막 한 칸은 **양자화 보정**이다. 탐색은 실수로 수렴하지만 결과는 8비트로
-   * 반올림되므로, 수렴값이 밴드 경계 바로 **바깥**(−28.2% 같은 값)에 떨어질 수 있다.
+   * 반올림되므로, 수렴값이 밴드 경계 바로 **바깥**(−38.2% 같은 값)에 떨어질 수 있다.
    * 테스트가 실제로 그걸 잡았다. 그래서 밴드 안쪽으로 1/512 씩 밀어 마무리한다 —
    * 눈에 보이지 않는 차이지만, 이 레이어의 계약이 "밴드 안"이므로 안이어야 한다.
+   * (inward=false 면 정확히 맞추기만 한다 — 대비 스트레치는 뒤에서 toBand 가 자른다.)
    */
   let m = (a + b) / 2;
   let out = _cb.setHSL(_hsl.h, _hsl.s, m).getHex();
+  if (!inward) return out;
   for (let i = 0; i < 32 && (up ? gdLuma(out) < target : gdLuma(out) > target); i++) {
     m = Math.min(1, Math.max(0, m + (up ? 1 / 512 : -1 / 512)));
     out = _cb.setHSL(_hsl.h, _hsl.s, m).getHex();
   }
   return out;
+}
+
+function toBand(hex: number, refLuma: number, band = GD_CONTRAST_BAND): number {
+  const lo = refLuma * (1 - band);
+  const hi = refLuma * (1 + band);
+  const l = gdLuma(hex);
+  if (l >= lo && l <= hi) return hex;
+  return withLuma(hex, l < lo ? lo : hi, true);
+}
+
+/**
+ * 면 얼룩 램프 **대비 스트레치** — 밴드가 못 하는 일을 하는 한 줄.
+ *
+ * toBand 는 **안으로 당기기만** 한다. 그래서 바이옴 램프 자체가 좁으면 얼룩 색
+ * 다섯이 사실상 한 색이고 레이어가 통째로 증발하는데, 밴드를 아무리 넓혀도 그건
+ * 안 고쳐진다 — 실제로 설원이 그랬다(램프 자기 폭 7%, 팔레트 주석 참조. 심판이
+ * "폰에서 아무것도 안 보인다"고 한 판이 이 판이다).
+ *
+ * 그래서 램프의 **자기 명암 폭을 목표 폭까지 늘린다**. 늘리기만 하고 줄이지는
+ * 않으므로(k ≥ 1) 이미 폭이 넓은 바이옴은 그대로 지나간다. 배율 상한 4는 설원에서
+ * 왔다 — 설원 얼룩 폭 0.06을 0.27로 늘리려면 4.5배가 필요한데, 그 이상 늘리면
+ * 8비트 양자화 때문에 색이 서로 겹쳐 계단이 보인다. 마지막에 toBand 가 자르므로
+ * 여기서 넘겨도 계약은 안 깨진다.
+ */
+function stretchRamp(cols: readonly number[], refLuma: number, target: number): number[] {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const c of cols) {
+    const d = (gdLuma(c) - refLuma) / refLuma;
+    if (d < lo) lo = d;
+    if (d > hi) hi = d;
+  }
+  const span = Math.max(hi - lo, 1e-4);
+  const k = Math.min(4, (target * 2) / span);
+  if (k <= 1.02) return [...cols];
+  const mid = (lo + hi) / 2;
+  /*
+   * 램프의 중심을 밴드 안으로 먼저 당긴다. 안 그러면 밴드 **밖에서** 넓힌 램프를
+   * toBand 가 통째로 벽에 붙여 다섯 색이 전부 같은 색이 된다 — 화산 경로가 정확히
+   * 그랬다(path 램프 휘도 0.502 vs 지면 0.313 = +60%, 셋 다 +37%로 붙어 버렸다).
+   */
+  const room = Math.max(0, GD_CONTRAST_BAND - target);
+  const mid2 = Math.min(room, Math.max(-room, mid));
+  return cols.map((c) => {
+    const d = (gdLuma(c) - refLuma) / refLuma;
+    return withLuma(c, refLuma * (1 + mid2 + (d - mid) * k), false);
+  });
 }
 
 /** 바이옴 지면 램프의 평균 휘도 — 대비를 재는 기준선 */
@@ -459,7 +526,13 @@ function clampKit(raw: GdKit, refLuma: number): GdKit {
   const soil = {} as Record<Zone, readonly number[]>;
   const accent = {} as Record<Zone, readonly Flats[]>;
   for (const z of ZONES) {
-    soil[z] = raw.soil[z].map((c) => toBand(c, refLuma));
+    /*
+     * 면 얼룩만 대비 스트레치를 먼저 통과한다(액센트는 자기 색이 이미 뚜렷하다).
+     * 경로 목표를 절반 이하로 두는 이유는 그림이 아니라 **가독성**이다 — 길 위 얼룩이
+     * 세지면 경로 리본의 폭과 방향이 흐려지고, 그건 조준에 직접 영향을 준다.
+     */
+    const target = GD_CONTRAST_BAND * (z === 'path' ? 0.34 : 0.72);
+    soil[z] = stretchRamp(raw.soil[z], refLuma, target).map((c) => toBand(c, refLuma));
     accent[z] = raw.accent[z].map((f) => bandFlats(f, refLuma));
   }
   return { soil, soilW: raw.soilW, accent, count: raw.count };
@@ -676,7 +749,13 @@ function litter(a: number, b: number): Flats {
  *
  * 채도는 따로 손봤다 — 규칙 ④는 휘도만 재고, hueJitter 는 채도 높은 빨강에서
  * 휘도를 +25%p 까지 민다(GD_CONTRAST_BAND 표의 화산 열). 그래서 이 요소만 blade
- * hueJitter 를 0.010 으로 내리고, 화산 편성의 균열색을 지면 쪽으로 더 섞었다.
+ * hueJitter 를 0.010 으로 내리고, 화산 편성의 균열색을 지면 쪽으로 더 섞었다
+ * (mix(lavaDeep, 지면, 0.45 → 0.66)). 실측 결과색 #984e3d — HSL 채도 0.43, 휘도
+ * +16%. "어두운 재 위 채도 최대 빨강"이 아니라 벽돌색이다.
+ *
+ * ⚠ 이 결론은 테스트로 잠갔다: **획이 3~4개인 요소는 밑동이 한 점에 모이면 안 된다**
+ *   (tests/render/grounddetail.test.ts). 5획 이상(grassSprig)만 부채로 읽히므로
+ *   예외다. 개수·길이 낙차만 재던 예전 규약은 이 요소를 세 번 통과시켰다.
  */
 function crackFleck(color: number): Flats {
   return [
