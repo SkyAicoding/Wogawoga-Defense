@@ -26,16 +26,7 @@ describe('combat', () => {
     expect(eventsOf(ev, 'enemyDied')).toHaveLength(1);
   });
 
-  /**
-   * ── 살점 값 이후의 재유도 (문턱 완화가 아니라 **강화**다) ────────────────────
-   * 예전 단언은 `goldChanged.delta === 5`인 **단건 존재**였다. 목 fixture의 bounty가 5라
-   * `bountyChunksFor(10, 5, 10)` = min(덩치 1, 골드 1, 24) = **1**이 되어 지금도 그대로
-   * 통과한다 — 곧 이 항목은 **접힌 채로 아무것도 안 잡는 상태**가 됐다.
-   * 그래서 잣대를 "단건이 있다"에서 **"전투로 들어온 총액이 정확히 bounty다"**로 옮긴다.
-   * 단건 존재보다 강한 선언이고, 나중에 누가 BOUNTY_CHUNK_MIN_GOLD를 만져 이 적이
-   * 쪼개지기 시작하면 그때는 총액으로 계속 검사한다(살점 값의 총량 보존이 곧 이 항목이다).
-   */
-  it('처치 시 bounty 골드 지급 — 총액이 정확히 bounty다', () => {
+  it('처치 시 bounty 골드 지급', () => {
     const sim = createBattle(
       options({
         stage: stageDef({ waveCount: 1, baseHp: 50 }),
@@ -48,14 +39,8 @@ describe('combat', () => {
     const died = eventsOf(ev, 'enemyDied');
     expect(died).toHaveLength(1);
     expect(died[0]?.bounty).toBe(5);
-    // 이 적에게 전투로 들어온 총액 = 진행 지급(몫) 합계 + 사망 잔액. 정확히 bounty여야 한다.
-    const id = died[0]?.enemyId;
-    const chunks = eventsOf(ev, 'bountyChunk').filter((c) => c.enemyId === id);
-    const total = chunks.reduce((s, c) => s + c.gold, 0) + (died[0]?.goldNow ?? 0);
-    expect(total).toBe(5);
-    // 이 fixture는 K=1이라 아직 안 쪼개진다 — 그 사실도 함께 못박는다
-    expect(chunks).toHaveLength(0);
-    expect(died[0]?.goldNow).toBe(5);
+    // 처치 직후 +5 goldChanged 존재
+    expect(eventsOf(ev, 'goldChanged').some((g) => g.delta === 5)).toBe(true);
   });
 
   it('shield — 피해 무효 2회(shielded 이벤트) 후 실피해', () => {

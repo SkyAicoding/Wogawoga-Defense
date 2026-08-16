@@ -151,13 +151,6 @@ export function processHealAuras(ctx: SimCtx): void {
       const ally = items[j] as EnemySim;
       if (!ally.alive || ally.hp >= ally.maxHp) continue;
       if (dist2(healer.x, healer.z, ally.x, ally.z) > r2) continue;
-      // ⚠ **여기서 살점 값의 지급 이력(`ally.bountyPaid`)을 절대 건드리지 마라.**
-      // 회복은 hp만 올린다. 지급은 `floor(bounty × k / K) − bountyPaid`이고 bountyPaid는
-      // 단조 증가라, 되살린 체력을 다시 깎아도 **예전 최저점 아래로 내려가기 전까지**
-      // 골드가 한 톨도 안 나간다. 이 줄이 bountyPaid를 되돌리거나 지급 기준이 "누적
-      // 피해량"으로 바뀌는 순간, 주술사 옆의 적을 반복해 때려 **골드를 무한 파밍**할 수 있다.
-      // 회귀 테스트는 반드시 스테이지3~6에서 해야 한다 — shaman 등장 웨이브 수 실측:
-      // s1 **0** · s2 **0** · s3 6 · s4 3 · s5 5 · s6 4. 스테이지1 봉투는 이걸 절대 못 잡는다.
       ally.hp = Math.min(ally.maxHp, ally.hp + heal);
     }
   }

@@ -812,29 +812,11 @@ export type SimEvent =
       defId: EnemyId;
       x: number;
       z: number;
-      /** 이 개체의 **전체** 현상금. 도감·통계의 뜻은 그대로다 */
       bounty: number;
-      /**
-       * **이번 사망으로 실제로 들어온 골드** = 잔액. 살점 값이라 `bounty`와 다르다
-       * (K=24인 trex는 여기 20이 온다 — 나머지 460은 살아 있는 동안 이미 줬다).
-       * 연출이 `+bounty`를 그리면 화면 합계가 실제 골드보다 커진다 = 플레이어에게 거짓말이다.
-       */
-      goldNow: number;
       /** 최대 체력 (웨이브 스케일 포함) — 대형/후반 적일수록 사망 폭발을 크게 */
       maxHp: number;
     }
-  | {
-      type: 'enemyLeaked';
-      enemyId: number;
-      defId: EnemyId;
-      baseDamage: number;
-      /**
-       * 누수로 **몰수된** 미지급 현상금. 살점 값에서 총 지급액이 움직이는 유일한 자리가
-       * "이미 받은 몫"이므로, 그 반대편인 이 값이 계측의 잣대다
-       * (`Σgold − Σ처치bounty − 웨이브보상 − 조기호출 = Σ(bounty − forfeited)`).
-       */
-      forfeited: number;
-    }
+  | { type: 'enemyLeaked'; enemyId: number; defId: EnemyId; baseDamage: number }
   | { type: 'bossSpawned'; enemyId: number; defId: EnemyId }
   | { type: 'towerPlaced'; towerId: number; defId: TowerId; cellX: number; cellZ: number }
   | { type: 'towerUpgraded'; towerId: number; defId: TowerId; tier: number }
@@ -1051,28 +1033,6 @@ export type SimEvent =
       /** 갱신 후 화살 1발 피해 / 사거리 (패널 표시·사거리 링) */
       dmg: number;
       range: number;
-    }
-  | {
-      /**
-       * **살점 값** — 큰 적이 죽기 전에 낸 한 몫. bounty의 일부이지 덤이 아니다
-       * (몫 합계 + `enemyDied.goldNow` = 정확히 bounty). 사망 지급은 이 이벤트가
-       * 아니라 `enemyDied.goldNow`가 나른다 — 한 사건에 둘을 겹치면 팝업이 두 번 뜬다.
-       *
-       * 발행 빈도는 틱이 아니라 **몫 경계**가 정한다: 개체당 최대 `chunks−1` = 23회이고,
-       * 잡몹은 K=1이라 **평생 한 번도 안 낸다**(compy 4 · raptor 8 · blade 15 — 실측
-       * 스테이지1 처치수입의 51.5%가 이 무리다). 최악(w50, 동시 30마리)에도 초당 약
-       * 6건으로 `enemyDamaged`보다 두 자릿수 적다 — sim 쪽 스로틀이 필요 없는 이유다.
-       */
-      type: 'bountyChunk';
-      enemyId: number;
-      defId: EnemyId;
-      x: number;
-      z: number;
-      /** 이번에 들어온 골드 (정수, ≥1) */
-      gold: number;
-      /** 지금까지 뗀 몫 / 전체 몫 — 마지막 몫일수록 크게 그리는 연출 강도에 쓴다 */
-      chunk: number;
-      chunks: number;
     }
   | { type: 'statusApplied'; enemyId: number; kind: StatusKind }
   | { type: 'baseDamaged'; amount: number; hpLeft: number }
