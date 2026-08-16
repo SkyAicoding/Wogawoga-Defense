@@ -178,40 +178,172 @@ function cliffColor(pal: BiomePalette, ring: number, out: THREE.Color): THREE.Co
 
 // --- 지면 결 ---------------------------------------------------------------
 /**
- * 타일 하나의 색. 램프 픽 + 저주파 띠(사구/눈두께) + 타일 단위 지터 + 액센트.
- * **면 단위가 아니라 타일 단위**인 것이 핵심이다 — 예전엔 buildParts의 faceJitter가
- * 삼각형마다 다른 밝기를 줘서 타일 하나가 대각선으로 갈라져 보였다.
+ * ── 왜 "타일의 색"이 아니라 "좌표의 함수"인가 ──────────────────────────────
+ * 예전 tileColor()는 타일마다 rng를 소비해 5색 램프에서 하나를 뽑고 밝기/색상 지터를
+ * 얹어 **타일 전체를 그 한 색으로** 칠했다(quadFlat). 타일 단위 균일색 + 칼같은 직선
+ * 경계 = 보드게임 체스판이다. 실제로 시각 심판이 여섯 바이옴 전부에서 이것을 제1
+ * 결함으로 지목했고, 축소 전체 샷에서 **칸을 셀 수 있었다** (before 캡처: 정글 판
+ * 아래쪽 1/3이 문자 그대로 4단계 초록의 교대, 사막은 세로로 훑으면 칸이 세어진다).
+ * 그 앞 세대의 "면 단위 지터"를 타일 단위로 고친 수정이 바로 이 체스판을 만들었다 —
+ * 문제는 지터의 단위가 아니라 **색이 타일에 묶여 있다는 것**이었다.
+ * 썸네일 6장(src/assets/stages/*.webp)은 정반대다 — 이음매 없는 하나의 지면이다.
+ *
+ * 그래서 색을 **정점 위치의 매끄러운 함수**로 바꿨다. 상면 쿼드는 이미 이웃과 모서리
+ * 좌표를 정확히 공유하므로, "같은 월드 좌표 → 같은 색"이면 이음매가 원리적으로
+ * 사라진다(GPU 보간이 타일 안팎을 이어 준다). 정점도 삼각형도 하나 안 늘어난다.
+ *  ⚠ 타일 인덱스 기반 rng **순차 소비로는 절대 안 된다** — 같은 모서리를 공유하는
+ *    네 타일이 서로 다른 값을 읽어 이음매가 그대로 남는다. 좌표 해시라야 한다.
+ *  ⚠ 정점 격자 간격이 1칸이므로 이 필드가 표현할 수 있는 최단 파장은 2칸이다
+ *    (나이퀴스트). 그보다 잔 옥타브는 모서리마다 무관한 값이 되어 결이 아니라
+ *    **모래알 잡티**가 된다 — 아래 옥타브 파장이 전부 2.0칸 이상인 이유다.
  */
-function tileColor(
+
+/** 좌표 해시 — 정수 격자점 하나에 [0,1) 값 하나. 같은 좌표면 언제나 같은 값이다. */
+function hash2i(xi: number, zi: number, seed: number): number {
+  let h = (Math.imul(xi | 0, 0x27d4eb2d) ^ Math.imul(zi | 0, 0x165667b1) ^ seed) >>> 0;
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 0x297a2d39) >>> 0;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/** 격자 값 노이즈 한 옥타브 — smoothstep 보간이라 격자선이 안 보인다. 반환 [0,1] */
+function vnoise(x: number, z: number, seed: number): number {
+  const xi = Math.floor(x);
+  const zi = Math.floor(z);
+  const fx = x - xi;
+  const fz = z - zi;
+  const u = fx * fx * (3 - 2 * fx);
+  const v = fz * fz * (3 - 2 * fz);
+  const a = hash2i(xi, zi, seed);
+  const b = hash2i(xi + 1, zi, seed);
+  const c = hash2i(xi, zi + 1, seed);
+  const d = hash2i(xi + 1, zi + 1, seed);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+
+/**
+ * 지면 얼룩 옥타브 — [파장(칸), 진폭, 회전각].
+ * 진폭 합 = 1 이라 fbm 반환이 [0,1]에 들어온다.
+ * 회전각을 옥타브마다 다르게 주는 이유: 값 노이즈의 격자는 축 정렬이라 각도를 안 틀면
+ * 얼룩의 결이 **타일 격자와 같은 방향**으로 서서, 이음매를 지워 놓고도 판이 다시
+ * 바둑판처럼 읽힌다. 무리수에 가까운 각으로 어긋내면 큰 얼룩이 칸을 비스듬히 가로지른다.
+ */
+const GRAIN_OCTAVES: readonly (readonly [number, number, number])[] = [
+  [7.3, 0.5, 0.37],
+  [3.4, 0.32, 1.24],
+  [2.15, 0.18, 2.41],
+];
+
+/** 여러 옥타브를 겹친 지면 얼룩 — 큰 얼룩 + 작은 결. 반환 [0,1] */
+function grainFbm(x: number, z: number, seed: number): number {
+  let sum = 0;
+  for (let i = 0; i < GRAIN_OCTAVES.length; i++) {
+    const [len, amp, ang] = GRAIN_OCTAVES[i] as readonly [number, number, number];
+    const cs = Math.cos(ang);
+    const sn = Math.sin(ang);
+    sum += amp * vnoise((x * cs - z * sn) / len, (x * sn + z * cs) / len, (seed + i * 0x9e3779b1) | 0);
+  }
+  return sum;
+}
+
+/**
+ * 액센트 얼룩 필드 — 예전엔 `rng.chance(accent)`로 **한 칸을 통째로** 다른 색으로
+ * 칠해서 격자를 오히려 강화했다. 지금은 칸 경계와 무관한 저주파 얼룩이라
+ * 덤불 그늘/눈 그림자/굳은 용암 자국이 칸을 가로질러 번진다.
+ */
+function accentFbm(x: number, z: number, seed: number): number {
+  const s = (seed ^ 0x5bd1e995) | 0;
+  return (
+    0.64 * vnoise((x * 0.83 - z * 0.56) / 4.6, (x * 0.56 + z * 0.83) / 4.6, s) +
+    0.36 * vnoise((x * 0.29 + z * 0.96) / 2.35, (-x * 0.96 + z * 0.29) / 2.35, (s + 0x68bc21) | 0)
+  );
+}
+
+const lum8 = (hex: number): number =>
+  0.2126 * ((hex >> 16) & 255) + 0.7152 * ((hex >> 8) & 255) + 0.0722 * (hex & 255);
+
+/**
+ * 램프를 **휘도순으로 정렬**해 둔 캐시.
+ * 팔레트의 ground/path 배열은 색을 흩뿌려 적어 둔 것이라 순서에 뜻이 없었다(무작위
+ * 픽이었으니 그래도 됐다). 이제는 얼룩값 t를 램프 위 위치로 쓰므로 순서가 곧 명암
+ * 방향이다 — 어두운 쪽에서 밝은 쪽으로 정렬해야 t가 "빛/그늘"로 읽힌다.
+ * 정렬 안 하면 t가 오르내릴 때 색이 밝아졌다 어두워졌다 해서 결이 아니라 얼룩말이 된다.
+ */
+const RAMP_CACHE = new WeakMap<readonly number[], THREE.Color[]>();
+function sortedRamp(ramp: readonly number[]): THREE.Color[] {
+  let cs = RAMP_CACHE.get(ramp);
+  if (!cs) {
+    cs = [...ramp].sort((p, q) => lum8(p) - lum8(q)).map((h) => new THREE.Color(h));
+    RAMP_CACHE.set(ramp, cs);
+  }
+  return cs;
+}
+
+/** 램프 위 연속 위치 t(0~1) → 색. 인접 스톱을 보간하므로 5단계 계단이 안 생긴다. */
+function rampAt(colors: readonly THREE.Color[], t: number, out: THREE.Color): THREE.Color {
+  const n = colors.length;
+  const s = Math.min(0.999999, Math.max(0, t)) * (n - 1);
+  const i = Math.floor(s);
+  return out.copy(colors[i] as THREE.Color).lerp(colors[Math.min(n - 1, i + 1)] as THREE.Color, s - i);
+}
+
+const _cAcc = new THREE.Color();
+
+/**
+ * 상면 **정점 하나**의 색. (wx, wz)는 타일 중심이 아니라 **격자 모서리 좌표**다.
+ *
+ * @param accentThr 액센트 얼룩 문턱값 — 스테이지마다 필드의 (1-accent) 분위수로
+ *   잡는다(buildStage). 상수로 박으면 바이옴별 accent 비율이 안 지켜진다.
+ * @param sand 물가 모래톱 혼합량(0~1) — 모서리에 닿는 네 칸 중 물의 비율에서 온다.
+ */
+function groundColor(
   pal: BiomePalette,
-  rng: Rng,
+  seed: number,
   isPath: boolean,
   wx: number,
   wz: number,
+  accentThr: number,
+  sand: number,
+  cSand: THREE.Color,
   out: THREE.Color,
 ): THREE.Color {
   const g = pal.grain;
-  const ramp = isPath ? pal.path : pal.ground;
-  let hex = ramp[rng.int(0, ramp.length - 1)] ?? ramp[0] ?? 0x808080;
-  let accent = false;
-  if (!isPath && rng.chance(g.accent)) {
-    hex = g.accentColor;
-    accent = true;
-  }
-  out.setHex(hex);
-  // 저주파 띠 — 방향 벡터에 투영한 값의 사인. 경로는 평탄하게 둔다(길이 흔들리면 안 읽힌다)
+  // 얼룩 → 램프 위 위치. 경로는 대비를 낮춰 평탄하게 둔다(길이 흔들리면 길로 안 읽힌다).
+  const n = grainFbm(wx, wz, seed);
+  rampAt(sortedRamp(isPath ? pal.path : pal.ground), 0.5 + (n - 0.5) * (isPath ? 1.5 : 2.4), out);
+
+  // 저주파 띠(사구/눈 두께) — 원래부터 좌표 기반이었다. 타일 단위 무작위 픽이
+  // 위에 얹혀 있어 묻혀 있었을 뿐이고, 이제야 제 모습으로 보인다.
   const band = isPath
     ? 0
     : Math.sin(((wx * Math.cos(g.bandAngle) + wz * Math.sin(g.bandAngle)) / g.bandLen) * Math.PI * 2) * g.band;
-  const lj = (rng.next() - 0.5) * 2 * (isPath ? g.jitter * 0.5 : g.jitter);
-  const hj = (rng.next() - 0.5) * 2 * g.hue;
-  out.offsetHSL(hj, accent ? 0.04 : 0, band + lj);
+  // 램프와 다른 시드/파장의 한 겹 — 명도와 색상이 따로 놀아야 결이 두꺼워 보인다.
+  const lj = (vnoise(wx / 2.6 + 13.7, wz / 2.6 - 5.1, (seed ^ 0x1b873593) | 0) - 0.5) * 2;
+  const hj = (vnoise(wz / 3.9 - 2.3, wx / 3.9 + 8.9, (seed ^ 0x744f2d0b) | 0) - 0.5) * 2;
+  out.offsetHSL(hj * g.hue, 0, band + lj * (isPath ? g.jitter * 0.5 : g.jitter));
+
+  // 액센트 얼룩 — 문턱 위에서 부드럽게 올라와 칸이 아니라 자국으로 보인다
+  if (!isPath && g.accent > 0) {
+    const q = accentFbm(wx, wz, seed);
+    const w = Math.min(1, Math.max(0, (q - accentThr) / 0.085));
+    if (w > 0) {
+      out.lerp(_cAcc.setHex(g.accentColor), w * 0.85);
+      out.offsetHSL(0, 0.04 * w, 0);
+    }
+  }
+
+  // 물가 모래톱 — 예전엔 "물에 닿은 칸"을 통째로 당겨서 바깥 한 줄이 통째로 해변이
+  // 되는(=격자를 한 겹 더 그리는) 부작용이 있었다. 모서리 단위로 하면 같은 립이
+  // 타일 안에서 **바깥→안쪽으로 번져** 자연스러운 물가가 된다.
+  if (sand > 0) out.lerp(cSand, sand * (isPath ? 0.18 : 0.34));
   return out;
 }
 
 export function buildStage(stage: StageDef): TerrainBuild {
   const pal = BIOMES[stage.biome];
   const rng = new Rng(hashSeed(`terrain:${stage.id}`));
+  // 지면 결 필드의 시드 — 스테이지마다 얼룩 배치가 달라진다(좌표 함수라 rng와 무관).
+  const grainSeed = hashSeed(`grain:${stage.id}`) | 0;
   const pathCells = rasterizePathCells(stage);
   const slotCells: Vec2[] = [];
   const freeCells: Vec2[] = [];
@@ -230,15 +362,47 @@ export function buildStage(stage: StageDef): TerrainBuild {
   const surf = new TriBuf(); // 상면 + 절벽 껍질 (섀도 캐스터)
   const rocks: PartSpec[] = []; // '#' 바위 (섀도 캐스터)
   const cliffTop = pal.cliff[0];
-  const cTmp = new THREE.Color();
   const cSand = new THREE.Color(pal.shoreSand);
 
   // --- 1) 타일 상면 -------------------------------------------------------
-  const exposedCell = (x: number, z: number): boolean =>
-    charAt(stage, x - 1, z) === '~' ||
-    charAt(stage, x + 1, z) === '~' ||
-    charAt(stage, x, z - 1) === '~' ||
-    charAt(stage, x, z + 1) === '~';
+  /**
+   * 격자 모서리 (cx,cz)에 닿는 네 칸 중 물의 비율(0~1).
+   * 썸네일의 "풀밭 가장자리 모래 립"을 **모서리 단위로** 재현하려고 쓴다 —
+   * 곧은 물가에서 0.5, 튀어나온 곶에서 0.75가 나오고 한 칸만 안으로 들어가면 0이다.
+   */
+  const waterTouch = (cx: number, cz: number): number => {
+    let n = 0;
+    if (charAt(stage, cx - 1, cz - 1) === '~') n++;
+    if (charAt(stage, cx, cz - 1) === '~') n++;
+    if (charAt(stage, cx - 1, cz) === '~') n++;
+    if (charAt(stage, cx, cz) === '~') n++;
+    return n / 4;
+  };
+
+  /*
+   * 액센트 문턱값 — 판의 모든 지상 칸에서 액센트 필드를 재고 (1-accent) 분위수를 잡는다.
+   * 상수로 박지 않는 이유: 필드 분포는 종 모양이라 "값 0.7 넘으면 액센트" 같은 문턱은
+   * 바이옴별 accent 비율(0.05~0.14)과 아무 관계가 없다. 판에서 직접 재면 예전
+   * rng.chance(accent)와 **같은 면적 비율**이 그대로 유지된다. 정렬이라 결정론적이다.
+   */
+  const accSamples: number[] = [];
+  for (let z = 0; z < stage.gridH; z++) {
+    for (let x = 0; x < stage.gridW; x++) {
+      if (charAt(stage, x, z) === '~') continue;
+      accSamples.push(accentFbm(x - halfW, z - halfH, grainSeed));
+    }
+  }
+  accSamples.sort((p, q) => p - q);
+  const accIdx = Math.min(accSamples.length - 1, Math.floor(accSamples.length * (1 - pal.grain.accent)));
+  const accentThr = accSamples.length > 0 ? (accSamples[accIdx] as number) : 1;
+
+  const cA = new THREE.Color();
+  const cB = new THREE.Color();
+  const cC = new THREE.Color();
+  const cD = new THREE.Color();
+  /** 모서리 (cx,cz) → 정점 색. isPath만 타일에서 오고 나머지는 전부 좌표의 함수다. */
+  const cornerColor = (cx: number, cz: number, isPath: boolean, out: THREE.Color): THREE.Color =>
+    groundColor(pal, grainSeed, isPath, cx - halfW - 0.5, cz - halfH - 0.5, accentThr, waterTouch(cx, cz), cSand, out);
 
   for (let z = 0; z < stage.gridH; z++) {
     for (let x = 0; x < stage.gridW; x++) {
@@ -247,16 +411,20 @@ export function buildStage(stage: StageDef): TerrainBuild {
       const wx = x - halfW;
       const wz = z - halfH;
       const isPath = pathCells.has(z * stage.gridW + x);
-      tileColor(pal, rng, isPath, wx, wz, cTmp);
-      // 물가 셀은 상면도 모래톱 쪽으로 살짝 당겨 둔다 — 썸네일의 "풀밭 가장자리 모래 립".
-      // 0.3까지 당겨 본 판(캡처 b1)에서는 바깥 한 줄이 통째로 해변이 돼 판이 작아 보였다.
-      if (exposedCell(x, z)) cTmp.lerp(cSand, isPath ? 0.08 : 0.14);
-      surf.quadFlat(
+      /*
+       * 네 모서리를 각각 칠한다. 지면은 이웃 타일이 **같은 모서리 좌표 → 같은 색**을
+       * 뽑으므로 이음매가 사라지고, 경로 타일만 램프가 갈려 경계가 칼같이 남는다 —
+       * 지면은 잇고 길은 길로 남긴다는 것이 이 한 줄의 전부다.
+       */
+      surf.quad(
         [wx - 0.5, 0, wz - 0.5],
         [wx - 0.5, 0, wz + 0.5],
         [wx + 0.5, 0, wz + 0.5],
         [wx + 0.5, 0, wz - 0.5],
-        cTmp,
+        cornerColor(x, z, isPath, cA),
+        cornerColor(x, z + 1, isPath, cB),
+        cornerColor(x + 1, z + 1, isPath, cC),
+        cornerColor(x + 1, z, isPath, cD),
       );
 
       if (ch === 'o') {

@@ -50,6 +50,13 @@ function meshes(group: THREE.Object3D): THREE.Mesh[] {
  *   s6 4,144→1,050 · 70→368 · 1,152→820 · 9,510→3,288
  * (개편 전 지형은 셀마다 박스를 쌓았고 물은 24×24 단색 평면이었다. 브라우저
  *  renderInfo A/B와 이 표의 차이가 스테이지당 12~25삼각형 안에서 일치한다.)
+ *
+ * ⚠ 지면색을 좌표 필드로 바꾼 뒤(체스판 개편) tile 값이 ±40 흔들린다:
+ *   s1 806→846 · s2 784→784 · s3 988→968 · s4 816→816 · s5 924→944 · s6 1050→1010.
+ *   상면 지오메트리는 **한 삼각형도 안 변했다** — 쿼드는 그대로 쿼드고 색만 정점별로
+ *   갈렸다. 움직인 건 '#' 바위 개수뿐이다: tileColor가 타일마다 rng를 3~4번 소비하던
+ *   것이 없어지면서 뒤따르는 rng.int(1,2)가 다른 눈을 뽑는다(이코 하나 = 20삼각형이라
+ *   델타가 전부 20의 배수인 이유). 여섯 판 합은 0이고 상한은 그대로 유효하다.
  */
 const TRI_CAP: Record<number, { tile: number; deco: number; water: number }> = {
   1: { tile: 1010, deco: 345, water: 825 },
@@ -135,16 +142,23 @@ describe('물 평면', () => {
 });
 
 describe('결정론과 게임플레이 불변', () => {
-  it('같은 스테이지는 매번 같은 지오메트리를 만든다', () => {
+  it('같은 스테이지는 매번 같은 지오메트리와 같은 색을 만든다', () => {
+    /*
+     * 색까지 재는 이유: 지면색이 rng 순차 소비에서 **좌표 필드**로 바뀌었다(체스판 개편).
+     * 좌표 함수는 원래 결정론적이지만, 필드 시드를 실수로 Math.random이나 빌드 시각에
+     * 묶으면 위치는 그대로인 채 그림만 매번 달라진다 — 위치만 재면 그걸 못 잡는다.
+     */
     const stage = STAGES[2] as StageDef;
     const a = buildStage(stage);
     const b = buildStage(stage);
-    const pa = meshes(a.group)[0]!.geometry.getAttribute('position').array as Float32Array;
-    const pb = meshes(b.group)[0]!.geometry.getAttribute('position').array as Float32Array;
-    expect(pa.length).toBe(pb.length);
-    let diff = 0;
-    for (let i = 0; i < pa.length; i++) if (pa[i] !== pb[i]) diff++;
-    expect(diff, '위치가 다른 성분 수').toBe(0);
+    for (const attr of ['position', 'color'] as const) {
+      const pa = meshes(a.group)[0]!.geometry.getAttribute(attr).array as Float32Array;
+      const pb = meshes(b.group)[0]!.geometry.getAttribute(attr).array as Float32Array;
+      expect(pa.length).toBe(pb.length);
+      let diff = 0;
+      for (let i = 0; i < pa.length; i++) if (pa[i] !== pb[i]) diff++;
+      expect(diff, `${attr}가 다른 성분 수`).toBe(0);
+    }
     a.dispose();
     b.dispose();
   });
@@ -184,6 +198,107 @@ describe('결정론과 게임플레이 불변', () => {
     }
     expect(topVerts).toBeGreaterThan(100);
     t.dispose();
+  });
+});
+
+describe('지면색 = 이음매 없는 좌표 필드', () => {
+  /*
+   * ── 이 describe가 잠그는 계약 ──────────────────────────────────────────
+   * 지면색이 **타일 단위 무작위 픽**이던 시절, 판은 여섯 바이옴 전부에서 보드게임
+   * 체스판으로 읽혔다(축소 전체 샷에서 칸을 셀 수 있었다). 고친 방식은 색을
+   * "정점 위치의 매끄러운 함수"로 바꾼 것이고, 그게 성립하려면 딱 두 가지가 참이어야 한다.
+   *  ① 같은 월드 좌표 → 같은 색. 이웃 타일이 모서리를 공유하므로 이것 하나면 이음매가
+   *    원리적으로 사라진다. 타일 인덱스 rng를 되살리면 여기서 바로 깨진다.
+   *  ② 그렇다고 판 전체가 한 색이면 안 된다 — ①은 "전부 회색"으로도 통과한다.
+   * 여기서 재는 것은 상면 정점뿐이다. 절벽 껍질 최상단(링0)도 y=0에 있지만 그건
+   * 모래톱 색이라 물가 모서리에서 일부러 다르다 — 그래서 물에 닿는 모서리는 뺀다.
+   */
+  const key = (x: number, z: number): string => `${Math.round(x * 2)},${Math.round(z * 2)}`;
+
+  /** y=0 정점을 (x,z)별로 모아 색 목록을 만든다 */
+  function topCorners(stage: StageDef): Map<string, { x: number; z: number; cols: number[][] }> {
+    const t = buildStage(stage);
+    const geo = meshes(t.group)[0]!.geometry;
+    const pos = geo.getAttribute('position');
+    const col = geo.getAttribute('color');
+    const out = new Map<string, { x: number; z: number; cols: number[][] }>();
+    for (let i = 0; i < pos.count; i++) {
+      if (Math.abs(pos.getY(i)) > 1e-6) continue;
+      const x = pos.getX(i);
+      const z = pos.getZ(i);
+      // 상면 모서리는 반드시 0.5 격자 위에 있다 — '#' 바위 정점이 섞여 드는 것을 막는다
+      if (Math.abs(x * 2 - Math.round(x * 2)) > 1e-4 || Math.abs(z * 2 - Math.round(z * 2)) > 1e-4) continue;
+      const k = key(x, z);
+      let e = out.get(k);
+      if (!e) {
+        e = { x, z, cols: [] };
+        out.set(k, e);
+      }
+      e.cols.push([col.getX(i), col.getY(i), col.getZ(i)]);
+    }
+    t.dispose();
+    return out;
+  }
+
+  it('한 모서리를 공유하는 지면 타일들은 그 모서리에서 정확히 같은 색이다', () => {
+    for (const stage of STAGES) {
+      const halfW = (stage.gridW - 1) / 2;
+      const halfH = (stage.gridH - 1) / 2;
+      const pathCells = rasterizePathCells(stage);
+      let checked = 0;
+      for (const { x, z, cols } of topCorners(stage).values()) {
+        // 모서리에 닿는 네 칸 (격자 모서리 좌표 → 셀 인덱스)
+        const cx = Math.round(x + halfW + 0.5);
+        const cz = Math.round(z + halfH + 0.5);
+        const near = [
+          [cx - 1, cz - 1],
+          [cx, cz - 1],
+          [cx - 1, cz],
+          [cx, cz],
+        ] as const;
+        // 물에 닿으면 절벽 링0(모래톱색)이 같은 자리에 있으므로 계약 밖이다
+        if (near.some(([ax, az]) => charAt(stage, ax, az) === '~')) continue;
+        // 경로 경계도 계약 밖 — 길은 **일부러** 칼같이 갈려야 길로 읽힌다
+        const paths = near.map(([ax, az]) => pathCells.has(az * stage.gridW + ax));
+        if (paths.some((p) => p !== paths[0])) continue;
+        checked++;
+        const [r, g, b] = cols[0] as number[];
+        for (const c of cols) {
+          expect(c[0], `s${stage.id} (${x},${z}) R`).toBeCloseTo(r as number, 6);
+          expect(c[1], `s${stage.id} (${x},${z}) G`).toBeCloseTo(g as number, 6);
+          expect(c[2], `s${stage.id} (${x},${z}) B`).toBeCloseTo(b as number, 6);
+        }
+      }
+      // 검사할 게 실제로 있었는지 — 필터가 다 걷어내면 위 루프는 공허하게 통과한다
+      expect(checked, `s${stage.id} 검사한 내부 모서리 수`).toBeGreaterThan(40);
+    }
+  });
+
+  it('그러면서 판이 단색이 아니다 — 얼룩이 램프를 실제로 훑는다', () => {
+    /*
+     * ①만 만족시키는 가장 쉬운 구현은 "지면 전체를 ground[0]으로 칠하기"다.
+     * 그건 체스판은 아니지만 플라스틱 판이다. 그래서 명도 폭과 서로 다른 색의 가짓수를
+     * 같이 잠근다. 실측(개편 직후, 상면 모서리 192~228개 기준):
+     *   s1 초원 uniq 141 · 폭 0.300   s2 정글 141 · 0.455   s3 사막 157 · 0.474
+     *   s4 설원 148 · 0.506           s5 늪   147 · 0.135   s6 화산 158 · 0.208
+     * 아래 하한은 가장 좁은 판(늪)에 여유를 준 값이다. 늪이 제일 좁은 건 의도다 —
+     * 채도 낮은 습지라 램프 자체가 좁다.
+     */
+    for (const stage of STAGES) {
+      const lums: number[] = [];
+      const uniq = new Set<string>();
+      for (const { cols } of topCorners(stage).values()) {
+        const c = cols[0] as number[];
+        lums.push(0.2126 * (c[0] as number) + 0.7152 * (c[1] as number) + 0.0722 * (c[2] as number));
+        uniq.add(cols[0]!.map((v) => v.toFixed(4)).join(','));
+      }
+      lums.sort((p, q) => p - q);
+      // 양 끝 5%는 버린다 — 액센트 얼룩 한 점이 통과시켜 주면 안 된다
+      const lo = lums[Math.floor(lums.length * 0.05)] as number;
+      const hi = lums[Math.floor(lums.length * 0.95)] as number;
+      expect(hi - lo, `s${stage.id} 지면 명도 폭 (5~95%)`).toBeGreaterThan(0.09);
+      expect(uniq.size, `s${stage.id} 고유 지면색 수`).toBeGreaterThan(110);
+    }
   });
 });
 

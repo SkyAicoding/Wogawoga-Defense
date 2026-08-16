@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import {
   CELL_SOFT_BUDGET,
   CELL_TRI_BUDGET,
+  FLAT_QUAD_MIN_ASPECT,
   PROP_ELEMENTS,
   PROP_KITS,
   PROTO_TRI_BUDGET,
@@ -24,6 +25,7 @@ import {
   elementHeight,
   elementTriCount,
 } from '@/render/meshlib/props';
+import type { Element } from '@/render/meshlib/props';
 import { rasterizePathCells, sceneryCells } from '@/data/grid';
 import { STAGES } from '@/data/stages';
 import type { StageDef, Vec2 } from '@/data/types';
@@ -160,9 +162,182 @@ describe('층 요소 원가표', () => {
     console.log('크기 계층:\n  ' + rows.join('\n  '));
   });
 
+  /**
+   * 편성표에 **익명 인라인 요소**를 두지 않는다.
+   *
+   * 개정 전 설원·늪 편성표에는 `{ flats: [...] }` 가 그대로 박혀 있었고, 그래서 그
+   * 판들이 아래 기하 규칙 점검(PROP_ELEMENTS 순회)을 통째로 빠져나갔다 — 설원의
+   * 4각 0.24×0.20 하늘색 판 두 장이 흰 눈밭 위에서 가장 눈에 띄는 스티커였는데도
+   * 테스트가 초록불이었다. 이름을 강제하는 것이 그 구멍을 막는 유일한 방법이다.
+   */
+  it('편성표의 모든 요소는 PROP_ELEMENTS 에 이름으로 등록돼 있다', () => {
+    /**
+     * 형태 서명 — **변 수와 종횡비**만 본다.
+     *
+     * 편성표에는 같은 함수를 인자만 바꿔 부른 것이 많고(bushRound(초록A)/
+     * bushRound(초록B), groundPatch(색, 폭) …) 그건 정상이다. 여기서 막으려는 것은
+     * 어느 이름 있는 함수에서도 나오지 않은 **손으로 쓴 판 뭉치**다.
+     * 위 기하 규칙이 판별하는 것이 정확히 변 수와 종횡비이므로, 서명에서 색과
+     * 절대 크기를 빼면 "규칙 관점에서 같은 형태"가 정확히 한 부류가 된다.
+     */
+    const ratio = (s?: readonly number[] | number): string => {
+      if (typeof s === 'number' || s === undefined) return '1';
+      const z = s[s.length - 1] as number;
+      // 마지막 성분으로 나눠 절대 크기를 지운다 (판은 x:z, 입체는 x:y:z)
+      return s.map((v) => (v / z).toFixed(3)).join(':');
+    };
+    const sig = (el: Element): string =>
+      JSON.stringify([
+        (el.solids ?? []).map((s) => [s.kind, s.seg ?? 6, ratio(s.scale)]),
+        (el.flats ?? []).map((f) => [f.sides ?? 4, ratio(f.scale)]),
+      ]);
+    const known = new Set(Object.values(PROP_ELEMENTS).map(sig));
+    for (const [biome, kit] of Object.entries(PROP_KITS)) {
+      const lists: [string, Element[]][] = [
+        ['hero', kit.hero],
+        ['landmark', kit.landmark],
+        ['companion', kit.companion],
+        ['mid', kit.mid],
+        ['ground', kit.ground],
+      ];
+      for (const [layer, list] of lists) {
+        for (const el of list) {
+          expect(known.has(sig(el)), `${biome}.${layer} 에 이름 없는 요소가 있다 — 기하 규칙 점검이 새어 나간다`).toBe(true);
+        }
+      }
+    }
+  });
+
+  /**
+   * 4각 판은 **획**일 때만 허용한다 (종횡비 ≥ FLAT_QUAD_MIN_ASPECT).
+   *
+   * 심판 확대 캡처에서 소품의 꽃이 마젠타·흰색·노랑·빨강 정사각형 색 견본으로
+   * 읽혔다 — 초원 덤불(wildflowerBunch 4각 0.11 넷)·정글 덤불(flowerBush)·사막
+   * 선인장(barrelCactus) 세 바이옴 동일. 4각형은 화면상 3~8px 에서 안티에일리어싱을
+   * 거쳐도 직각이 살아남는 유일한 다각형이라 "잘라 붙인 색종이"가 지워지지 않는다.
+   *
+   * 바닥 결 레이어는 4각을 전면 금지했지만(grounddetail.test.ts) 소품은 그럴 수
+   * 없다 — 야자 잎·덩굴·용암 줄기가 전부 4각 2 tri 이고, 그것들은 길쭉해서 도형이
+   * 아니라 한 획으로 읽힌다. 그래서 여기서는 **종횡비**로 가른다.
+   */
+  it('4각 판은 종횡비가 충분하다 — 정사각에 가까운 4각은 색종이 조각이 된다', () => {
+    const rows: string[] = [];
+    for (const [name, el] of Object.entries(PROP_ELEMENTS)) {
+      for (const f of el.flats ?? []) {
+        const n = f.sides ?? 4;
+        expect(n, `${name}: 판의 변이 3개 미만이다`).toBeGreaterThanOrEqual(3);
+        if (n !== 4) continue;
+        const sx = f.scale?.[0] ?? 1;
+        const sz = f.scale?.[1] ?? 1;
+        const asp = Math.max(sx, sz) / Math.min(sx, sz);
+        rows.push(`${name} ${asp.toFixed(2)}`);
+        expect(
+          asp,
+          `${name}: 4각 판 ${sx}×${sz} (종횡비 ${asp.toFixed(2)}) — 이 크기에서 정사각형은 스티커다. 6각으로 올리거나 더 길게 늘여라`,
+        ).toBeGreaterThanOrEqual(FLAT_QUAD_MIN_ASPECT);
+      }
+    }
+    expect(rows.length, '4각 판이 하나도 없다 — 규칙이 대상을 잃었다').toBeGreaterThan(10);
+  });
+
+  /**
+   * 꽃송이는 **6각**이다. 5각도 이 크기에서는 각이 남는다 — 사막 선인장의 5각
+   * 0.13/0.16 꽃이 실제로 "빨강·흰 정사각형"으로 지적됐다.
+   * 색으로 판별한다: 꽃 색(P.flower*)을 쓴 판은 반드시 6각 이상이어야 한다.
+   */
+  it('꽃 색을 쓴 판은 6각 이상이다', () => {
+    const FLOWER = new Set([0xf6f2e2, 0xf2cf4a, 0xe07a9c, 0xd8412e]);
+    let seen = 0;
+    for (const [name, el] of Object.entries(PROP_ELEMENTS)) {
+      for (const f of el.flats ?? []) {
+        if (!FLOWER.has(f.color)) continue;
+        seen++;
+        expect(f.sides ?? 4, `${name}: 꽃송이가 ${f.sides ?? 4}각이다 — 6각부터 이 크기에서 원으로 뭉개진다`).toBeGreaterThanOrEqual(6);
+      }
+    }
+    expect(seen, '꽃 판을 하나도 못 찾았다').toBeGreaterThan(4);
+  });
+
   it('셀 채우기 예산은 셀 상한 안에 있다 (구조적으로 초과 불가)', () => {
     expect(CELL_SOFT_BUDGET).toBeLessThan(CELL_TRI_BUDGET);
     expect(CELL_SOFT_BUDGET).toBeGreaterThan(CELL_TRI_BUDGET * 0.9);
+  });
+});
+
+describe('크기 계층', () => {
+  /**
+   * 랜드마크 계약 — hero 최댓값과 **사이에 틈**이 있어야 한다.
+   * 랜드마크가 hero 큰 계층과 겹치면 그건 그냥 "조금 더 큰 나무"이고, 심판이
+   * "판을 지배하는 큰 실루엣이 0개"라고 한 상태로 돌아간다.
+   */
+  it('바이옴마다 랜드마크가 있고 hero 최댓값보다 확실히 크다', () => {
+    const rows: string[] = [];
+    for (const [biome, kit] of Object.entries(PROP_KITS)) {
+      expect(kit.landmark.length, `${biome} 랜드마크 없음`).toBeGreaterThanOrEqual(1);
+      const heroMax = Math.max(...kit.hero.map(elementHeight)) * kit.heroScale[1];
+      for (const el of kit.landmark) {
+        const h = elementHeight(el);
+        expect(elementTriCount(el), `${biome} 랜드마크가 원가 상한을 넘었다`).toBeLessThanOrEqual(PROTO_TRI_BUDGET);
+        // 랜드마크 최소 배율 0.92 를 곱해도 hero 최댓값보다 15% 이상 커야 한다
+        expect(h * 0.92, `${biome} 랜드마크(${h.toFixed(2)})가 hero 최댓값(${heroMax.toFixed(2)})과 겹친다`).toBeGreaterThan(
+          heroMax * 1.15,
+        );
+        rows.push(`${biome} 랜드마크 ${h.toFixed(2)} vs hero최대 ${heroMax.toFixed(2)} · ${elementTriCount(el)} tri`);
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.log('랜드마크:\n  ' + rows.join('\n  '));
+  });
+
+  /**
+   * **실측**: 실제로 배치된 셀의 높이 분포. 여기가 이 개정의 핵심 계약이다.
+   *
+   * 개정 전에도 heroScale 봉투는 넓었고(±30%) 2.0급 원형도 있었는데 화면에서는
+   * 계층이 안 보였다. 실측 히스토그램이 이유를 말해 줬다 — 초원의 분포가
+   *   0.3+ 22% · 0.6+ 13% · 0.9+ 15% · 1.2+ 17% · 1.5+ 14% · 1.8+ 8% · 2.1+ 3%
+   * 로 **완전히 평평했다**. 배율 계층과 원형 선택이 독립이라 두 분포를 곱하는 순간
+   * 봉투의 틈이 메워졌기 때문이다. 그래서 이 테스트가 잠그는 것은 "봉투가 넓다"가
+   * 아니라 **분포에 봉우리와 골이 있다**이다:
+   *   · 랜드마크급(2.5+)이 스테이지마다 있고, 그러나 드물다
+   *   · 큰 것(1.4+)이 4분의 1은 된다
+   *   · 셀 전체가 낮은 칸(0.9 미만)도 6분의 1은 된다 — 이게 있어야 큰 것이 커 보인다
+   */
+  it('배치 실측 — 랜드마크는 드물고, 큰 것과 낮은 것이 둘 다 있다', () => {
+    /** 그 셀에 y > t 인 정점이 있었는지 (셀을 지우기 전후의 개수 차로 잰다) */
+    const countAbove = (mesh: THREE.Mesh, t: number): number => {
+      const p = mesh.geometry.getAttribute('position');
+      if (!p) return 0;
+      let n = 0;
+      for (let i = 0; i < p.count; i++) if (p.getY(i) > t) n++;
+      return n;
+    };
+    const rows: string[] = [];
+    for (const stage of STAGES) {
+      const { list, cellToWorld } = sceneryOf(stage);
+      const props = buildProps(stage.biome, list, cellToWorld, stage.id);
+      const mesh = propsMeshOf(props.group);
+      const T = [0.9, 1.4, 2.5];
+      let prev = T.map((t) => countAbove(mesh, t));
+      const hit = [0, 0, 0];
+      for (const cell of list) {
+        props.removeCell(cell.x, cell.z);
+        const now = T.map((t) => countAbove(mesh, t));
+        for (let i = 0; i < T.length; i++) if ((now[i] as number) < (prev[i] as number)) hit[i] = (hit[i] as number) + 1;
+        prev = now;
+      }
+      props.dispose();
+      const n = list.length;
+      const [tall, big, landmark] = hit as [number, number, number];
+      rows.push(
+        `s${stage.id}(${stage.biome}) 셀 ${n} · 랜드마크급(2.5+) ${landmark} · 큰것(1.4+) ${big} · 낮은칸(0.9미만) ${n - tall}`,
+      );
+      expect(landmark, `s${stage.id}: 판을 지배하는 큰 실루엣이 없다`).toBeGreaterThanOrEqual(2);
+      expect(landmark / n, `s${stage.id}: 랜드마크가 흔하다 — 흔하면 그냥 새로운 균일함이다`).toBeLessThanOrEqual(0.2);
+      expect(big / n, `s${stage.id}: 큰 계층이 얇다`).toBeGreaterThanOrEqual(0.25);
+      expect((n - tall) / n, `s${stage.id}: 낮은 칸이 없다 — 대비가 없으면 큰 것도 커 보이지 않는다`).toBeGreaterThanOrEqual(0.15);
+    }
+    // eslint-disable-next-line no-console
+    console.log('배치 실측:\n  ' + rows.join('\n  '));
   });
 });
 
