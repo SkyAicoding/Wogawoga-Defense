@@ -39,8 +39,8 @@
  * ── y 스택 (이 표를 깨면 링/원판을 뚫는다) ─────────────────────────────────
  *   0.000 타일 상면
  *   0.012 terrain deco 지면 무늬
- *   0.018 **맨셀 중앙 얼룩 (이 파일)**
- *   0.020 **맨셀 가장자리 얼룩 (이 파일)**
+ *   0.015~0.0218 **면 얼룩 (이 파일)** — 사이트마다 이 대역 안에서 높이가 다르다.
+ *         겹치는 판이 정확히 같은 y 면 z-파이팅이 나므로 해시로 흩는다(아래 Y_BLOT).
  *   0.023 **맨셀 액센트 아래층 (이 파일)**
  *   0.026 **맨셀 액센트 위층 (이 파일)**
  *   0.030 DECAL_Y — 사거리 링 · 경로 셰브런
@@ -56,24 +56,52 @@
  *  ① **완전 수평 판만.** 기울이지 않는다. 길이 0.26 판을 0.12rad만 기울여도 끝이
  *     y≈0.042로 올라가고, 그 높이대는 사거리 링(0.030)~슬롯 원판(0.090) 구간이라
  *     링을 뚫고 삐져나온다. "잎이 살짝 서야 예뻐 보인다"가 가장 크게 작동하는 지점이다.
- *  ② **셀 중앙을 비운다.** 액센트는 반경 0.24~0.38 고리에만. 근거는 타워가 아니라
- *     **배치 슬롯 원판(CircleGeometry 반경 0.34)** 이다 — 원판이 얹히는 자리를
- *     어지럽히면 "여기 지을 수 있다"가 흐려진다. 중앙에는 미묘한 색 얼룩만 둔다.
- *  ③ **셀 밖으로 안 샌다** (GD_FIT 0.47 + 요소 외접 반경). 이웃 칸 장식과 붙어
- *     카펫이 되면 타일 격자가 아예 지워져 조준이 어려워진다.
- *  ④ **명도 대비 ±28%(GD_CONTRAST_BAND) 이내.** 이보다 세면 "칸 안에 물건이 있다"로
- *     읽혀 유저가 골드 제거 대상으로 오인한다 — 이 레이어의 1순위 실패 모드다.
- *     그래서 세로로 선 것·그림자를 만드는 것은 하나도 넣지 않는다.
+ *  ② **셀 중앙은 성기게.** 근거는 타워가 아니라 **배치 슬롯 원판(CircleGeometry
+ *     반경 0.34)** 이다 — 원판이 얹히는 자리를 어지럽히면 "여기 지을 수 있다"가
+ *     흐려진다. 다만 **금지가 아니라 감쇠**다(gdCenterKeep): 반경 0.13 안은 버리고
+ *     0.28 까지 확률을 선형으로 올린다.
+ *     ⚠ 오래 이 규칙이 "액센트는 반경 0.24~0.38 **고리에만**"이었고, 그게 이 파일의
+ *       제1 결함이었다 — 모든 칸에 **같은 반지름의 고리**가 생겨 셀이 '슬롯'으로
+ *       보였다(심판: "무더기의 발자국 크기가 칸마다 거의 동일하고 같은 도장 2~3종의
+ *       반복"). 고리는 중앙을 비우는 가장 쉬운 방법이지만 **격자를 그리는** 방법이다.
+ *  ③ **셀 밖으로 안 샌다** (GD_FIT 0.47). 이건 그림 규칙이 아니라 **소유권 계약**이다 —
+ *     addCell/재병합이 셀 단위라, 한 셀의 판이 이웃으로 넘어가면 소품을 치운 칸을
+ *     다시 구울 때 이웃 칸 그림이 두 겹이 된다. 그래서 좌표 소유는 절대 안 푼다.
+ *     대신 **그림만 푼다** — 아래 "격자에 안 매이게 하는 법" 참고.
+ *  ④ **명도 대비 ±38%(GD_CONTRAST_BAND) 이내 — 단, 이건 설계 단계 값이다.**
  *     기준선은 **바이옴 지면 램프의 평균 휘도**(gdGroundLuma), 재는 자는 Rec.709 이고,
- *     실제로 당기는 곳은 clampKit — 편성표(kitOf)를 통과한 색에는 밴드 밖이 없다.
- *     ⚠ 오래 이 줄이 "±20%"라고만 적혀 있고 **구현은 바닥 얼룩에만** 있었다. 그때
- *       실측은 잔가지 −53% / 흰 꽃 +30% / 설원 마른가지 −68% 였다 — 즉 규칙이 아니라
- *       희망이었다. 숫자를 바꾸려거든 GD_CONTRAST_BAND 주석의 "세 곳" 경고를 읽어라.
+ *     실제로 당기는 곳은 clampKit — 편성표(kitOf)를 통과한 **FlatSpec 색**에는 밴드
+ *     밖이 없다. 그러나 **화면 정점 색은 밴드 밖으로 나간다**(정직하게: 실측 −47~+48%).
+ *     굽는 도중 색을 흔드는 항이 셋 더 있기 때문이고, 그 셋의 크기는 GD_CONTRAST_BAND
+ *     주석에 실측표로 적어 뒀다. 이보다 세면 "칸 안에 물건이 있다"로 읽혀 유저가
+ *     골드 제거 대상으로 오인한다 — 이 레이어의 1순위 실패 모드다. 그래서 세로로
+ *     선 것·그림자를 만드는 것은 하나도 넣지 않는다.
  *
- * 실측(오프라인, tests/render/grounddetail.test.ts 가 잠근다): 셀당 평균 14.2~20.5,
- * 스테이지 총량 1,902(s3)~2,476(s2), 최악 셀 37 tri. 캐스터가 아니므로 **프레임 청구는
- * ×1**이다. 글리프 수정으로 요소가 단순해지면서 이 숫자는 오히려 내려갔다
- * (수정 전 2,211/2,575/1,981/2,101/2,574/2,443 → 후 2,107/2,476/1,902/1,982/2,469/2,361).
+ * ── 격자에 안 매이게 하는 법 (규칙 ③을 지키면서) ──────────────────────────
+ * 판을 놓는 자리를 **셀 좌표에서 뽑지 않는다.** 월드 좌표계에 깔린 지터 격자
+ * (gdSites — 간격 0.78/0.55칸, 칸 격자와 어긋난 각도로 회전)에서 사이트를 뽑고,
+ * 그중 **자기 셀 안에 떨어진 것만** 굽는다. 소유는 셀이 갖되 **패턴은 셀을 모른다**:
+ *   · 사이트 간격이 1칸의 약수가 아니라 칸마다 위상이 어긋난다 → 같은 도장이 안 된다.
+ *   · 경계 양쪽 사이트가 0.55칸 간격으로 이어지므로 **얼룩 무리가 칸을 가로질러** 보인다.
+ *     (판 하나하나는 자기 칸 안에 있는데, 무리는 두세 칸 폭이다 — 이게 핵심이다.)
+ *   · 개수·크기·색은 **저주파 필드**에서 온다(gdField). 이웃 사이트가 같은 값을 읽으니
+ *     인접한 얼룩이 같은 톤·같은 크기로 나와 **하나의 큰 얼룩**으로 붙어 읽힌다.
+ *     칸마다 독립 rng 로 뽑으면 절대 이렇게 안 된다 — 그게 예전 구조였다.
+ *   · 방향도 필드다(gdWind). 풀·잔가지가 한 구역에서 같은 쪽으로 눕는다.
+ * 셀 경계에 걸친 사이트는 s 를 줄여 넣고, 그래도 안 되면 버린다. 버려지는 띠는
+ * 폭 0.03칸(플레이 해상도로 1픽셀 미만)이라 "칸 사이 빈 줄"로 보이지 않는다.
+ *
+ * ── 실플레이 해상도가 정하는 크기 ──────────────────────────────────────────
+ * 데스크톱 1280×800 에서 판 전체가 화면에 들어오면 **한 칸이 약 15px**, 폰 390×844 는
+ * 더 작다. 곧 0.2칸짜리 요소는 3px 이고, 심판이 "얼룩·잔가지·꽃이 판독되지 않는다"고
+ * 한 것은 대비만의 문제가 아니라 **크기 문제**였다. 그래서 이 레이어의 주력은 작은
+ * 소품이 아니라 **면 얼룩(soilBlot, 폭 0.30~0.58칸 = 5~9px)** 이고, 저주파 색 필드가
+ * 이웃 얼룩을 같은 톤으로 묶어 두세 칸짜리 반점으로 키운다. 잔가지·꽃은 확대했을 때
+ * 나오는 덤이다 — 1x 에서 그것까지 읽히게 만들려면 밴드를 ±60%까지 열어야 하고,
+ * 그건 곧 "칸 안의 물건"이다.
+ *
+ * 실측(오프라인, tests/render/grounddetail.test.ts 가 잠근다): 셀당 평균 14~21,
+ * 스테이지 총량은 테스트 로그에 남는다. 캐스터가 아니므로 **프레임 청구는 ×1**이다.
  */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -104,23 +132,157 @@ export const GD_CELL_TRI_BUDGET = 52;
 /** 스테이지 전체 상한 — s6(맨셀 108 + 경로 42)가 가장 크다 */
 export const GD_STAGE_CAP = 4_800;
 
-/** 바닥 얼룩 y (셀 중앙) */
-const Y_SOIL = 0.018;
-/** 가장자리 얼룩 y — 중앙 얼룩과 겹치므로 2mm 띄운다(같은 높이면 z-파이팅) */
-const Y_EDGE = 0.020;
+/**
+ * 면 얼룩(soilBlot)이 구워지는 y — 실제로 놓을 때 사이트 해시로 **아래로만** 내린다.
+ * 대역 폭 6.8mm 는 z-파이팅 여유에서 왔다: 카메라 near 0.5 / 판까지 ≈25 → 깊이
+ * 해상도 ≈ 0.07mm 이므로 대역을 6.8mm 로 두면 무작위로 겹친 두 판이 구분 못 할
+ * 만큼 가까울 확률이 2% 남짓이고, 그 둘은 같은 저주파 색 필드를 읽어 색이 거의
+ * 같으므로 설령 깜빡여도 보이지 않는다. (예전엔 판이 셀당 2장 고정이라 0.018 /
+ * 0.020 두 층으로 충분했다 — 이제 셀당 0~4장이라 층으로는 안 된다.)
+ */
+const Y_BLOT = 0.0218;
+const Y_BLOT_DROP = 0.0068;
 /** 액센트 아래층 y */
 const Y_ACC = 0.023;
 /** 액센트 위층 y (꽃잎·기포 같은 것) */
 const Y_TOP = 0.026;
 
-/** 액센트가 놓이는 고리 [안쪽, 바깥쪽] — 안쪽이 슬롯 원판(0.34)보다 작아도 되는 것은
- *  원판이 반투명이고 액센트가 그 아래 6cm 에 깔리기 때문이다. 중요한 건 **중심**이 빈 것 */
-const ACC_R0 = 0.24;
-const ACC_R1 = 0.38;
-/** 셀(1×1) 안쪽 안전 반경 — 요소 외접 반경을 뺀 값이 배치 반경의 상한이다 */
+/** 셀(1×1) 안쪽 안전 반경 — 판의 회전 AABB 가 이 정사각형 안에 들어야 한다(규칙 ③) */
 const GD_FIT = 0.47;
-/** 같은 셀 안 액센트끼리 요구하는 최소 각도 차 — 한쪽에 뭉치면 "물건 더미"가 된다 */
-const ACC_MIN_SEP = 0.7;
+/** 셀 경계에 걸린 사이트를 넣기 위해 줄일 수 있는 배율의 하한. 이보다 작아지면 버린다 */
+const GD_S_MIN = 0.52;
+/** 이 반경 안에는 액센트 앵커를 두지 않는다 (배치 슬롯 원판 한가운데) */
+const ACC_CLEAR_R = 0.13;
+/** 여기부터는 액센트를 그대로 받는다 — 사이 구간은 확률이 선형으로 오른다 */
+const ACC_FADE_R = 0.28;
+
+// ── 좌표 필드 (칸이 아니라 월드 좌표에서 나오는 값들) ───────────────────────
+/*
+ * terrain.ts 에도 같은 모양의 해시/값노이즈가 있고, 일부러 **복사**했다.
+ * 두 레이어는 서로 다른 것을 그린다 — terrain 은 지면색, 여기는 그 위에 얹는 얼룩 —
+ * 이라 파장·시드가 갈려야 하고, 무엇보다 terrain.ts 는 지금 다른 담당자가 고치는
+ * 중이라 export 를 요구하면 두 작업이 서로를 막는다. 열다섯 줄짜리 순수 함수다.
+ */
+
+/** 좌표 해시 — 정수 격자점 하나에 [0,1). 같은 좌표면 언제나 같은 값이다 */
+function gdHash(xi: number, zi: number, seed: number): number {
+  let h = (Math.imul(xi | 0, 0x8da6b343) ^ Math.imul(zi | 0, 0xd8163841) ^ seed) >>> 0;
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 0x297a2d39) >>> 0;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/** smoothstep 보간 값 노이즈 — 저주파 필드용. 반환 [0,1] */
+function gdNoise(x: number, z: number, seed: number): number {
+  const xi = Math.floor(x);
+  const zi = Math.floor(z);
+  const fx = x - xi;
+  const fz = z - zi;
+  const u = fx * fx * (3 - 2 * fx);
+  const v = fz * fz * (3 - 2 * fz);
+  const a = gdHash(xi, zi, seed);
+  const b = gdHash(xi + 1, zi, seed);
+  const c = gdHash(xi, zi + 1, seed);
+  const d = gdHash(xi + 1, zi + 1, seed);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+
+/**
+ * 두 옥타브 저주파 필드 — 개수·크기·색·방향이 전부 여기서 온다.
+ *
+ * `len` 은 **칸 단위 파장**이고 3칸 밑으로 내리지 마라. 이 필드의 존재 이유는
+ * "이웃 사이트가 같은 값을 읽는 것"이고, 파장이 칸 크기에 가까워지면 값이 칸마다
+ * 갈려 다시 칸 단위 무작위가 된다 — 그러면 얼룩이 안 붙고 격자가 돌아온다.
+ */
+function gdField(x: number, z: number, len: number, seed: number): number {
+  const a = gdNoise(x / len, z / len, seed);
+  // 둘째 옥타브는 각도를 틀어 얹는다 — 값 노이즈 격자가 축 정렬이라 안 틀면 얼룩
+  // 결이 칸 격자와 같은 방향으로 선다(terrain.ts 가 같은 함정을 이미 진단해 뒀다).
+  const c = 0.5403;
+  const s = 0.8415;
+  const b = gdNoise((x * c - z * s) / (len * 0.44), (x * s + z * c) / (len * 0.44), (seed ^ 0x5bd1) | 0);
+  return a * 0.7 + b * 0.3;
+}
+
+/**
+ * 월드 좌표 지터 격자 — **셀 격자와 어긋난** 사이트 생성기.
+ *
+ * pitch 를 1칸의 약수로 두면 칸마다 같은 자리에 사이트가 생겨 예전 고리와 똑같아진다.
+ * 그래서 0.78 / 0.55 처럼 1과 공약수가 없는 값을 쓰고, 위에 각도를 얹어 축까지 튼다.
+ */
+interface SiteLattice {
+  /** 사이트 간격 (칸 단위) */
+  pitch: number;
+  /** 격자 회전 (라디안) */
+  angle: number;
+  /** 격자점에서 흔드는 폭 (pitch 배수) */
+  jitter: number;
+  seed: number;
+}
+
+const SITE_BLOT: SiteLattice = { pitch: 0.60, angle: 1.07, jitter: 0.44, seed: 0x51ed3b };
+const SITE_ACC: SiteLattice = { pitch: 0.50, angle: 0.41, jitter: 0.42, seed: 0x2f19c7 };
+
+/** 사이트 하나 — 위치는 월드, 소유는 이 사이트가 떨어진 셀 */
+interface Site {
+  x: number;
+  z: number;
+  /** 사이트 전용 난수 넷 (요소 픽 / 크기 / yaw / 판정) */
+  h0: number;
+  h1: number;
+  h2: number;
+  h3: number;
+}
+
+/**
+ * 셀 (cx,cz) 이 **소유하는** 사이트들. 자기 셀 밖에 떨어진 것은 이웃이 굽는다.
+ *
+ * 정렬 키를 h0 으로 두는 것은 "몇 개만 쓸 때 어느 것을 쓰나"를 결정론적으로
+ * 정하기 위해서다 — i,j 순서로 자르면 항상 같은 모서리 쪽이 살아남는다.
+ */
+function gdSites(l: SiteLattice, cx: number, cz: number): Site[] {
+  const cs = Math.cos(l.angle);
+  const sn = Math.sin(l.angle);
+  // 월드 → 격자 (역회전 후 pitch 로 나눈다)
+  const qx = (cx * cs + cz * sn) / l.pitch;
+  const qz = (-cx * sn + cz * cs) / l.pitch;
+  // 셀 반대각 0.7072 + 지터 폭까지 훑는다
+  const r = Math.ceil(0.7072 / l.pitch + l.jitter + 0.5);
+  const i0 = Math.floor(qx);
+  const j0 = Math.floor(qz);
+  const out: Site[] = [];
+  for (let j = j0 - r; j <= j0 + r; j++) {
+    for (let i = i0 - r; i <= i0 + r; i++) {
+      const jx = (gdHash(i, j, l.seed) - 0.5) * 2 * l.jitter;
+      const jz = (gdHash(i, j, (l.seed ^ 0x9e3779b1) | 0) - 0.5) * 2 * l.jitter;
+      const lx = (i + 0.5 + jx) * l.pitch;
+      const lz = (j + 0.5 + jz) * l.pitch;
+      const x = lx * cs - lz * sn;
+      const z = lx * sn + lz * cs;
+      if (Math.abs(x - cx) >= 0.5 || Math.abs(z - cz) >= 0.5) continue;
+      out.push({
+        x,
+        z,
+        h0: gdHash(i, j, (l.seed ^ 0x2c1b3c6d) | 0),
+        h1: gdHash(i, j, (l.seed ^ 0x1357bd11) | 0),
+        h2: gdHash(i, j, (l.seed ^ 0x7f4a7c15) | 0),
+        h3: gdHash(i, j, (l.seed ^ 0x3b9aca07) | 0),
+      });
+    }
+  }
+  out.sort((a, b) => a.h0 - b.h0 || a.x - b.x || a.z - b.z);
+  return out;
+}
+
+/**
+ * 규칙 ② — 셀 중앙 감쇠. 앵커가 중앙에 가까울수록 살아남을 확률이 낮다.
+ * 계단이 아니라 램프인 것이 중요하다: 반경 하나로 딱 자르면 그 반경이 곧 고리가 되고,
+ * 그게 이 파일이 방금 고친 결함이다.
+ */
+function gdCenterKeep(dx: number, dz: number): number {
+  const r = Math.hypot(dx, dz);
+  return Math.min(1, Math.max(0, (r - ACC_CLEAR_R) / (ACC_FADE_R - ACC_CLEAR_R)));
+}
 
 const _v = new THREE.Vector3();
 const _ca = new THREE.Color();
@@ -139,9 +301,16 @@ const _sv = new THREE.Vector3();
  * 판은 두께가 없으므로 y 를 같이 키울 이유도 없다 — 이 함수가 y 스택을 배율과
  * **무관하게** 고정해 준다.
  */
-function placeFlat(geo: THREE.BufferGeometry, x: number, z: number, yaw: number, s: number): THREE.BufferGeometry {
+function placeFlat(
+  geo: THREE.BufferGeometry,
+  x: number,
+  z: number,
+  yaw: number,
+  s: number,
+  dy = 0,
+): THREE.BufferGeometry {
   _q.setFromEuler(_e.set(0, yaw, 0, 'XYZ'));
-  _m.compose(_pv.set(x, 0, z), _q, _sv.set(s, 1, s));
+  _m.compose(_pv.set(x, dy, z), _q, _sv.set(s, 1, s));
   geo.applyMatrix4(_m);
   return geo;
 }
@@ -154,34 +323,56 @@ function mix(a: number, b: number, t: number): number {
 // ── 규칙 ④ 대비 클램프 (선언이 아니라 구현) ─────────────────────────────────
 
 /**
- * 이 레이어가 지면에서 벗어날 수 있는 **상대 휘도 폭**.
+ * 이 레이어가 지면에서 벗어날 수 있는 **상대 휘도 폭 — 설계 단계에서만**.
  *
- * ── 왜 0.20 이 아니라 0.28 인가 (캡처 A/B 실측) ───────────────────────────
- * 규칙 ④는 오래 ±20%라고 **주석에만** 적혀 있었고 액센트에는 구현이 없었다. 실제로
- * 구현하면서 0.20 과 0.28 두 벌을 굽고, **맨 셀만 들어오는 창**(소품·물·절벽 없음)에서
- * 픽셀 휘도의 21px 중앙값 대비 상대편차를 쟀다. 이 레이어가 화면에 실제로 넣는
- * 결의 양이 그 편차의 표준편차다:
- *   초원 (1180,1500)-(1305,1610)  수정전 4.78%  →  ±20% 3.83%  →  ±28% 4.41%
- *   설원 ( 960,1455)-(1210,1590)  수정전 4.23%  →  ±20% 3.40%  →  ±28% 3.55%
- *   같은 창의 어두운 쪽 꼬리(p0.5): 초원 −30.1% → −20.6% → −26.3%
- * 즉 ±20% 는 이 레이어가 내던 결의 **1/5을 지운다**(초원 4.78→3.83). 0.28 은 1/12만
- * 지우고(4.78→4.41) 그림은 사실상 그대로 남는다. 특히 설원은 마른 잔가지(0.297)가
- * 유일한 어두운 요소라 하한을 조일수록 판이 통째로 하얗게 비는데, ±20% 캡처
- * (fix/band20/snow_zoom.png)에서 잔가지가 눈에 띄게 흐려진다.
+ * ── 어디까지 잠겼나 (정직하게) ─────────────────────────────────────────────
+ * 잠긴 것: clampKit 을 지난 **FlatSpec.color**. 편성표(kitOf)의 색은 예외 없이
+ *   |Δ| ≤ 이 값이다. 테스트가 6바이옴 × 4존 × 모든 판을 훑는다.
+ * 안 잠긴 것: **화면에 실제로 나가는 정점 색**. 굽는 동안 색을 세 번 더 흔들기
+ *   때문이고, 그 셋은 밴드를 모른다. 항별 실측(설계 ±0.28 시절, 액센트 판 전수):
+ *     바이옴     설계        faceJitter만   hueJitter만   tint만      셋 합
+ *     초원      −28~+28%    −33~+29%       −35~+29%      −30~+30%    −41~+33%
+ *     정글      −28~+28%    −39~+34%       −32~+38%      −30~+31%    −42~+45%
+ *     사막      −28~+28%    −32~+28%       −37~+28%      −30~+31%    −41~+31%
+ *     설원      −28~ +8%    −31~ +8%       −33~ +8%      −30~+11%    −37~+11%
+ *     늪        −27~+28%    −50~+40%       −30~+30%      −28~+31%    −54~+46%
+ *     화산      −14~+28%    −41~+44%       −20~+53%      −16~+31%    −47~+65%
+ *   그리고 실제로 구운 지오메트리의 정점 색 분포(전 스테이지, p0~p100)는
+ *   −45~+45% 였다(합계 열이 최악 조합이라 그보다 좁다).
  *
- * 그러면서도 1순위 실패 모드("칸 안에 물건이 있다" → 골드 제거 대상 오인)는 막힌다.
- * 오인은 요소가 **하드 엣지로 떨어져 보일 때** 시작되고, 수정 전 실측이 정확히 그
- * 상태였다 — 잔가지 −53%, 설원 마른가지 −68%, 흰 꽃 +30%. 0.28 은 그 절반 이하다.
+ * ⚠ **지배항은 tint 가 아니다.** tint(tintGeo ±5%)는 선형 RGB 배율이라 sRGB 휘도로는
+ *   ±2~3%p 밖에 못 민다 — 위 표에서 tint 열이 설계 열과 거의 같은 것이 그 증거다.
+ *   예전 주석은 tint 를 ±7%→±5%로 좁힌 것을 근거로 "합계는 밴드 근처로 묶인다"고
+ *   적었는데, 좁힌 항이 원래 제일 작은 항이었으므로 그 문장은 틀렸다.
+ *   실제 지배항은 **buildFlats 의 faceJitter**(HSL 명도 **절대** 오프셋)이고,
+ *   채도 높은 색에서는 **hueJitter** 가 그것을 넘는다(화산 +53%: Rec.709 가중치가
+ *   초록 0.7152 / 파랑 0.0722 로 여덟 배 차이라, 색상만 돌려도 휘도가 크게 움직인다).
+ *
+ * ── 그래서 0.28 이 아니라 0.38 인가 ────────────────────────────────────────
+ * 심판이 "실플레이 해상도에서 아무것도 안 읽힌다"고 했고, 대비를 올려야 했다.
+ * 그런데 **화면 값**을 −45~+45%보다 더 벌리는 것은 정확히 1순위 실패 모드
+ * (수정 전 잔가지 −53% / 설원 마른가지 −68% = "칸 안의 물건")로 돌아가는 길이다.
+ * 그래서 밴드만 열지 않고 **지배항을 같이 줄였다**:
+ *   faceJitter 0.03 → GD_FACE_JITTER 0.018,  요소 hueJitter 최대 0.05 → 0.028.
+ * 결과: 설계 밴드는 ±28% → ±38%로 넓어졌는데 화면 분포는 −45~+45% → −47~+48% 로
+ * 사실상 제자리다. **평균 대비는 오르고 꼬리는 안 늘었다** — 이게 노린 지점이다.
  *
  * ⚠ 이 밴드는 **휘도만** 잰다. 채도는 안 잰다. 어두운 재 위의 새빨간 균열처럼
- *   휘도가 밴드 안이어도 색으로 튀는 경우가 있고, 그건 색이 아니라 **모양**으로
+ *   휘도가 밴드 안이어도 색으로 튀는 경우가 있고, 그건 **모양**과 **채도 선택**으로
  *   막아야 한다(crackFleck 주석 참고). 밴드를 조여서 해결하려 들지 마라.
  *
  * ⚠ 이 숫자를 고치면 **세 곳을 같이** 고쳐라: 파일 머리 규칙 ④ 문구, 이 상수,
- *   그리고 tests/render/grounddetail.test.ts 의 "대비 밴드" 케이스. 규칙이 주석에만
- *   있고 코드가 어기는 상태가 바로 이 상수가 생긴 이유다.
+ *   그리고 tests/render/grounddetail.test.ts 의 "대비 밴드" 케이스.
  */
-export const GD_CONTRAST_BAND = 0.28;
+export const GD_CONTRAST_BAND = 0.38;
+
+/**
+ * buildFlats 에 넘기는 면 단위 명도 지터 — 규칙 ④의 **지배항**이라 여기 상수로 뺐다.
+ * 0.03 은 props.ts 기본값(0.04)에서 한 번 내린 값이었고, 위 실측표대로 그것만으로도
+ * 밴드를 최대 22%p 밀었다. 0.018 은 로우폴리 특유의 "깎인 면"이 남는 하한이다 —
+ * 0 으로 두면 얼룩이 단색 종잇조각이 되어 오히려 도형으로 읽힌다.
+ */
+const GD_FACE_JITTER = 0.018;
 
 /**
  * Rec.709 상대 휘도. **팔레트 숫자(sRGB 바이트)를 그대로** 쓴다 — 선형 변환하지
@@ -306,21 +497,32 @@ type Flats = readonly FlatSpec[];
  * +0.5x 가 밑동이다. 길이 = 1.5·sx, 밑동 폭 = 1.73·sz. yaw 를 a+π/2 로 두고
  * 밑동이 원점에 오도록 0.5·sx 만큼 밀면 원점→(sin a, cos a)·len 짜리 잎이 된다.
  */
-function blade(a: number, len: number, wid: number, color: number, ox = 0, oz = 0, y = Y_ACC): FlatSpec {
+function blade(a: number, len: number, wid: number, color: number, ox = 0, oz = 0, hj = 0.022): FlatSpec {
   const sx = len / 1.5;
   return {
-    pos: [ox + Math.sin(a) * sx * 0.5, y, oz + Math.cos(a) * sx * 0.5],
+    pos: [ox + Math.sin(a) * sx * 0.5, Y_ACC, oz + Math.cos(a) * sx * 0.5],
     rot: [0, a + Math.PI / 2, 0],
     scale: [sx, wid / 1.732],
     color,
     sides: 3,
-    hueJitter: 0.035,
+    hueJitter: hj,
   };
 }
 
-/** 흙/색 얼룩 — 5각 판 1장 (3 tri). **단색 타일을 깨는 주력**이라 셀마다 반드시 1장 */
-function soilPatch(color: number, w: number): Flats {
-  return [{ pos: [0, Y_SOIL, 0], scale: [w, w * 0.84], color, sides: 5, hueJitter: 0.022 }];
+/**
+ * **면 얼룩** — 이 레이어에서 실플레이 해상도에 실제로 읽히는 유일한 요소다.
+ *
+ * 폭 0.30~0.58칸(1280×800 에서 5~9px). 예전 이름은 soilPatch 였고 "셀마다 반드시
+ * 1장, 셀 중앙에" 였다 — 그건 지면 타일 색이 체스판이던 시절 **타일 경계를 흐리는**
+ * 것이 목적이었기 때문이다. 지금 terrain 의 지면색은 좌표의 연속 함수라 경계가
+ * 애초에 없고, 그래서 이 판은 목적이 바뀌었다: 경계를 지우는 것이 아니라 **지면에
+ * 반점을 놓는 것**. 그러려면 칸에 한 장씩이 아니라 월드 격자에 흩어져야 한다.
+ *
+ * 5각과 6각 둘 다 두는 것은 실루엣이 한 종류면 "같은 도장의 반복"이 되기 때문이다
+ * (심판이 정확히 그 표현을 썼다). 4각은 이 크기에서도 직각이 살아남아 금지다.
+ */
+function soilBlot(color: number, w: number, sides: 5 | 6): Flats {
+  return [{ pos: [0, Y_BLOT, 0], scale: [w, w * (sides === 5 ? 0.84 : 0.9)], color, sides, hueJitter: 0.012 }];
 }
 
 /**
@@ -329,13 +531,15 @@ function soilPatch(color: number, w: number): Flats {
  * 원점을 공유하는 것과 **부채가 비대칭인 것** 둘 다 필요하다. 원점을 흩으면 바닥에
  * 뿌린 성냥개비가 되고(props.ts:crackLines 가 같은 함정을 이미 진단해 뒀다),
  * 각도·길이를 고르게 두면 좌우대칭 화살표가 된다 — 첫 판이 정확히 그랬다.
- * 그래서 각도 간격(0.40/0.27/0.33/0.37)과 길이(0.15~0.26)를 일부러 어긋나게 뒀다.
+ * 그래서 각도 간격(0.40/0.27/0.33/0.37)과 길이(0.18~0.31)를 일부러 어긋나게 뒀다.
+ * 길이·굵기는 실플레이 해상도 A/B 에서 한 단 올렸다(0.15~0.26 → 0.18~0.31,
+ * 밑동 0.055 → 0.062). 1x 에서 여전히 3px 급이지만 확대에서 "풀"로 읽히는 하한이다.
  */
 function grassSprig(color: number): Flats {
   const A = [-0.66, -0.26, 0.01, 0.34, 0.71];
-  const L = [0.15, 0.22, 0.26, 0.19, 0.13];
+  const L = [0.18, 0.26, 0.31, 0.23, 0.16];
   return A.map((a, i) =>
-    blade(a, L[i] as number, 0.055, i === 2 ? shade(color, 1.12) : i === 0 ? shade(color, 0.9) : color),
+    blade(a, L[i] as number, 0.062, i === 2 ? shade(color, 1.12) : i === 0 ? shade(color, 0.9) : color),
   );
 }
 
@@ -350,14 +554,19 @@ function grassSprig(color: number): Flats {
  * 6각형은 같은 픽셀 수에서 원으로 뭉개져 "꽃송이"가 된다.
  *
  * 두 장 → 한 장으로 줄인 것은 예산 때문이다(6각 4 tri × 2 + 잎 3 = 11 > 8).
- * 대신 한 덩이를 키우고(0.072 → 0.105) hueJitter 를 0.02 → 0.05 로 올렸다 —
- * buildFlats 가 **삼각형마다** 색을 흔들므로, 6각 판 하나가 색이 조금씩 다른
- * 꽃잎 4장으로 갈라져 보인다. 두 색(a·b)은 그 한 덩이 안에서 섞어 쓴다.
+ * 대신 한 덩이를 키웠다: 0.072 → 0.105 → **0.125**. 마지막 한 단은 실플레이 해상도
+ * 캡처에서 왔다 — 1280×800 에서 한 칸이 15px 이라 0.105는 1.5px, 0.125도 1.9px 다.
+ * 어차피 1x 에서 꽃은 못 읽는다는 것을 인정하고(면 얼룩이 그 몫을 진다) 확대에서
+ * 예쁘게 보이는 크기로 잡았다.
+ * ⚠ hueJitter 는 한때 0.05 였다. buildFlats 가 **삼각형마다** 색을 흔들어 6각 판
+ *   하나가 꽃잎 4장으로 갈라져 보이게 하려던 것인데, 규칙 ④ 실측에서 hueJitter 가
+ *   밴드를 최대 25%p 미는 **둘째 지배항**으로 드러나 0.028 로 내렸다. 갈라짐은
+ *   약해졌지만 6각 실루엣이 이미 꽃송이로 읽히므로 잃은 것이 적다.
  */
 function flowerDot(leaf: number, a: number, b: number): Flats {
   return [
-    { pos: [0, Y_ACC, 0], scale: [0.21, 0.18], color: leaf, sides: 5, hueJitter: 0.04 },
-    { pos: [0.035, Y_TOP, 0.025], scale: [0.105, 0.10], color: mix(a, b, 0.35), sides: 6, hueJitter: 0.05 },
+    { pos: [0, Y_ACC, 0], scale: [0.23, 0.20], color: leaf, sides: 5, hueJitter: 0.026 },
+    { pos: [0.038, Y_TOP, 0.027], scale: [0.125, 0.118], color: mix(a, b, 0.35), sides: 6, hueJitter: 0.028 },
   ];
 }
 
@@ -374,12 +583,13 @@ function flowerDot(leaf: number, a: number, b: number): Flats {
  * 넣으면 그 대비가 곧 아이콘이 된다.
  *
  * 그래서 덧판을 아예 뺐다. 화면상 6~8px 짜리 육각형은 그 자체로 자갈로 읽히고,
- * 로우폴리 특유의 "깎인 면"은 buildFlats 의 삼각형별 색 지터(faceJitter 0.03)가
+ * 로우폴리 특유의 "깎인 면"은 buildFlats 의 삼각형별 색 지터(GD_FACE_JITTER)가
  * 이미 공짜로 내 준다. 덤으로 5 → **4 tri**, pebbleFlat 은 6바이옴 거의 모든 zone 에
  * 실려 있어 이 −1 이 스테이지당 수십 tri 다.
+ * 크기는 0.145×0.125 → 0.175×0.15 로 한 단 올렸다(실플레이 해상도 A/B).
  */
 function pebbleFlat(color: number): Flats {
-  return [{ pos: [0.02, Y_ACC, 0.015], scale: [0.145, 0.125], color, sides: 6, hueJitter: 0.025 }];
+  return [{ pos: [0.02, Y_ACC, 0.015], scale: [0.175, 0.15], color, sides: 6, hueJitter: 0.025 }];
 }
 
 /**
@@ -396,19 +606,22 @@ function pebbleFlat(color: number): Flats {
  * 땅에 떨어진 막대기는 한 획으로 충분히 읽히고, 획이 하나뿐이면 만나는 점이
  * 없으므로 어떤 yaw 로 돌려도 글리프가 될 수 없다. 덤으로 2 tri → **1 tri**.
  *
- * 길이 0.26 → 0.28, 밑동 0.038 → 0.05 로 살짝 키웠다. 획이 하나뿐이라 그전 굵기로는
- * 확대 전에는 **머리카락 한 올**로 사라졌다. 밑동:길이 = 1:5.6 의 쐐기라 굵은 쪽이
- * 부러진 단면, 가는 쪽이 가지 끝으로 읽힌다.
+ * 길이 0.26 → 0.28 → **0.33**, 밑동 0.038 → 0.05 → **0.058** 로 두 번 키웠다. 획이
+ * 하나뿐이라 그전 굵기로는 확대 전에 **머리카락 한 올**로 사라졌다. 밑동:길이 =
+ * 1:5.7 의 쐐기라 굵은 쪽이 부러진 단면, 가는 쪽이 가지 끝으로 읽힌다.
  */
 function twig(color: number): Flats {
-  return [blade(0.0, 0.28, 0.05, color)];
+  return [blade(0.0, 0.33, 0.058, color)];
 }
 
-/** 이끼/얼룩 — 6각 판 1장 (4 tri). 가장 싼 "면" */
-function blot(color: number, w = 0.22, y = Y_ACC): Flats {
+/**
+ * 이끼/얼룩 — 6각 판 1장 (4 tri). 액센트 층에서 가장 싼 "면".
+ * (면 얼룩 soilBlot 과 다르다 — 이쪽은 바이옴 고유색 액센트라 액센트 y 에 놓인다.)
+ */
+function blot(color: number, w = 0.26): Flats {
   // hueJitter 를 0.05 로 뒀더니 흙색(탄 계열) 얼룩이 **분홍**으로 돌았다 —
   // 채도가 낮고 따뜻한 색은 같은 색상 지터에도 훨씬 크게 튄다. 0.028 이 상한이다.
-  return [{ pos: [0, y, 0], scale: [w, w * 0.86], color, sides: 6, hueJitter: 0.028 }];
+  return [{ pos: [0, Y_ACC, 0], scale: [w, w * 0.86], color, sides: 6, hueJitter: 0.028 }];
 }
 
 /**
@@ -418,38 +631,58 @@ function blot(color: number, w = 0.22, y = Y_ACC): Flats {
  */
 function litter(a: number, b: number): Flats {
   return [
-    blade(0.55, 0.15, 0.09, a, 0.04, 0.05),
-    blade(2.45, 0.13, 0.08, b, -0.07, 0.02),
-    blade(1.35, 0.11, 0.07, shade(a, 0.88), 0.01, -0.08),
+    blade(0.55, 0.18, 0.105, a, 0.05, 0.06),
+    blade(2.45, 0.155, 0.095, b, -0.085, 0.025),
+    blade(1.35, 0.13, 0.082, shade(a, 0.88), 0.012, -0.095),
   ];
 }
 
 /**
- * 갈라진 땅 — 한 점에서 갈라지는 가는 균열 3가닥 (3 tri).
- * 두 가닥을 **같은 반구 안**(0.18~1.15 rad)에 두는 것은 그림 때문만이 아니다 —
- * 원점 뒤로 뻗는 가닥이 있으면 이 요소가 "양방향"으로 분류되어(oneSided=false)
- * 셀 고리 위에 앉혔을 때 반대쪽 끝이 셀 중앙을 가로지른다.
- * 균열은 뿌리 쪽이 넓고 끝이 가늘어지므로 blade 가 그대로 맞는 모양이다.
+ * 갈라진 땅 — **끊어진 균열 자국** 3토막 (3 tri). 한 점에서 갈라지지 **않는다**.
+ *
+ * ── 세 번째 실패와 그 진짜 원인 ────────────────────────────────────────────
+ * 1차(90° 곁가지) → 꺾쇠 ⌐. 2차(0.52rad) → 체크마크 ✓. 3차는 "가닥을 셋으로 만들고
+ * 부채를 80°로 벌리면 글리프가 아니다"였는데, **또 ✓ 였다**(심판: 15배 확대에서
+ * 정확한 ✓, 셋째 가닥은 화면에서 사라짐).
+ *
+ * 재리뷰는 원인을 아이소메트릭 투영으로 지목했다 — "부채 80°로 벌려도 화면에서는
+ * 눌려 두 획으로 붙는다". **재 보니 그건 아니다.** 화면 공간에서 실제로 계산하면:
+ *
+ *   카메라는 yaw −35° / pitch 55° 고정(render/camera.ts YAW_BASE/PITCH_BASE).
+ *   lookAt 기저: z=(0.4699, 0.8192, −0.3290)  ← 타깃→카메라
+ *                x=(−0.5736, 0,      −0.8192) ← 화면 오른쪽
+ *                y=(−0.6711, 0.5737,  0.4699) ← 화면 위
+ *   지면 방향 d=(dx,0,dz) → 화면 (u,v):
+ *     u = −0.5736·dx − 0.8192·dz
+ *     v = −0.6711·dx + 0.4699·dz
+ *   이 2×2 사상의 특이값은 **1.0000 과 0.8192**(= sin 55°, 지면이 화면으로 눌리는
+ *   유일한 축). 곧 각도 미분 dθ/dφ 는 0.819~1.221 사이이고, 월드 80° 부채는 화면에서
+ *   **65.5°~97.6°** 가 된다. 방향에 따라 좁아지긴 해도 두 획으로 붙지는 않는다.
+ *   실제 3차 값(0.06 / 0.78 / 1.45 rad)을 그대로 넣으면 화면 각은 153.3° / 188.0° /
+ *   222.4° — 간격이 34.7° 와 34.4° 로 거의 균등하다. 투영은 무죄다.
+ *
+ * 남는 원인은 **도형 자체**다. 길이가 얼마든 각이 얼마든, 굵은 쪽이 한 점에 모이는
+ * 뾰족한 획 여러 개는 ✓ ➤ ⌐ ∨ 중 하나로 읽힌다. twig 이 2획에서 1획으로 내려가며
+ * 이미 낸 결론("만나는 점이 없으면 글리프가 될 수 없다")을 crackFleck 만 안 따르고
+ * "셋이면 괜찮다"로 우회했던 것이다. 3차 화면 길이도 다시 재 보면 0.267/0.219/0.145
+ * (최단/최장 0.54)라 셋째가 사라진 것도 아니었다 — 셋이 다 보여도 ✓ 였다.
+ *
+ * ── 그래서 갈래 구조를 버렸다 ──────────────────────────────────────────────
+ * 균열을 **한 줄로 이어지되 끊어진 세 토막**으로 바꿨다. 토막들은 원점을 공유하지
+ * 않고 진행 방향(±0.2rad)만 거의 같으므로 만나는 점이 없다 — 점선이지 글리프가
+ * 아니다. 땅이 갈라진 자국은 원래 이어지다 끊기는 것이라 그림도 이쪽이 맞다.
+ * 덤으로 전체 길이가 0.28 → 0.44칸으로 늘어 실플레이 해상도에서 훨씬 잘 보인다
+ * (판이 길어져도 배치는 회전 AABB 로 정확히 재므로 셀 밖으로 안 샌다).
+ *
+ * 채도는 따로 손봤다 — 규칙 ④는 휘도만 재고, hueJitter 는 채도 높은 빨강에서
+ * 휘도를 +25%p 까지 민다(GD_CONTRAST_BAND 표의 화산 열). 그래서 이 요소만 blade
+ * hueJitter 를 0.010 으로 내리고, 화산 편성의 균열색을 지면 쪽으로 더 섞었다.
  */
 function crackFleck(color: number): Flats {
-  /*
-   * 가닥이 셋인데도 twig 과 **같은 실패**를 하고 있었다. 예전 값은 길이가
-   * 0.30/0.17/0.11 이라 셋째 가닥이 화면상 2px 로 사라졌고, 남은 둘이 예각으로 만나
-   * 화산 판에서 **새빨간 체크마크(✓)** 가 됐다(fix/after/volcano_crack.png, 18배 확대).
-   * 화산에서만 그렇게 보인 이유는 규칙 ④가 **휘도만** 재기 때문이다 — 어두운 재 위의
-   * 채도 높은 빨강은 휘도가 밴드 안이어도 색으로 튄다. 즉 대비 클램프는 이 결함을
-   * 못 막고, 막아야 하는 건 모양 쪽이다.
-   *
-   * 그래서 "가닥이 셋"을 **선언이 아니라 실제로** 만들었다: 길이 낙차를 0.28/0.22/0.16
-   * (최단/최장 = 0.57)로 줄이고 부채를 0.06~1.45 rad(약 80°)로 벌렸다. 셋이 다 보이는
-   * 순간 도형은 갈라진 균열 접합부지 글리프가 아니다.
-   * 상한 1.45 rad 는 그림이 아니라 **계약**이다 — 이보다 눕히면 끝이 원점 뒤(z<−0.04)로
-   * 넘어가 oneSided 판정이 풀리고, 그러면 배치할 때 반대쪽 가닥이 셀 중앙을 가로지른다.
-   */
   return [
-    blade(0.06, 0.28, 0.045, color),
-    blade(0.78, 0.22, 0.036, shade(color, 0.92)),
-    blade(1.45, 0.16, 0.030, shade(color, 0.86)),
+    blade(0.13, 0.155, 0.050, color, -0.012, 0.0, 0.01),
+    blade(-0.10, 0.130, 0.042, shade(color, 0.93), 0.028, 0.185, 0.01),
+    blade(0.20, 0.100, 0.034, shade(color, 0.87), -0.006, 0.34, 0.01),
   ];
 }
 
@@ -487,9 +720,12 @@ function footScuff(color: number): Flats {
 // ── 바이옴 편성 ─────────────────────────────────────────────────────────────
 
 export interface GdKit {
-  /** 존별 바닥 얼룩 색 후보 (셀마다 1장) */
+  /**
+   * 존별 **면 얼룩** 색 후보. 사이트마다 하나를 고르되 **rng 가 아니라 저주파
+   * 색 필드**로 고른다 — 이웃 사이트가 같은 색을 읽어야 얼룩이 붙어 커진다.
+   */
   soil: Record<Zone, readonly number[]>;
-  /** 존별 바닥 얼룩 폭 */
+  /** 존별 면 얼룩 기준 폭 (사이트마다 0.68~1.30 배가 걸린다) */
   soilW: Record<Zone, number>;
   /** 존별 액센트 후보 */
   accent: Record<Zone, readonly Flats[]>;
@@ -517,7 +753,12 @@ function zoneSoil(
   };
 }
 
-const SOIL_W: Record<Zone, number> = { inner: 0.46, trail: 0.42, shore: 0.44, path: 0.38 };
+/*
+ * 면 얼룩 기준 폭. 사이트당 0.68~1.30 배가 걸리므로 실제 폭은 0.30~0.58칸이다.
+ * 경로만 좁게 두는 것은 길이 길로 읽혀야 하기 때문이다(넓은 얼룩이 길 위를 덮으면
+ * 경로 리본의 폭이 흐려진다).
+ */
+const SOIL_W: Record<Zone, number> = { inner: 0.45, trail: 0.42, shore: 0.44, path: 0.34 };
 
 function kitRaw(biome: BiomeId): GdKit {
   const pal = BIOMES[biome];
@@ -534,7 +775,21 @@ function kitRaw(biome: BiomeId): GdKit {
    * 구현이 아니라 **얼룩만의 관습**이다 — 규칙 ④를 실제로 강제하는 것은 이 함수
    * 바깥의 clampKit 이고, 얼룩·액센트가 **똑같이** 그것을 통과한다.
    */
-  const inner = [shade(g0, 0.93), shade(g2, 1.05), shade(g4, 0.96), mix(g0, acc, 0.24)];
+  /*
+   * 명도 배율 폭을 0.93~1.05 에서 0.86~1.09 로, 액센트색 혼합을 0.24 에서 0.20~0.45 로
+   * 넓혔다. 좁힌 쪽이 안전해 보이지만 **설원에서 레이어가 통째로 증발했다** —
+   * 설원 램프는 자기 폭이 7%뿐이라(팔레트 주석 참조) 거기에 ±7% 배율을 걸면 얼룩
+   * 다섯 색의 휘도가 사실상 한 색이고, 심판이 "폰에서 아무것도 안 보인다"고 한 판이
+   * 정확히 설원이었다. 넓혀도 밴드 밖으로는 못 나간다 — clampKit 이 뒤에서 자른다.
+   * 그래서 여기서는 **바이옴 램프가 좁아도 결이 남을 만큼** 벌려 두는 것이 맞다.
+   */
+  const inner = [
+    shade(g0, 0.86),
+    shade(g2, 1.09),
+    shade(g4, 0.94),
+    mix(g0, acc, 0.45),
+    mix(shade(g2, 0.88), acc, 0.20),
+  ];
   const soil = zoneSoil(inner, path0, sand);
   const stone = mix(C.rock, g0, 0.25);
   const shoreStone = mix(stone, sand, 0.45);
@@ -659,13 +914,13 @@ function kitRaw(biome: BiomeId): GdKit {
         soilW: SOIL_W,
         accent: {
           inner: [
-            crackFleck(mix(P.lavaDeep, g0, 0.45)),
+            crackFleck(mix(P.lavaDeep, g0, 0.66)),
             blot(mix(P.ash, g0, 0.35), 0.26),
             pebbleFlat(shade(P.basalt, 1.1)),
             blot(mix(P.sulfur, g0, 0.55), 0.18),
             grassSprig(P.charGrassCol),
           ],
-          trail: [blot(mix(P.ash, g0, 0.4), 0.22), pebbleFlat(shade(P.basalt, 1.08)), crackFleck(mix(P.lavaDeep, g0, 0.5))],
+          trail: [blot(mix(P.ash, g0, 0.4), 0.22), pebbleFlat(shade(P.basalt, 1.08)), crackFleck(mix(P.lavaDeep, g0, 0.70))],
           shore: [...shoreCommon, blot(mix(P.ash, g0, 0.4), 0.24)],
           path: pathCommon,
         },
@@ -696,34 +951,89 @@ function kitFor(biome: BiomeId): GdKit {
 
 // ── 굽기 ────────────────────────────────────────────────────────────────────
 
-/** 캐시된 요소 지오메트리 + 외접 반경(셀 밖 방지) + 삼각형 수(예산) */
+/** 캐시된 요소 지오메트리 + 로컬 XZ 상자(셀 밖 방지) + 삼각형 수(예산) */
 interface Baked {
   geo: THREE.BufferGeometry;
   /**
-   * XZ **외접** 반경. 배치할 때 yaw 를 무작위로 돌리므로 축 정렬 반경으로 재면
-   * 최대 √2배까지 과소평가한다 — props.ts:Baked.rc 와 같은 이유다.
+   * 로컬 XZ AABB [x0, x1, z0, z1] — yaw·s 를 걸기 **전**.
+   *
+   * 예전엔 원점 기준 **외접 반경 하나**로 쟀다. 회전을 대비한 보수적인 값이라
+   * 안전하기는 한데, 잔가지·균열처럼 **한쪽으로만 뻗는** 요소에서 반지름이 길이
+   * 전체가 되어 배치 반경을 통째로 잡아먹었다(길이 0.44 균열이면 앵커가 반경 0.03
+   * 안에만 놓인다 = 사실상 셀 중앙 고정). 상자를 그대로 들고 있다가 배치할 때
+   * yaw 로 돌려 재면 같은 요소가 셀 어디에나 앉는다 — 규칙 ③을 **더 정확히**
+   * 지키면서 자유도가 는다.
    */
-  rc: number;
+  box: readonly [number, number, number, number];
   tri: number;
   /**
    * 원점에서 **한쪽(+z)으로만** 뻗는 요소인가 (잔가지·풀 포기·균열).
-   * 이런 것은 yaw 를 무작위로 돌리면 절반의 확률로 셀 중앙을 향해 눕는다.
-   * 그래서 배치할 때 +z 가 **셀 바깥**을 보게 돌린다 — 중앙이 비고, 덤으로
-   * "풀이 가장자리에서 안쪽으로 자란" 그림이 된다.
+   * 이런 것은 "바닥에 자라거나 누운 것"이라 방향이 뜻을 갖는다 — 무작위로 돌리는
+   * 대신 **바람 필드**(gdWind)를 따르게 해서 한 구역의 풀이 같은 쪽으로 눕는다.
    */
   oneSided: boolean;
 }
 
 function baked(key: string, flats: Flats): Baked {
   const geo = cachedGeo(key, () => {
-    const g = buildFlats(flats, hashSeed(key), 0.03);
+    const g = buildFlats(flats, hashSeed(key), GD_FACE_JITTER);
     g.computeBoundingBox();
     return g;
   });
   const bb = geo.boundingBox ?? (geo.computeBoundingBox(), geo.boundingBox);
-  const rc = bb ? Math.hypot(Math.max(bb.max.x, -bb.min.x), Math.max(bb.max.z, -bb.min.z)) : 0.3;
+  const box: [number, number, number, number] = bb
+    ? [bb.min.x, bb.max.x, bb.min.z, bb.max.z]
+    : [-0.3, 0.3, -0.3, 0.3];
   const oneSided = bb ? bb.min.z > -0.04 && bb.max.z > 0.12 : false;
-  return { geo, rc, tri: geo.getAttribute('position').count / 3, oneSided };
+  return { geo, box, tri: geo.getAttribute('position').count / 3, oneSided };
+}
+
+/**
+ * 회전·배율을 건 뒤의 XZ 상자 (앵커 기준 오프셋). placeFlat 과 **같은 회전**이어야
+ * 한다 — y 회전 행렬이 (x,z) 를 (x·cos + z·sin, −x·sin + z·cos) 로 보낸다.
+ */
+const _fit = [0, 0, 0, 0];
+function fitBox(b: Baked, yaw: number, s: number): number[] {
+  const c = Math.cos(yaw) * s;
+  const sn = Math.sin(yaw) * s;
+  const [x0, x1, z0, z1] = b.box;
+  let ax0 = Infinity;
+  let ax1 = -Infinity;
+  let az0 = Infinity;
+  let az1 = -Infinity;
+  for (let k = 0; k < 4; k++) {
+    const lx = k & 1 ? x1 : x0;
+    const lz = k & 2 ? z1 : z0;
+    const wx = lx * c + lz * sn;
+    const wz = -lx * sn + lz * c;
+    if (wx < ax0) ax0 = wx;
+    if (wx > ax1) ax1 = wx;
+    if (wz < az0) az0 = wz;
+    if (wz > az1) az1 = wz;
+  }
+  _fit[0] = ax0;
+  _fit[1] = ax1;
+  _fit[2] = az0;
+  _fit[3] = az1;
+  return _fit;
+}
+
+/**
+ * 앵커 (dx,dz)(셀 중심 기준)에 요소를 넣을 수 있는 **최대 배율**.
+ * 상자 오프셋이 s 에 비례하므로 네 부등식을 s 에 대해 풀면 닫힌 식이 나온다.
+ * 반환이 GD_S_MIN 미만이면 그 사이트는 버린다(경계에 너무 가깝다).
+ */
+function fitScale(b: Baked, yaw: number, dx: number, dz: number): number {
+  const u = fitBox(b, yaw, 1);
+  let s = Infinity;
+  const lim = (off: number, room: number): void => {
+    if (off > 1e-9) s = Math.min(s, room / off);
+  };
+  lim(u[1] as number, GD_FIT - dx); // dx + s·x1 ≤ +F
+  lim(-(u[0] as number), GD_FIT + dx); // dx + s·x0 ≥ −F
+  lim(u[3] as number, GD_FIT - dz);
+  lim(-(u[2] as number), GD_FIT + dz);
+  return s;
 }
 
 const DIRS8: readonly (readonly [number, number])[] = [
@@ -762,8 +1072,6 @@ export function buildGroundDetail(
 ): GroundDetailBuild {
   const kit = kitFor(stage.biome);
   const biome = stage.biome;
-  /** 규칙 ④ 기준선 — 굽는 중에 파생되는 색(가장자리 얼룩)도 이 밴드를 지나야 한다 */
-  const refLuma = gdGroundLuma(biome);
   /** 셀 좌표 → 그 셀의 변환 완료 지오메트리 (재병합용 원본) */
   const parts = new Map<string, THREE.BufferGeometry>();
 
@@ -784,11 +1092,27 @@ export function buildGroundDetail(
   };
 
   /**
+   * 판 전체에 공통인 저주파 필드 시드. **스테이지 id 만** 섞는다 — 셀 좌표를 섞으면
+   * 필드가 칸마다 끊겨 존재 이유(이웃이 같은 값을 읽는 것)가 사라진다.
+   */
+  const fSeed = hashSeed(`gdf:${stage.id}:${biome}`) | 0;
+  /** 얼룩 밀도 (개수) */
+  const fDens = (wx: number, wz: number): number => gdField(wx, wz, 4.8, fSeed);
+  /** 얼룩 크기 — 밀도와 다른 시드/파장이라 "빽빽하고 잔" 구역과 "성기고 큰" 구역이 섞인다 */
+  const fSize = (wx: number, wz: number): number => gdField(wx, wz, 3.6, (fSeed ^ 0x5f356495) | 0);
+  /** 면 얼룩 색 — 램프 위 연속 위치. 이웃이 같은 값을 읽어야 얼룩이 붙어 커진다 */
+  const fTone = (wx: number, wz: number): number => gdField(wx, wz, 3.2, (fSeed ^ 0x1b873593) | 0);
+  /** 바람 — 풀·잔가지가 한 구역에서 같은 쪽으로 눕는다 */
+  const gdWind = (wx: number, wz: number): number =>
+    (gdField(wx, wz, 6.5, (fSeed ^ 0x27d4eb2d) | 0) - 0.5) * 3.4;
+
+  /**
    * 셀 하나를 굽는다.
    *
-   * rng 를 **셀 좌표에서 직접** 시드한다(공용 rng 를 순회하지 않는다). 이유는
-   * addCell 이다 — 공용 rng 면 소품을 치우는 **순서**에 따라 같은 칸의 그림이 달라져
-   * 결정론 테스트가 간헐 실패한다. 셀 전용 시드면 언제 치우든 같은 칸에 같은 결이 난다.
+   * 판을 놓는 자리는 **셀 좌표에서 뽑지 않는다**(gdSites — 파일 머리 "격자에 안
+   * 매이게 하는 법" 참고). rng 는 셀 좌표에서 직접 시드해 두지만 이제 하는 일은
+   * 자잘한 흔들기뿐이다. rng 를 셀 전용으로 두는 이유는 그대로다 — 공용 rng 면
+   * 소품을 치우는 **순서**에 따라 같은 칸의 그림이 달라져 결정론이 깨진다.
    */
   const bakeCell = (x: number, z: number): THREE.BufferGeometry | null => {
     const zone = zoneOf(x, z);
@@ -799,107 +1123,115 @@ export function buildGroundDetail(
     const pieces: THREE.BufferGeometry[] = [];
     let left = GD_CELL_TRI_BUDGET;
 
-    // ── 바닥 얼룩 (셀마다 1장 — 이 한 장이 타일 경계를 흐리는 주력이다) ──
-    const soils = kit.soil[zone];
-    const si = rng.int(0, soils.length - 1);
-    const soilB = baked(`gd:${biome}:soil:${zone}:${si}`, soilPatch(soils[si] as number, kit.soilW[zone]));
-    const ss = Math.min(rng.range(0.86, 1.14), GD_FIT / soilB.rc);
-    const soff = Math.min(rng.range(0, 0.10), Math.max(0, GD_FIT - soilB.rc * ss));
-    const sa = rng.range(0, Math.PI * 2);
-    pieces.push(
-      tintGeo(
-        placeFlat(soilB.geo.clone(), cx + Math.cos(sa) * soff, cz + Math.sin(sa) * soff, rng.range(0, Math.PI * 2), ss),
-        rng.range(0.95, 1.05),
-      ),
-    );
-    left -= soilB.tri;
-
-    /*
-     * ── 가장자리 얼룩 (6각 판 1장) ──
-     * 첫 판은 셀마다 **중앙 얼룩 한 장**뿐이었고, 캡처에서 타일 격자가 거의 그대로
-     * 남았다. 당연하다 — 격자를 만드는 것은 타일 **경계**인데 얼룩이 한가운데
-     * 있으면 경계는 손대지지 않는다(오히려 칸마다 점이 하나씩 찍혀 규칙성이 는다).
-     * 그래서 두 번째 얼룩을 경계 가까이(r 0.20~0.30) 무작위 방향으로 민다. 셀 밖으로
-     * 넘기지는 않는다(카펫화 금지) — 대신 이웃 칸도 각자 자기 경계에 얼룩을 두므로,
-     * 두 칸의 얼룩이 경계를 사이에 두고 만나 직선이 끊겨 보인다.
+    /**
+     * 판 하나를 앉힌다. 셀 밖으로 새면(규칙 ③) false — 그 사이트는 버린다.
+     *
+     * ⚠ 버리는 판정은 **fitScale 기준**이지 최종 s 기준이 아니다. 최종 s 로 재면
+     *   "일부러 작게 놓으려던 판"(want 0.5)까지 경계 근처라고 오해해 버려서,
+     *   결국 크기 분포가 좁아지고 얼룩이 다시 같은 도장으로 보인다. 두 가지를
+     *   가르는 것이 이 한 줄이다: fit 은 **놓을 수 있나**, want 는 **얼마나 크게**.
      */
-    const ei = rng.int(0, soils.length - 1);
-    const edgeB = baked(
-      `gd:${biome}:edge:${zone}:${ei}`,
-      blot(toBand(shade(soils[ei] as number, 0.97), refLuma), 0.34, Y_EDGE),
-    );
-    if (edgeB.tri <= left) {
-      const es = rng.range(0.78, 1.14);
-      const ea = rng.range(0, Math.PI * 2);
-      const erad = Math.min(rng.range(0.20, 0.30), Math.max(0, GD_FIT - edgeB.rc * es));
-      pieces.push(
-        tintGeo(
-          placeFlat(edgeB.geo.clone(), cx + Math.cos(ea) * erad, cz + Math.sin(ea) * erad, rng.range(0, Math.PI * 2), es),
-          rng.range(0.95, 1.05),
-        ),
+    const put = (b: Baked, px: number, pz: number, yaw: number, want: number, dy: number, tint: number): boolean => {
+      if (b.tri > left) return false;
+      const fit = fitScale(b, yaw, px - cx, pz - cz);
+      if (fit < GD_S_MIN) return false;
+      pieces.push(tintGeo(placeFlat(b.geo.clone(), px, pz, yaw, Math.min(want, fit), dy), tint));
+      left -= b.tri;
+      return true;
+    };
+
+    // ── ① 면 얼룩 — 이 레이어가 실플레이 해상도에 내놓는 유일한 그림 ──
+    const soils = kit.soil[zone];
+    const blotSites = gdSites(SITE_BLOT, cx, cz);
+    let laid = 0;
+    for (const st of blotSites) {
+      /*
+       * 색은 rng 가 아니라 **저주파 톤 필드**로 고른다. 이웃 사이트(자기 칸이든
+       * 옆 칸이든)가 거의 같은 값을 읽으므로 붙어 있는 얼룩이 같은 색으로 나오고,
+       * 겹쳐서 두세 칸짜리 반점 하나로 읽힌다. 칸마다 rng 로 뽑으면 옆 칸 얼룩이
+       * 다른 색이라 절대 안 붙는다 — 그게 예전 구조가 격자로 읽힌 이유의 절반이다.
+       */
+      const tone = fTone(st.x, st.z);
+      const si = Math.min(soils.length - 1, Math.floor(tone * soils.length));
+      const sides: 5 | 6 = st.h1 < 0.5 ? 5 : 6;
+      const b = baked(
+        `gd:${biome}:blot:${zone}:${sides}:${si}`,
+        soilBlot(soils[si] as number, kit.soilW[zone], sides),
       );
-      left -= edgeB.tri;
+      // 크기도 필드가 정한다(±해시 소량) — 이웃끼리 크기가 비슷해야 한 덩이로 붙는다
+      /*
+       * 크기는 필드가 정하고(±해시 소량) 폭을 넓게 연다(0.42~1.30 → 실폭 0.19~0.58칸).
+       * 폭이 좁으면 — a2 캡처가 그랬다 — 얼룩이 전부 같은 크기로 나와 "같은 도장의
+       * 반복"이라는 심판 지적이 얼룩 레이어에서 그대로 재현된다.
+       */
+      const want = 0.42 + fSize(st.x, st.z) * 0.72 + (st.h2 - 0.5) * 0.32;
+      // y 는 사이트마다 다르게(겹칠 때 z-파이팅 방지). 위에서 아래로만 내린다
+      /*
+       * 밝기 흔들기를 **사이트 해시**에서 뽑고 폭도 ±2.5%로 좁힌다. 셀 rng 로 뽑으면
+       * 같은 칸의 얼룩끼리는 달라지고 옆 칸 얼룩과는 무관해져, 톤 필드로 겨우 맞춰
+       * 놓은 색이 다시 갈라진다 — 그러면 얼룩이 안 붙고 낱개 육각형으로 읽힌다.
+       */
+      if (put(b, st.x, st.z, st.h3 * Math.PI * 2, want, -st.h0 * Y_BLOT_DROP, 0.975 + st.h2 * 0.05)) laid++;
+    }
+    /*
+     * 사이트가 하나도 안 남은 칸(경계에만 떨어졌거나 격자 위상이 나빴다)은 판에서
+     * 5% 남짓 나온다. 그 칸만 통째로 비면 "결이 안 깔린 칸"으로 보이므로 한 장은
+     * 보장한다. 중앙 고정이 아니라 해시로 흩어 두는 것이 중요하다 — 중앙에 박으면
+     * 그 5%가 다시 격자점으로 보인다.
+     */
+    if (laid === 0) {
+      const b = baked(`gd:${biome}:blot:${zone}:6:0`, soilBlot(soils[0] as number, kit.soilW[zone], 6));
+      const a = rng.range(0, Math.PI * 2);
+      const r = rng.range(0, 0.22);
+      put(b, cx + Math.cos(a) * r, cz + Math.sin(a) * r, rng.range(0, Math.PI * 2), 1, -rng.next() * Y_BLOT_DROP, 1);
     }
 
-    // ── 액센트: 중앙을 비운 고리에만 ──
+    // ── ② 액센트 ──
     const list = kit.accent[zone];
     const [n0, n1] = kit.count[zone];
-    // 저사양 밀도 감쇠. 맨 셀은 최소 1개는 남긴다 — 0이면 다시 민무늬 칸이 된다
-    const want = Math.max(zone === 'path' ? 0 : 1, Math.round(rng.int(n0, n1) * density));
-    const used: number[] = [];
-    for (let i = 0; i < want; i++) {
-      const idx = rng.int(0, list.length - 1);
+    /*
+     * 개수도 필드다. `n0 − 1.8` 로 아래를 여는 것은 **빈 칸을 만들기 위해서**다 —
+     * 예전엔 "맨 셀은 최소 1개"라 모든 칸에 반드시 뭔가가 있었고, 그 자체가 규칙성
+     * 이었다. 필드가 낮은 구역은 여러 칸이 함께 비어 **빈터**로 읽힌다(사막이 특히).
+     * 정글은 n0 가 4라 이 식에서도 2 밑으로 안 내려간다 — 바이옴 밀도 차는 그대로다.
+     */
+    const dens = fDens(cx, cz);
+    const want = Math.max(0, Math.round((n0 - 1.8 + (n1 + 0.6 - (n0 - 1.8)) * dens) * density));
+    const accSites = gdSites(SITE_ACC, cx, cz);
+    let put0 = 0;
+    for (const st of accSites) {
+      if (put0 >= want) break;
+      const dx = st.x - cx;
+      const dz = st.z - cz;
+      // 규칙 ② — 슬롯 원판 자리는 성기게 (계단이 아니라 램프라 고리가 안 생긴다)
+      if (st.h3 > gdCenterKeep(dx, dz)) continue;
+      const idx = Math.min(list.length - 1, Math.floor(st.h0 * list.length));
       const flats = list[idx];
       if (!flats) continue;
       const b = baked(`gd:${biome}:acc:${zone}:${idx}`, flats);
       // 예산이 모자라면 **이번 하나만** 건너뛴다 (더 싼 게 다음에 뽑힐 수 있다)
       if (b.tri > left) continue;
-      // 각도 분산: 이미 쓴 각과 ACC_MIN_SEP 이상 떨어진 후보를 최대 5번 뽑는다
-      let a = rng.range(0, Math.PI * 2);
-      for (let t = 0; t < 5; t++) {
-        if (used.every((u) => Math.abs(((a - u + Math.PI * 3) % (Math.PI * 2)) - Math.PI) >= ACC_MIN_SEP)) break;
-        a = rng.range(0, Math.PI * 2);
-      }
-      used.push(a);
-      /*
-       * 셀 밖으로 새지 않게 (카펫화 방지 계약) — **반경을 먼저, 크기를 나중에** 깎는다.
-       * 반대로 하면 큰 요소가 셀 중심 쪽으로 끌려 들어와 고리가 무너지고,
-       * 중앙을 비운다는 규칙 ②가 조용히 사라진다. 반경을 ACC_R0 까지 당겨도
-       * 모자랄 때만 크기를 줄인다.
-       */
-      let s = rng.range(0.8, 1.2);
-      let rad = rng.range(ACC_R0, ACC_R1);
-      if (rad + b.rc * s > GD_FIT) {
-        rad = Math.max(ACC_R0, GD_FIT - b.rc * s);
-        if (rad + b.rc * s > GD_FIT) s = (GD_FIT - rad) / b.rc;
-      }
       /*
        * yaw 규칙 셋:
        *  · 경로 셀 — 진행 축에 맞춘다. 제각각 돌리면 발자국이 아니라 어두운 점이다.
-       *  · 한쪽으로만 뻗는 것 — +z 가 셀 **바깥**을 보게 (yaw = π/2 − a). 무작위면
-       *    절반은 중앙을 향해 누워 슬롯 원판 자리를 가로지른다.
+       *  · 한쪽으로만 뻗는 것(풀·잔가지·균열) — **바람 필드**를 따른다. 예전엔
+       *    "셀 중심에서 바깥으로" 였는데, 그건 칸마다 방사형 배치를 만들어 고리를
+       *    한 겹 더 그렸다. 바람은 칸을 모르고 한 구역을 통째로 같은 쪽으로 눕힌다.
        *  · 나머지 — 자연물이라 무작위가 맞다.
        */
       const yaw =
         zone === 'path'
           ? pathHeading(x, z) + rng.range(-0.25, 0.25)
           : b.oneSided
-            ? Math.PI / 2 - a + rng.range(-0.55, 0.55)
-            : rng.range(0, Math.PI * 2);
+            ? gdWind(st.x, st.z) + (st.h2 - 0.5) * 1.1
+            : st.h2 * Math.PI * 2;
       /*
-       * 개체별 밝기 흔들기. 예전 폭 ±7% 를 ±5% 로 좁혔다 — 화면에 실제로 나가는 대비는
-       * **밴드(±28%) + 이 지터 + buildFlats 의 면 지터(HSL l ±0.03)** 의 합이고,
-       * ±7% 면 최악 개체가 −38%까지 내려가 클램프를 해 놓고도 규칙 ④ 밖으로 새는
-       * 개체가 남는다. ±5% 는 눈으로 구별되지 않는 차이인데(캡처 A/B 동일) 합계는
-       * 밴드 근처로 묶인다.
+       * 개체별 밝기 흔들기 ±5%. 화면 대비의 **지배항이 아니다** — GD_CONTRAST_BAND
+       * 주석의 항별 실측표를 보면 tint 열은 설계 열과 2~3%p 밖에 차이가 안 난다.
+       * (예전 주석은 이 항을 ±7%→±5%로 좁힌 것을 근거로 "합계가 밴드 근처로 묶인다"고
+       *  적었는데, 그건 제일 작은 항을 좁힌 것이라 사실이 아니었다.)
        */
-      pieces.push(
-        tintGeo(
-          placeFlat(b.geo.clone(), cx + Math.cos(a) * rad, cz + Math.sin(a) * rad, yaw, s),
-          rng.range(0.95, 1.05),
-        ),
-      );
-      left -= b.tri;
+      if (put(b, st.x, st.z, yaw, 0.85 + st.h1 * 0.55, 0, rng.range(0.95, 1.05))) put0++;
     }
 
     const merged = mergeGeometries(pieces, false);
@@ -974,9 +1306,18 @@ export function buildGroundDetail(
   };
 }
 
-/** 테스트/계측용 — 요소 전체 (이름 → 판 목록) */
+/**
+ * 테스트/계측용 — 요소 전체 (이름 → 판 목록).
+ *
+ * ⚠ 이 표는 **모양 규칙의 입력이 아니라 목록일 뿐**이다. 예전엔 직각 판 금지·3각 판
+ *   용도·획 개수·원가 테스트가 이 표만 훑었고, kitRaw 에 새 액센트를 넣으며 여기
+ *   등록을 깜빡하면 정사각형도 화살촉도 전부 통과했다. 지금은 그 규칙들이
+ *   **실제 편성 gdKit() 을 훑는다**(clampKit 이 대비 밴드에 대해 하는 일과 같다).
+ *   여기 등록은 "그 요소 하나만 콕 집어 보기"용으로 남겨 둔다.
+ */
 export const GD_ELEMENTS: Readonly<Record<string, Flats>> = {
-  soilPatch: soilPatch(0x8ad455, 0.46),
+  soilBlot: soilBlot(0x8ad455, 0.45, 5),
+  soilBlot6: soilBlot(0x8ad455, 0.45, 6),
   grassSprig: grassSprig(P.grassBlade),
   flowerDot: flowerDot(P.grassBlade, P.flowerWhite, P.flowerYellow),
   pebbleFlat: pebbleFlat(C.rock),

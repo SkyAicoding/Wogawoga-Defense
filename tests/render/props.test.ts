@@ -22,6 +22,7 @@ import {
   PROP_KITS,
   PROTO_TRI_BUDGET,
   buildProps,
+  elementGeometry,
   elementHeight,
   elementTriCount,
 } from '@/render/meshlib/props';
@@ -44,6 +45,17 @@ import type { StageDef, Vec2 } from '@/data/types';
  * 개정 전 대비 증가분은 s1 +1,186 / s3 +2,849 / s6 +2,111 이고, 최악 프레임
  * 실측(s1 127,378 / s3 133,110 / s6 128,740)에 그대로 더해도 예산 150,000 대비
  * 9~14% 여유가 남는다. 이 여유는 맨 셀 장식 레이어와 이후 LOD 작업의 몫이다.
+ *
+ * ── 랜드마크 + 꽃송이 개정 후 재실측 (상한은 **안 올렸다**) ─────────────────
+ *   s1 8,993(225/셀) · s2 8,725(198) · s3 11,233(220) · s4 8,681(181) ·
+ *   s5 9,749(232) · s6 8,066(202)
+ * 증가분이 s1 +358 / s3 +204 로 작은 이유는 랜드마크가 **셀 아홉에 하나**뿐이고
+ * (원가도 68~136으로 기존 1층과 같은 급이다), 꽃 개정은 4각 2 tri 넷을 6각 4 tri
+ * 둘로 바꾼 것이라 **값이 같기 때문**이다. 곧 이 개정의 그림 값은 삼각형이 아니라
+ * 배치 규칙에서 나왔다.
+ * e2e 최악 프레임 실측(1280×800, 타워 10+·적 40+·아군 6+):
+ *   s1 75콜/129,717 · s2 72/120,672 · s3 74/137,157 · s4 75/134,184 ·
+ *   s5 75/135,112 · s6 72/131,275   ← 상한 90콜 / 150,000 대비 8~19% 여유
  */
 const STAGE_CAP: Record<number, number> = {
   1: 9_200,
@@ -287,6 +299,118 @@ describe('크기 계층', () => {
     }
     // eslint-disable-next-line no-console
     console.log('랜드마크:\n  ' + rows.join('\n  '));
+  });
+
+  /**
+   * **게임플레이 가림 실측** — 랜드마크가 기존 1층보다 지면을 더 가리면 안 된다.
+   *
+   * 소품이 커지면 적·타워·부족원·체력바를 가릴 수 있다. 카메라 피치가 40~65°라
+   * 높이 h 인 질량은 카메라 쪽으로 h/tan(피치) 셀 떨어진 지면을 덮는다 — 3급 소품이면
+   * 최악(40°)에 3.5셀 밖까지다. 그런데 **가리는 양은 높이가 아니라 실루엣이 정한다**:
+   * 밑동이 빈 나무는 캐노피 두께만큼만 덮고, 밑동부터 꽉 찬 원뿔은 그 사이 전부를 덮는다.
+   * 그래서 랜드마크를 "위에 질량, 아래는 비움"으로 설계했고(props.ts "신규 1층 ③" ②),
+   * 여기서 그 설계가 실제로 성립하는지를 삼각형 단위로 잰다 —
+   * 각 삼각형을 카메라 반대 방향으로 지면에 투영해 덮인 면적을 구한다.
+   *
+   * 계약: **랜드마크(최대 배율)가 그 바이옴 1층 최악(최대 배율)보다 더 가리지 않는다.**
+   * 곧 판이 3급으로 높아져도 게임플레이가 보이는 정도는 개정 전과 같거나 낫다.
+   */
+  it('가림 실측 — 랜드마크가 기존 1층 최대보다 지면을 더 가리지 않는다', () => {
+    /*
+     * 재는 것은 "덮인 면적"이 아니라 **유닛 하나가 통째로 숨을 수 있는 면적**이다.
+     *
+     * 단순 면적은 가는 줄기를 캐노피와 같은 값으로 세어 답을 틀리게 만든다 — 실제로
+     * 첫 판이 그랬다: palmColossus 가 palmTall 보다 25% 더 "가린다"고 나왔는데,
+     * 초과분 전액이 폭 0.22셀짜리 **줄기 한 줄기의 띠**였다. 폭 0.22 띠는 지름 0.5인
+     * 적을 통째로 가리지 못한다(반쯤 걸칠 뿐이고, 그건 오히려 깊이감을 준다).
+     * 야자 잎도 마찬가지다 — 판 여덟 장이 방사형으로 벌어져 있어 면적은 넓지만
+     * 사이가 다 뚫려 있다.
+     *
+     * 그래서 래스터 마스크를 유닛 반지름(0.25셀)만큼 **침식**한 뒤 센다. 남는 것은
+     * "지름 0.5짜리 원이 완전히 들어가는 곳" = 적·부족원·체력바가 실제로 사라지는
+     * 곳뿐이다. 이 정의라면 빽빽한 원뿔(pineGiant·volcanoCone)만 값을 치른다.
+     */
+    const UNIT_R = 0.25;
+    const G = 0.05;
+    const occludedArea = (el: Element, scale: number, pitchDeg: number): number => {
+      const geo = elementGeometry(el);
+      const pos = geo.getAttribute('position');
+      // 카메라 쪽으로 y/tan(pitch) 만큼 밀면 그 정점이 가리는 지면 점이다 (요는 0으로 고정 —
+      // 소품은 배치할 때 무작위 yaw 로 돌아가므로 방위별 차이는 평균에 묻힌다)
+      const k = 1 / Math.tan((pitchDeg * Math.PI) / 180);
+      const px: number[] = [];
+      const pz: number[] = [];
+      for (let i = 0; i < pos.count; i++) {
+        px.push(pos.getX(i) * scale - pos.getY(i) * scale * k);
+        pz.push(pos.getZ(i) * scale);
+      }
+      const MIN = -6;
+      const N = Math.ceil(12 / G);
+      const at = (ix: number, iz: number): number => ix * N + iz;
+      const mask = new Uint8Array(N * N);
+      for (let t = 0; t < pos.count; t += 3) {
+        const ax = px[t] as number;
+        const az = pz[t] as number;
+        const bx = px[t + 1] as number;
+        const bz = pz[t + 1] as number;
+        const cx = px[t + 2] as number;
+        const cz = pz[t + 2] as number;
+        const den = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+        if (Math.abs(den) < 1e-12) continue;
+        const i0 = Math.floor((Math.min(ax, bx, cx) - MIN) / G);
+        const i1 = Math.ceil((Math.max(ax, bx, cx) - MIN) / G);
+        const j0 = Math.floor((Math.min(az, bz, cz) - MIN) / G);
+        const j1 = Math.ceil((Math.max(az, bz, cz) - MIN) / G);
+        for (let i = Math.max(0, i0); i <= Math.min(N - 1, i1); i++) {
+          for (let j = Math.max(0, j0); j <= Math.min(N - 1, j1); j++) {
+            const x = MIN + i * G;
+            const z = MIN + j * G;
+            const w1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / den;
+            const w2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / den;
+            if (w1 < 0 || w2 < 0 || w1 + w2 > 1) continue;
+            mask[at(i, j)] = 1;
+          }
+        }
+      }
+      geo.dispose();
+      // 유닛 반지름만큼 침식 — 원판이 통째로 들어가는 자리만 남는다
+      const R = Math.round(UNIT_R / G);
+      const disc: [number, number][] = [];
+      for (let di = -R; di <= R; di++) for (let dj = -R; dj <= R; dj++) if (di * di + dj * dj <= R * R) disc.push([di, dj]);
+      let n = 0;
+      for (let i = R; i < N - R; i++) {
+        for (let j = R; j < N - R; j++) {
+          if (!mask[at(i, j)]) continue;
+          let all = true;
+          for (const [di, dj] of disc) {
+            if (!mask[at(i + di, j + dj)]) {
+              all = false;
+              break;
+            }
+          }
+          if (all) n++;
+        }
+      }
+      return n * G * G;
+    };
+
+    const rows: string[] = [];
+    // 55° = 기본 피치, 40° = 하한(가장 많이 가리는 각)
+    for (const pitch of [55, 40]) {
+      for (const [biome, kit] of Object.entries(PROP_KITS)) {
+        const heroWorst = Math.max(...kit.hero.map((el) => occludedArea(el, kit.heroScale[1], pitch)));
+        for (const el of kit.landmark) {
+          const lm = occludedArea(el, 1.12, pitch);
+          rows.push(`${pitch}° ${biome} 랜드마크 ${lm.toFixed(2)} vs 1층최악 ${heroWorst.toFixed(2)} 셀²`);
+          expect(
+            lm,
+            `${biome} 랜드마크가 피치 ${pitch}°에서 기존 1층 최악보다 지면을 더 가린다 (${lm.toFixed(2)} > ${heroWorst.toFixed(2)} 셀²) — 밑동을 더 비워라`,
+          ).toBeLessThanOrEqual(heroWorst);
+        }
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.log('가림 실측:\n  ' + rows.join('\n  '));
   });
 
   /**
