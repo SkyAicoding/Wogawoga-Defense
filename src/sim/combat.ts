@@ -1,17 +1,78 @@
 /**
  * 데미지 파이프라인 — 방패 소진(피해 무효) → 흩어짐 비율 감산(폭발 한정) → armor 고정
  * 감산(최소 1) → 가죽 타격당 상한(최소 1) → hp 감소
- * → 사망 시 bounty 골드. 기지 누수는 baseDamaged로 이어진다.
+ * → **살점 값**: 몫 경계를 넘을 때마다 bounty의 몫, 사망 시 잔액 (settleBounty).
+ * 기지 누수는 baseDamaged로 이어진다 — 남은 몫은 몰수된다.
  * 타워 피해(적 부족의 공격)도 여기 있다 — 감쇠/방어 없이 정수 피해가 그대로 들어간다.
  * 상태이상 부여는 attack/status 쪽에서 담당 (순환 임포트 방지).
  */
 import type { AllyId, HometownSourceId, StatusKind, TowerId, TowerState } from '@/data/types';
-import { MITIGATED_MIN_SHARE, hideCapFor } from '@/data/balance';
+import {
+  BOUNTY_CHUNK_LIVE_DEN,
+  BOUNTY_CHUNK_LIVE_NUM,
+  MITIGATED_MIN_SHARE,
+  hideCapFor,
+} from '@/data/balance';
 import type { AllySim, EnemySim, SimCtx } from './entities';
 
 export function addGold(ctx: SimCtx, delta: number): void {
   ctx.view.gold += delta;
   ctx.events.push({ type: 'goldChanged', gold: ctx.view.gold, delta });
+}
+
+/**
+ * 지금까지 **도달한 몫** k (0 ~ K−1). 살점 값의 유일한 진행 지표다.
+ *
+ * 상한이 K가 아니라 **K−1**인 이유: 마지막 한 몫은 죽여야만 나간다. 그래야
+ *  (a) "처치"가 여전히 결말 노릇을 하고 — 99%를 깎아 놔도 마지막 몫은 안 준다,
+ *  (b) 누수 개체의 부분 지급이 한 몫만큼 덜 샌다(총량 팽창 억제).
+ * 두 목적이 이 한 줄에서 같이 나온다.
+ *
+ * hp가 음수(오버킬)면 bled > maxHp가 될 수 있지만 min이 K−1로 잘라 무해하다.
+ */
+function chunkReached(e: EnemySim): number {
+  const bled = e.maxHp - e.hp;
+  if (bled <= 0) return 0;
+  return Math.min(e.bountyChunks - 1, Math.floor((bled * e.bountyChunks) / e.maxHp));
+}
+
+/**
+ * 살점 값 정산 — 반환값 = **이번에 실제로 지급한 골드**(정수, 0이면 지급 없음).
+ * `final`은 사망 정산이며 잔액 전부를 낸다.
+ *
+ * 세 성질이 이 몇 줄에서 **저절로** 나온다 — 규칙을 따로 안 적었다:
+ *  · **총량 보존**: 죽으면 `owed = bounty`라 평생 지급 합계가 정확히 bounty다.
+ *    내림에서 생긴 나머지는 사망 잔액이 통째로 흡수한다.
+ *  · **오버킬 무해**: 마지막 일격이 maxHp의 100배여도 `owed`는 bounty가 상한이다.
+ *  · **힐 무해**: 회복으로 hp가 오르면 k가 내려가 `due`가 음수 → 지급 0. `bountyPaid`는
+ *    단조 증가라 되돌아가지 않으므로, 같은 구간을 다시 깎아도 0이다. 주술사
+ *    (`status.processHealAuras`) 옆에서 무한히 때려도 총액 상한이 bounty로 닫혀 있다.
+ *
+ * 골드 산술은 전부 정수다 — 부동소수는 k를 floor하는 한 번에만 닿고 **누적되지 않는다**.
+ * (`bountyPaid`에 float가 쌓이면 `hash()`의 `v.gold`가 흔들린다)
+ *
+ * 방패는 여기 못 온다: `damageEnemy`가 `e.hp`를 건드리기 **전에** return하므로
+ * "무효화된 타격에는 지급이 없다"가 코드 배치로 보장된다. armor·가죽·흩어짐은
+ * `dealt`를 줄여 hp를 덜 깎으므로 지급도 자동으로 덜 나간다 — 별도 분기가 필요 없다.
+ */
+function settleBounty(ctx: SimCtx, e: EnemySim, final: boolean): number {
+  let owed: number;
+  if (final) {
+    owed = e.bounty;
+  } else {
+    if (e.bountyChunks <= 1) return 0; // 잡몹 — 오늘과 완전히 같은 경로
+    // 생전 지급은 **할인된다**(BOUNTY_CHUNK_LIVE_* 주석에 실측 유도가 있다).
+    // 정수 산술 그대로다: bounty ≤ 480 · NUM 2 · k ≤ 23 → 분자 최대 22,080.
+    owed = Math.floor(
+      (e.bounty * BOUNTY_CHUNK_LIVE_NUM * chunkReached(e)) /
+        (BOUNTY_CHUNK_LIVE_DEN * e.bountyChunks),
+    );
+  }
+  const due = owed - e.bountyPaid;
+  if (due <= 0) return 0;
+  e.bountyPaid = owed;
+  addGold(ctx, due);
+  return due;
 }
 
 /**
@@ -98,9 +159,12 @@ export function damageEnemy(
     shielded: false,
     ...(mitigated ? { mitigated } : {}),
   });
+  // 살점 값 — **지급이 enemyDied/bountyChunk보다 먼저 push되는 순서를 지킨다.**
+  // 계측 하네스가 "원인은 이벤트 스트림 바로 뒤에서 읽는다"는 규약 위에 서 있어서,
+  // 순서를 뒤집으면 봉투 측정이 조용히 오귀속된다.
   if (e.hp <= 0) {
     e.alive = false;
-    addGold(ctx, e.bounty);
+    const paid = settleBounty(ctx, e, true); // 잔액 전부 — 총액이 정확히 bounty가 된다
     ctx.events.push({
       type: 'enemyDied',
       enemyId: e.id,
@@ -108,8 +172,23 @@ export function damageEnemy(
       x: e.x,
       z: e.z,
       bounty: e.bounty,
+      goldNow: paid,
       maxHp: e.maxHp,
     });
+  } else {
+    const paid = settleBounty(ctx, e, false);
+    if (paid > 0) {
+      ctx.events.push({
+        type: 'bountyChunk',
+        enemyId: e.id,
+        defId: e.defId,
+        x: e.x,
+        z: e.z,
+        gold: paid,
+        chunk: chunkReached(e),
+        chunks: e.bountyChunks,
+      });
+    }
   }
   return dealt;
 }
@@ -191,11 +270,23 @@ export function damageAlly(ctx: SimCtx, a: AllySim, amount: number, attacker: En
   return dealt;
 }
 
-/** 기지 도달 — 사망 이벤트 없이 제거 표시, 기지 피해. 패배 판정은 battle.checkEnd에서. */
+/**
+ * 기지 도달 — 사망 이벤트 없이 제거 표시, 기지 피해. 패배 판정은 battle.checkEnd에서.
+ *
+ * **여기서는 정산하지 않는다.** 이미 넘은 몫은 이미 받았고, 남은 몫(`forfeited`)은
+ * 몰수된다 — 부분 지급을 인정할지의 결정이 코드가 아니라 구조에서 나온다. 이 설계에서
+ * 총량이 움직이는 **유일한** 자리라 계측 가능해야 해서 이벤트에 싣는다.
+ */
 export function leakEnemy(ctx: SimCtx, e: EnemySim): void {
   if (!e.alive) return;
   e.alive = false;
-  ctx.events.push({ type: 'enemyLeaked', enemyId: e.id, defId: e.defId, baseDamage: e.baseDamage });
+  ctx.events.push({
+    type: 'enemyLeaked',
+    enemyId: e.id,
+    defId: e.defId,
+    baseDamage: e.baseDamage,
+    forfeited: Math.max(0, e.bounty - e.bountyPaid),
+  });
   ctx.view.baseHp = Math.max(0, ctx.view.baseHp - e.baseDamage);
   ctx.events.push({ type: 'baseDamaged', amount: e.baseDamage, hpLeft: ctx.view.baseHp });
 }

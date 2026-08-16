@@ -230,7 +230,9 @@ class Battle implements BattleSim {
     // endless: waveCount 초과분은 hpMul × 1.06^(wave-waveCount) 추가
     const extra = wave > v.waveCount ? ENDLESS_HP_GROWTH ** (wave - v.waveCount) : 1;
     this.waveDef = def;
-    this.spawner.start(def, extra);
+    // ctx를 넘기는 이유: 살점 값의 기준 HP(마릿수 가중 중앙값)를 웨이브당 한 번
+    // 굳혀야 하고, 그 계산에 enemyDefs가 필요하다 (waves.medianSpawnHp)
+    this.spawner.start(ctx, def, extra);
     ctx.events.push({ type: 'waveStarted', wave });
   }
 
@@ -468,6 +470,13 @@ class Battle implements BattleSim {
       // 봉쇄/난투 — 봉쇄는 이동·공성·반격을 동시에 바꾸므로 1틱만 어긋나도 전부 갈라진다
       h = mix(h, e.blockerAllyId);
       h = mix(h, e.brawlCdLeft);
+      // 살점 값의 지급 이력 — **hp에서 유도되지 않는다.** 회복(healAura)으로 hp가
+      // 되돌아온 적은 hp가 같아도 bountyPaid가 다르고, 곧 앞으로 받을 돈이 다르다.
+      // 풀 재사용 리셋 누락(resetEnemy)도 여기서만 그 틱에 드러난다 — v.gold로도
+      // 갈리긴 하지만 그 발산은 몇 백 틱 뒤에나 보인다.
+      // (bountyChunks는 안 넣는다: 스폰 시 maxHp·bounty·refHp에서 결정되는 상수라
+      //  그것이 갈리면 bountyPaid가 반드시 먼저 갈린다)
+      h = mix(h, e.bountyPaid);
     }
     // 아군 부족원 — 위치/걸은 거리/목표/체력/쿨다운/타깃 전부. 하나라도 빠지면
     // "언제 누가 어디서 죽는가"의 발산을 해시가 놓친다.

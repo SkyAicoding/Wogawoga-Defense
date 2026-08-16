@@ -51,6 +51,33 @@ export interface EnemySim extends EnemyState {
    * (stage6은 hpBase만 2.2다) **초과분에만** 건다.
    */
   siegeMul: number;
+  /**
+   * 살점 값의 **몫 수 K** — 이 개체가 이번 웨이브의 표준 사냥감 몇 마리분인가.
+   * 스폰 시 `balance.bountyChunksFor`로 굳는다. **1이면 오늘과 완전히 같다**(사망 시 한 번).
+   *
+   * 공개 `EnemyState`에 안 올린다: 렌더가 알아야 할 것은 "방금 얼마 들어왔나"뿐이고
+   * 그건 `bountyChunk` 이벤트가 말한다. 여기 두면 UI가 몫 게이지를 그리려 들고,
+   * 그 순간 연출이 지급 판정을 흉내 내기 시작한다 (`siegeWalkLeft`와 같은 논거).
+   */
+  bountyChunks: number;
+  /**
+   * 이 개체에게 **이미 지급한** 골드 누계(정수). 사망 지급은 `bounty − 이 값`이다.
+   *
+   * ⚠ **이 한 필드가 정확성의 뿌리다.** 지급은 언제나
+   * `floor(bounty × k / K) − bountyPaid`이고 **양수일 때만** 나가므로 이 값은 절대 안 줄고,
+   * 곧 "그 개체가 **도달한 최저 HP**"를 골드 단위로 기록한 것과 같다:
+   *  · 주술사(`status.processHealAuras`)가 hp를 되돌리면 k가 내려가 지급이 음수 → 0.
+   *    같은 구간을 다시 깎아도 0. **더 아래로** 내려가야 비로소 다음 몫이 나온다.
+   *    곧 "회복시킨 적을 반복해 때려 골드 무한 파밍"이 **자료구조로** 불가능하다.
+   *  · 오버킬로 hp가 −99,999가 되어도 총 지급은 bounty를 못 넘는다(k ≤ K).
+   * 되돌림 방어를 규칙으로 따로 적지 않은 이유가 이것이다 — 규칙은 잊히지만 표현은
+   * 안 잊힌다. 별도의 `lowHp` 필드를 두지 **않은** 이유이기도 하다: 두 필드가 동시에
+   * 정확해야 안전한 설계는 리셋 누락 하나가 곧 골드 누수다.
+   *
+   * **정수다.** 분수 골드를 float로 누적하면 `hash()`의 `v.gold`가 흔들린다 —
+   * 스폰의 `bounty` 자체를 정수로 굳혀 둔 것(`waves.spawn`)과 같은 이유다.
+   */
+  bountyPaid: number;
 }
 
 /**
@@ -96,6 +123,8 @@ function makeEnemy(): EnemySim {
     siegeMul: 1,
     brawlCdLeft: 0,
     siegeWalkLeft: 0,
+    bountyChunks: 1,
+    bountyPaid: 0,
   };
 }
 
@@ -115,6 +144,20 @@ function resetEnemy(e: EnemySim): void {
   e.siegeMul = 1;
   e.blockerAllyId = -1;
   e.brawlCdLeft = 0;
+  // 살점 값의 **지급 이력**도 같다 — 안 지우면 trex(bountyPaid 480)를 죽인 슬롯을
+  // 물려받은 compy가 "이미 480을 받은 적"으로 취급돼 평생 한 푼도 못 받는다.
+  // 그 감소량이 풀 재사용 순서를 타므로 시드마다 갈리고, 곧 hash()가 갈린다.
+  //
+  // 기본값 1/0 은 **안전한 쪽으로 고장 난다**: bountyChunks 가 1이면 combat 의
+  // 진행 지급 분기가 통째로 꺼져 오늘과 똑같이 "사망 시 한 번"이 된다.
+  // (0 이면 나눗셈이 Infinity 로 터지고, 이전 개체의 큰 값이 남으면 첫 타격에
+  //  여러 몫이 한꺼번에 나간다 — 둘 다 조용히 골드를 새게 하는 방향이다.)
+  //
+  // ⚠ 여기서 `e.maxHp` 를 읽어 감시값을 만들면 안 된다. resetEnemy 는 Pool.acquire
+  // 시점에 돌아 **그 시점의 maxHp 는 아직 이전 개체 것**이고, waves.spawn 이 그 뒤에
+  // 새 값을 넣는다. 상수 1/0 은 그 순서에 의존하지 않는다.
+  e.bountyChunks = 1;
+  e.bountyPaid = 0;
 }
 
 /** 아군 유닛 내부 확장 — 정의 참조만 더한다 (상태이상이 없어 EnemySim보다 얇다) */

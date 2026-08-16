@@ -473,6 +473,33 @@ describe('결정론', () => {
    *  · siegeWalkLeft  — 언제 다시 멈출 수 있는가 (앞으로의 정지 시점 전부를 바꾼다)
    *  · attackAnimLeft — 연출 전용이지만 타격 시점의 파생값이라, 갈리면 "언제 쐈는가"가 갈렸다는 뜻
    */
+  /**
+   * 살점 값의 지급 이력(`bountyPaid`)이 hash()에 들어가는지.
+   *
+   * 왜 `hp`만으로는 못 잡는가: 이 값은 **hp에서 유도되지 않는다.** 주술사 힐로 hp가
+   * 되돌아온 적은 hp가 같아도 bountyPaid가 다르고, 곧 앞으로 받을 돈이 다르다.
+   * 그리고 `resetEnemy`의 리셋 누락(풀 재사용 누출)은 `v.gold`로도 결국 갈리지만
+   * 그 발산은 **몇 백 틱 뒤**에나 드러난다 — 여기 있어야 새는 그 틱에 잡힌다.
+   */
+  it('살점 값의 지급 이력(bountyPaid)이 hash()에 들어간다', () => {
+    const sim = makeRaidSim(2024);
+    let ticked = 0;
+    // 실제로 지급이 일어난 뒤에 흔든다 — 0을 1로 바꾸는 것과 구분되게
+    while (ticked++ < 1200) {
+      for (const [at, cmd] of RAID_SCRIPT) if (at === ticked - 1) sim.applyCommand(cmd);
+      sim.tick();
+      sim.drainEvents();
+      if (sim.state.enemies.length > 0) break;
+    }
+    const target = sim.state.enemies[0];
+    expect(target, '관측할 적이 있다').toBeDefined();
+    const h0 = sim.hash();
+    // bountyPaid는 EnemyState에 없는 내부 필드라 캐스트로 흔든다 (의도된 비공개)
+    const obj = target as unknown as Record<string, number>;
+    obj['bountyPaid'] = (obj['bountyPaid'] ?? 0) + 1;
+    expect(sim.hash(), 'bountyPaid가 해시에 없다').not.toBe(h0);
+  });
+
   it('정지 사격 상태 셋이 각각 hash()에 들어간다', () => {
     const fields = ['siegeHoldLeft', 'siegeWalkLeft', 'attackAnimLeft'] as const;
     for (const f of fields) {
