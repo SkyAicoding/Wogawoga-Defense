@@ -21,6 +21,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { BattleSim, EnemyId, SimEvent, TowerId } from '@/data/types';
+import { TICK_RATE } from '@/data/types';
 import {
   BOUNTY_CHUNK_LIVE_DEN,
   BOUNTY_CHUNK_LIVE_NUM,
@@ -29,7 +30,7 @@ import {
   bountyChunksFor,
 } from '@/data/balance';
 import { createBattle } from '@/sim/battle';
-import { makeBotSim } from './botharness';
+import { makeBotSim, runBot } from './botharness';
 import { enemyDefs, eventsOf, options, runTicks, stageDef, tier, towerDefs, wave } from './fixtures';
 
 /** 이 판에서 **전투로** 들어온 골드만 (웨이브 클리어·조기 호출·환불을 뺀 순수 지급) */
@@ -468,6 +469,135 @@ describe('방치해도 여전히 진다 (봉투 5번의 골드 축)', () => {
       `처치 ${eventsOf(events, 'enemyDied').length}마리)`;
     expect(fromCombat, msg).toBeLessThan(100);
   }, 30_000);
+});
+
+/**
+ * ── **무수입 공백 회귀 가드** — 이 변경 전체의 존재 이유 ────────────────────────
+ *
+ * 살점 값이 왜 있는가는 산술 불변식이 아니라 **사용자 제보** 하나다: "큰 짐승을 씹는
+ * 동안 화면에서 돈이 한 푼도 안 들어온다." 그런데 이 저장소에서 그 제보를 재는 것은
+ * 지금까지 **주석뿐**이었다 — `balance.ts`의 `BOUNTY_CHUNK_*` 절과 `hometown.ts`의
+ * '살점 값 단계' 절이 초 단위 실측을 적어 두었지만, **어떤 테스트도 그것을 안 쟀다.**
+ * 곧 살점 값을 통째로 되돌려도 봉투를 포함해 전 스위트가 초록이었다. 여기서 메운다.
+ *
+ * ── 무엇을 재는가 (정의를 못 박는다) ───────────────────────────────────────────
+ * **웨이브 안에서** 전투 수입 사건 사이에 흐른 최장 시간(초). 전투 수입 사건은
+ * `bountyChunk`(살점 몫)와 `enemyDied.goldNow > 0`(사망 잔액) 둘뿐이다.
+ *  · 시계는 `waveStarted`에서 시작해 `waveCleared`에서 닫는다 — **prep은 안 센다.**
+ *    준비 시간은 설계가 일부러 만든 정지이고, 그걸 포함하면 지표가 "웨이브 간격"을
+ *    같이 재게 되어 제보와 다른 것을 잰다.
+ *  · 웨이브 보상·조기 호출 보너스는 **수입으로 안 친다.** 제보는 "적을 때리는데 돈이
+ *    안 들어온다"이지 "잔고가 안 는다"가 아니다(그 둘을 섞으면 웨이브 클리어 한 번이
+ *    공백을 통째로 지운다).
+ * 이 정의는 `balance.ts`·`hometown.ts`가 이미 인용하고 있는 값을 **소수점까지 재현한다**
+ * (아래 문턱 유도의 26.77 / 124.03 / 132.93초). 곧 새 잣대가 아니라 그 기록의 자다.
+ *
+ * ── 표본: 20시드 × **독립 4블록** (시작점 1000/2000/5000/9000, 공차 37) ─────────
+ * 한 블록만 보고 판단하지 않는다 — 이 파일 옆의 `autoplay.test.ts`가 8·10·15단계에
+ * 세 번 걸린 병이 정확히 그것이다. 시작점들은 37과 서로소라 네 블록이 완전히 분리된다.
+ * 20시드로 줄인 이유는 실행 시간이다 — 4블록 80판이 약 20초이고, 80시드로 올리면 8배가
+ * 된다(이 파일 전체가 그만큼 느려진다). 20이면 충분한 근거는 **분포**다: 이 지표는
+ * 승수와 달리 판마다 좁게 몰려 있다(c5ebaad 실측 · 블록별 중앙 20.53 / 21.40 / 21.27 /
+ * 21.13초 · 평균 20.69 / 21.61 / 21.39 / 21.14초 · 최악 26.77~28.27초). 곧 분산이 작아
+ * 20판이면 블록 최악이 이미 안정적이고, 이 가드가 잡으려는 회귀(3~4.7배 급등)는
+ * **한 시드만 봐도 보인다** — 배포본에서는 20/20 시드가 전부 문턱을 넘었다.
+ *
+ * ── 문턱 40초 — **현상 고정이 아니라 회귀 가드다** ─────────────────────────────
+ * ```
+ *   블록                          1000      2000      5000      9000
+ *   배포본 25f2b57 (살점 값 없음) 124.03    124.53    132.93    119.40   초
+ *     └ 그 트리에서 40초를 넘긴 시드  20/20     20/20     20/20     20/20
+ *   c5ebaad (살점 값 2/3)          26.77     27.97     27.87     28.27   초
+ *   지금 (+ 2번 복구: archer.dmg 6 · PLACEMENT_GROWTH 1.11)
+ *                                **35.40**   26.63     30.73     28.77   초
+ * ```
+ * 배포본 숫자는 `git archive 25f2b57`로 뽑은 별도 트리에서 **같은 정의**로 잰 값이다
+ * (그 트리에는 `bountyChunk`가 없으므로 전투 수입 사건은 `enemyDied.bounty` 하나다).
+ * blk1000 124.03초와 blk5000 132.93초는 `hometown.ts`가 인용한 값과 소수점까지 같다.
+ *
+ * 문턱을 실측에 붙이지 않고 **40초**에 두는 이유:
+ *  · 이건 "지금 값을 못 박는 자물쇠"가 아니라 **"제보 상태로 돌아가지 않는다"**는 선언이다.
+ *    28초에 붙였다면 바로 위 2번 복구(파괴 지표를 되살린 밸런스 변경)가 이 파일에서
+ *    먼저 빨개졌을 것이고, 그러면 다음 사람이 고치는 것은 게임이 아니라 **문턱**이 된다
+ *    (이 저장소가 반복해서 후회한 경로다).
+ *  · 40초는 배포본 최악(132.93초)의 **0.30배**다. 곧 제보 상태로 **절반만** 되돌아가도
+ *    빨갛다 — 이 가드가 실제로 잡으라고 만들어진 것이 그것이다.
+ *  · 40초라는 크기 자체의 뜻: 스테이지1 웨이브 하나가 대략 2분이므로 40초는
+ *    **웨이브의 1/3**이다. 그보다 오래 무수입이면 플레이어는 한 웨이브 안에서
+ *    "아무 일도 안 일어난다"를 체감한다 — 제보가 말한 것이 그 크기다.
+ *
+ * ⚠ **여유가 얇아졌다. 다음 사람은 이 줄부터 보라.** c5ebaad에서는 최악 28.27초로
+ *   여유가 11.7초였는데, 2번 복구가 blk1000을 26.77 → **35.40초**로 밀어 올려
+ *   여유가 **4.6초(11.5%)**만 남았다. 그 변경 자체는 이 가드를 통과하고 파괴 지표를
+ *   되살렸으므로 옳지만, 골드 도착 시각을 건드리는 손잡이가 하나 더 들어오면
+ *   여기가 먼저 빨개진다. 그때 고칠 것은 **문턱이 아니라 골드 곡선**이다 —
+ *   문턱 40초의 근거는 위 세 줄이고 실측에서 유도된 값이 아니다.
+ *
+ * ⚠ 이 가드는 **판별력이 방향성 있게 크다**: 살점 값을 지우면 4블록 전부 **4.2~4.8배**로
+ *   튀고 20/20 시드가 문턱을 넘는다. 반대로 `BOUNTY_CHUNK_MAX`를 줄이는 손잡이도
+ *   여기서 먼저 걸린다(그 상수 주석이 "공백 단축 효과를 직접 반납한다"고 적은 자리다).
+ */
+describe('무수입 공백 — 사용자 제보 회귀 가드', () => {
+  const STAGE1_DECK: TowerId[] = ['spear', 'catapult', 'frost'];
+  /** 20시드 × 독립 4블록. 시작점은 37과 서로소라 네 블록이 겹치지 않는다 */
+  const BLOCKS = [1000, 2000, 5000, 9000];
+  const blockSeeds = (start: number): number[] =>
+    Array.from({ length: 20 }, (_, i) => start + 37 * i);
+  /** 문턱(초) — 배포본 최악 132.93초의 **0.30배**. 지금 최악은 35.40초(여유 4.6초) */
+  const MAX_GAP_SEC = 40;
+
+  /** 한 판의 **웨이브 안 최장 무수입 구간**(초). 정의는 위 헤더 절 참조 */
+  function worstGap(seed: number): { sec: number; incomes: number } {
+    const { sim, stage } = makeBotSim(1, seed, STAGE1_DECK);
+    let worstTicks = 0;
+    let lastTick = -1; // −1 = 웨이브 밖 (prep은 안 센다)
+    let incomes = 0;
+    runBot(sim, stage, {
+      onEvent: (ev) => {
+        const t = sim.state.tick;
+        if (ev.type === 'waveStarted') {
+          lastTick = t;
+          return;
+        }
+        if (lastTick < 0) return;
+        const gotGold =
+          (ev.type === 'bountyChunk' && ev.gold > 0) ||
+          (ev.type === 'enemyDied' && ev.goldNow > 0);
+        if (gotGold) {
+          incomes++;
+          if (t - lastTick > worstTicks) worstTicks = t - lastTick;
+          lastTick = t;
+        } else if (ev.type === 'waveCleared') {
+          // 웨이브의 꼬리도 공백이다 — 마지막 수입 뒤 판이 끝날 때까지 흐른 시간
+          if (t - lastTick > worstTicks) worstTicks = t - lastTick;
+          lastTick = -1;
+        }
+      },
+    });
+    return { sec: worstTicks / TICK_RATE, incomes };
+  }
+
+  it('스테이지1 기준선 봇의 전투 수입 무수입 구간 최악이 40초를 넘지 않는다 (독립 4블록)', () => {
+    const lines: string[] = [];
+    for (const start of BLOCKS) {
+      const seeds = blockSeeds(start);
+      const runs = seeds.map((s) => ({ seed: s, ...worstGap(s) }));
+      const worst = runs.reduce((a, r) => (r.sec > a.sec ? r : a));
+      const over = runs.filter((r) => r.sec > MAX_GAP_SEC);
+      lines.push(
+        `blk${start} 최악 ${worst.sec.toFixed(2)}초(시드 ${worst.seed}) · ` +
+          `평균 ${(runs.reduce((a, r) => a + r.sec, 0) / runs.length).toFixed(2)}초 · ` +
+          `문턱 초과 ${over.length}/20`,
+      );
+      // 검증이 공허하지 않은지 — 전투 수입이 **실제로** 있었고 공백도 실제로 쟀어야 한다.
+      // (살점 값 경로가 통째로 죽으면 incomes가 0이 되어 gap도 0이 될 수 있다)
+      const totalIncomes = runs.reduce((a, r) => a + r.incomes, 0);
+      expect(totalIncomes, `blk${start}: 전투 수입 사건이 하나도 없다`).toBeGreaterThan(0);
+      expect(worst.sec, `blk${start}: 공백이 0이면 계측이 안 돈 것이다`).toBeGreaterThan(0);
+      // ── 본체 ──
+      expect(worst.sec, lines.join(' / ')).toBeLessThanOrEqual(MAX_GAP_SEC);
+    }
+  }, 300_000);
 });
 
 /** 이 파일이 실제 데이터를 안 쓰는 대신, 상수의 뜻이 흔들리면 알아채게 한다 */
