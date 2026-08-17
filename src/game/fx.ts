@@ -60,8 +60,10 @@ const RAID_SHOT_FX_MAX = 6;
 /**
  * 한 배치에서 그릴 **살점 값(부분 지급)** 팝업 수 상한.
  *
- * sim 쪽이 이미 한 겹 걸러 준다 — 몫은 개체당 최대 23회이고 잡몹은 K=1이라 한 번도
- * 안 낸다(실측 초당 약 1건). 그런데도 상한을 두는 이유: 투석기 한 방이 여러 큰 적의
+ * sim 쪽이 이미 한 겹 걸러 준다 — 몫은 개체당 최대 23회이고, 제 무리와 함께 나오는
+ * 잡몹은 덩치 상한(`round(maxHp/refHp)`)이 1이라 한 번도 안 낸다(실측 초당 약 1건).
+ * (compy만 골드 상한으로도 K=1이 확정이고, raptor·blade·archer는 2·4·5다 —
+ *  balance.bountyChunksFor). 그런데도 상한을 두는 이유: 투석기 한 방이 여러 큰 적의
  * 몫 경계를 **동시에** 넘길 수 있고, 4배속에서는 그런 틱이 한 배치에 몰려 들어온다.
  * 초과분은 **골드는 그대로 들어오고 팝업만 버린다** — HUD 잔액은 goldChanged를 보고
  * 매 프레임 다시 읽으므로 숫자가 어긋나지 않는다.
@@ -498,9 +500,11 @@ export class FxRouter {
             this.shake(0.03 * s);
           }
           const p = this.worldToScreen(ev.x, 1.3, ev.z);
-          // **bounty가 아니라 goldNow다.** 살점 값이라 큰 적은 죽기 전에 이미 대부분을
-          // 냈다(K=24 trex는 여기 20, 나머지 460은 bountyChunk로 이미 떴다).
+          // **bounty가 아니라 goldNow다.** 살점 값이라 큰 적은 죽기 전에 일부를 이미 냈다
+          // (K=24 trex는 여기 **174**, 나머지 **306**이 bountyChunk로 먼저 떴다 —
+          //  생전 지급에 2/3 할인이 걸려 있다. balance.BOUNTY_CHUNK_LIVE_NUM/DEN).
           // `+bounty`를 그리면 화면에 뜬 숫자의 합이 실제 잔액보다 커진다 = 거짓말이다.
+          // ⚠ 이 주석은 폐기된 1/1 설계의 "20 / 460"을 적고 있었다(실제와 8.7배 차이).
           if (p && ev.goldNow > 0) {
             spawnDamageNumber(p.sx, p.sy, `+${ev.goldNow}`, 'gold', clamp(s * 0.75, 0.9, 1.6));
           }
