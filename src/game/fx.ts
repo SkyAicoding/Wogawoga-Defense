@@ -57,6 +57,18 @@ const ALLY_SHOT_FX_MAX = 3;
  * 발사가 통째로 사라지면 무리 절반이 팔만 흔드는 그림이 된다.
  */
 const RAID_SHOT_FX_MAX = 6;
+/**
+ * 한 배치에서 그릴 **살점 값(부분 지급)** 팝업 수 상한.
+ *
+ * sim 쪽이 이미 한 겹 걸러 준다 — 몫은 개체당 최대 23회이고, 제 무리와 함께 나오는
+ * 잡몹은 덩치 상한(`round(maxHp/refHp)`)이 1이라 한 번도 안 낸다(실측 초당 약 1건).
+ * (compy만 골드 상한으로도 K=1이 확정이고, raptor·blade·archer는 2·4·5다 —
+ *  balance.bountyChunksFor). 그런데도 상한을 두는 이유: 투석기 한 방이 여러 큰 적의
+ * 몫 경계를 **동시에** 넘길 수 있고, 4배속에서는 그런 틱이 한 배치에 몰려 들어온다.
+ * 초과분은 **골드는 그대로 들어오고 팝업만 버린다** — HUD 잔액은 goldChanged를 보고
+ * 매 프레임 다시 읽으므로 숫자가 어긋나지 않는다.
+ */
+const BOUNTY_CHUNK_FX_MAX = 4;
 
 export function fxStrength(dmg: number, tier: number): number {
   const d = Math.max(1, dmg);
@@ -346,6 +358,8 @@ export class FxRouter {
   private towerHits = 0;
   private allyShots = 0;
   private raidShots = 0;
+  /** 살점 값 부분 지급 팝업 — 배치당 상한 (BOUNTY_CHUNK_FX_MAX) */
+  private bountyChunks = 0;
   /**
    * 살아 있는 적의 종 — 데미지 숫자 표기 규약이 armor를 알아야 해서 스폰 때 기억한다.
    * **연출 전용 표다.** 시뮬레이션은 이 표를 모르고, 여기 값이 틀려도 판정은 안 바뀐다.
@@ -395,6 +409,7 @@ export class FxRouter {
     this.towerHits = 0;
     this.allyShots = 0;
     this.raidShots = 0;
+    this.bountyChunks = 0;
     for (const ev of events) {
       switch (ev.type) {
         case 'waveStarted': {
@@ -485,8 +500,31 @@ export class FxRouter {
             this.shake(0.03 * s);
           }
           const p = this.worldToScreen(ev.x, 1.3, ev.z);
-          if (p) spawnDamageNumber(p.sx, p.sy, `+${ev.bounty}`, 'gold', clamp(s * 0.75, 0.9, 1.6));
+          // **bounty가 아니라 goldNow다.** 살점 값이라 큰 적은 죽기 전에 일부를 이미 냈다
+          // (K=24 trex는 여기 **174**, 나머지 **306**이 bountyChunk로 먼저 떴다 —
+          //  생전 지급에 2/3 할인이 걸려 있다. balance.BOUNTY_CHUNK_LIVE_NUM/DEN).
+          // `+bounty`를 그리면 화면에 뜬 숫자의 합이 실제 잔액보다 커진다 = 거짓말이다.
+          // ⚠ 이 주석은 폐기된 1/1 설계의 "20 / 460"을 적고 있었다(실제와 8.7배 차이).
+          if (p && ev.goldNow > 0) {
+            spawnDamageNumber(p.sx, p.sy, `+${ev.goldNow}`, 'gold', clamp(s * 0.75, 0.9, 1.6));
+          }
           audio.play('enemyDie');
+          break;
+        }
+        case 'bountyChunk': {
+          // 살점 값 — 큰 짐승 옆에서 작은 금색 숫자가 규칙적으로 튀는 그림이 곧
+          // "살점을 떼고 있다"의 시각적 뜻이다. 사망 숫자(0.9~1.6)보다 **항상 작게**
+          // 그려 "부분 지급"과 "처치"가 크기로 구분된다. 마지막 몫만 살짝 키워 결말을 예고한다.
+          //
+          // 파티클·화면 흔들림·진동·효과음은 **일부러 안 붙인다** — 그 넷은 처치의 몫이다.
+          // 초당 1건이라도 코인 소리가 붙으면 그 순간 배경음이 된다.
+          if (this.bountyChunks >= BOUNTY_CHUNK_FX_MAX) break;
+          this.bountyChunks++;
+          const p = this.worldToScreen(ev.x, 1.15, ev.z);
+          if (p) {
+            const last = ev.chunk >= ev.chunks - 1;
+            spawnDamageNumber(p.sx, p.sy, `+${ev.gold}`, 'gold', last ? 0.8 : 0.55);
+          }
           break;
         }
         case 'towerPlaced': {

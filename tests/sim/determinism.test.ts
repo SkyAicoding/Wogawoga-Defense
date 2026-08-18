@@ -137,6 +137,49 @@ function makeRaidSim(seed: number): BattleSim {
   );
 }
 
+/**
+ * **살점 값 시나리오** — 몫 지급(`bountyPaid > 0`)이 실제로 일어나는 유일한 판.
+ *
+ * 왜 습격대 판을 못 쓰는가: `fixtures.enemyDef`의 기본 bounty가 5라 골드 상한
+ * `floor(5/4)` = 1 이고, `bountyChunksFor`가 K=1을 주면 `settleBounty`가 생전 지급을
+ * 통째로 막는다. 곧 그 판에서는 사망 전까지 지급이 **원리상 불가능**하다.
+ * 여기서는 잡몹(hp 20) 여섯에 큰 적(hp 1,200 · bounty 480) 하나를 섞는다 —
+ * 중앙 HP(refHp)가 20이 되어 큰 적의 K가 `min(round(1200/20), floor(480/4), 24)` = **24**다.
+ * 실측: 틱 522에 `bountyPaid` = **13**(첫 몫), 판 전체에서 몫 이벤트 3건.
+ */
+const BOUNTY_SCRIPT: [number, BattleCommand][] = [
+  [2, { type: 'placeTower', handIndex: 0, cellX: 1, cellZ: 1 }],
+  [3, { type: 'placeTower', handIndex: 1, cellX: 4, cellZ: 1 }],
+  [4, { type: 'placeTower', handIndex: 2, cellX: 7, cellZ: 3 }],
+  [6, { type: 'callWave' }],
+];
+
+function makeBountySim(seed: number): BattleSim {
+  return createBattle(
+    options({
+      seed,
+      endless: true,
+      deck: ['spear', 'frost', 'catapult'],
+      stage: stageDef({ waveCount: 2, baseHp: 9999, startGold: 100000 }),
+      enemyDefs: enemyDefs({
+        raptor: { hp: 20, speed: 0.5, bounty: 5 },
+        trex: { hp: 1200, speed: 0.18, bounty: 480 },
+      }),
+      towerDefs: towerDefs(),
+      waves: [
+        wave([
+          { enemyId: 'raptor', count: 6, intervalTicks: 10 },
+          { enemyId: 'trex', count: 1, intervalTicks: 10, delayTicks: 5 },
+        ]),
+        wave([{ enemyId: 'raptor', count: 4, intervalTicks: 10 }]),
+      ],
+    }),
+  );
+}
+
+/** bountyPaid는 EnemyState에 없는 내부 필드다 (의도된 비공개) — 읽기만 하는 좁은 창 */
+const paidOf = (e: EnemyState): number => (e as unknown as { bountyPaid?: number }).bountyPaid ?? 0;
+
 function runRaid(seed: number): { hashes: number[]; destroyed: number; silenced: number } {
   const sim = makeRaidSim(seed);
   const hashes: number[] = [];
@@ -473,6 +516,45 @@ describe('결정론', () => {
    *  · siegeWalkLeft  — 언제 다시 멈출 수 있는가 (앞으로의 정지 시점 전부를 바꾼다)
    *  · attackAnimLeft — 연출 전용이지만 타격 시점의 파생값이라, 갈리면 "언제 쐈는가"가 갈렸다는 뜻
    */
+  /**
+   * 살점 값의 지급 이력(`bountyPaid`)이 hash()에 들어가는지.
+   *
+   * 왜 `hp`만으로는 못 잡는가: 이 값은 **hp에서 유도되지 않는다.** 주술사 힐로 hp가
+   * 되돌아온 적은 hp가 같아도 bountyPaid가 다르고, 곧 앞으로 받을 돈이 다르다.
+   * 그리고 `resetEnemy`의 리셋 누락(풀 재사용 누출)은 `v.gold`로도 결국 갈리지만
+   * 그 발산은 **몇 백 틱 뒤**에나 드러난다 — 여기 있어야 새는 그 틱에 잡힌다.
+   *
+   * ⚠ **이 테스트는 주석이 주장하는 것을 안 하고 있었다 (실측으로 확인하고 고쳤다).**
+   * 옛 판본은 `makeRaidSim` 위에서 `enemies.length > 0`이 되는 즉시 루프를 빠져나왔다.
+   * 계측하니 **틱 7**(첫 적이 나온 그 틱)에 끊겼고 `bountyPaid` = **0**이었다. 게다가
+   * 그 시나리오의 적은 fixtures 기본 bounty가 5라 `bountyChunks` = **1**이고,
+   * `settleBounty`가 `if (e.bountyChunks <= 1) return 0;`으로 생전 경로를 즉시 막으므로
+   * **그 판에서는 사망 전까지 bountyPaid가 영원히 0**이었다. 곧 옛 테스트는 정확히
+   * "0을 1로 바꾸는 것"만 하고 있었고, 주석은 그걸 피했다고 적고 있었다.
+   * 지금은 **K ≥ 2인 큰 적이 실제로 몫을 받을 때까지** 돌리고(아래 `bountyPaid > 0`
+   * 어서션이 그것을 못 박는다) 그 뒤에 흔든다 — 회복으로 hp가 되돌아온 적을 구분하는
+   * 성질이 여기서 처음으로 실제로 실행된다.
+   */
+  it('살점 값의 지급 이력(bountyPaid)이 hash()에 들어간다', () => {
+    const sim = makeBountySim(2024);
+    let target: EnemyState | undefined;
+    // **실제로 지급이 일어난 뒤에** 흔든다 — 0을 1로 바꾸는 것과 구분되게
+    for (let t = 0; t < 1500 && !target; t++) {
+      for (const [at, cmd] of BOUNTY_SCRIPT) if (at === t) sim.applyCommand(cmd);
+      sim.tick();
+      sim.drainEvents();
+      target = sim.state.enemies.find((e) => paidOf(e) > 0);
+    }
+    expect(target, '몫을 실제로 받은 적이 있다').toBeDefined();
+    // 이 줄이 이 테스트의 전제다 — 0 → 1 을 흔드는 판으로 되돌아가면 여기서 걸린다
+    expect(paidOf(target as EnemyState), '흔들기 전에 이미 지급이 있었다').toBeGreaterThan(0);
+    const h0 = sim.hash();
+    // bountyPaid는 EnemyState에 없는 내부 필드라 캐스트로 흔든다 (의도된 비공개)
+    const obj = target as unknown as Record<string, number>;
+    obj['bountyPaid'] = (obj['bountyPaid'] ?? 0) + 1;
+    expect(sim.hash(), 'bountyPaid가 해시에 없다').not.toBe(h0);
+  });
+
   it('정지 사격 상태 셋이 각각 hash()에 들어간다', () => {
     const fields = ['siegeHoldLeft', 'siegeWalkLeft', 'attackAnimLeft'] as const;
     for (const f of fields) {
