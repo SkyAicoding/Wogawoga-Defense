@@ -50,7 +50,31 @@ export type EnemyId =
 export type AllyId =
   | 'clubber' // 몽둥이꾼 (근접, 적의 발을 묶는다)
   | 'slinger' // 돌팔매꾼 (원거리, 걸으며 쏜다, 공중도 친다)
-  | 'guardian'; // 방패 파수꾼 (근접 탱커, 오래 묶는다)
+  | 'guardian' // 방패 파수꾼 (근접 탱커, 오래 묶는다)
+  | 'gatherer'; // 채집꾼 (순수 일꾼 — 캐는 속도 3배, 짐 2개, 전투력 최하)
+
+/**
+ * 채집 자원 — 맵의 소품 칸(나무·바위)이 이제 **자원 칸**이다.
+ * 칸 수도, 칸이 건설을 막는다는 사실도 **안 바뀐다**(SCENERY_DENSITY 0.3 고정, data/grid.ts:71).
+ * 다 캔 칸도 그루터기로 남아 계속 건설 불가다(docs/gather-spec.md D1).
+ * 바뀌는 것은 그 칸의 **뜻**뿐이다: 걸어가 캐서 마을로 지고 오면 코인이 된다.
+ *
+ * 종류가 정하는 것은 **두 가지뿐**이다 — 캐는 데 걸리는 시간(ticks)과 짐 값 배수(kindMul).
+ * 셀→종류 배정은 data/resources.ts resourceKindOf(셀 단독 해시, 시드 무관).
+ *
+ * 바이옴 제약(화산에 딸기 없음 등)은 종류를 유니온에서 빼는 것이 아니라
+ * **가중치 표에서 항목을 빼는 것**으로 표현한다 — 유니온이 바이옴마다 갈라지면
+ * Record<ResourceId, ...> 전수 매핑이 전부 부분 매핑이 된다.
+ */
+export type ResourceId =
+  | 'berry' // 딸기덤불 (가장 빨리 캔다 — 전투원도 딸 만한 유일한 종)
+  | 'mushroom' // 버섯 무리
+  | 'honey' // 벌집
+  | 'fruit' // 열매나무 (식량인데 **키가 큰** 유일한 종 — gather-spec §6-4 계약)
+  | 'flint' // 부싯돌 (기준종 — kindMul 1.00)
+  | 'wood' // 통나무 (전 바이옴 · 랜드마크 보유)
+  | 'stone' // 돌무더기 (느리게 많이 · 랜드마크 보유)
+  | 'obsidian'; // 흑요석 (화산 전용 · 최고 단가)
 
 /**
  * 홈타운(기지)이 낸 피해의 출처 태그. 타워도 아군 유닛도 아니므로 고유 값을 쓴다 —
@@ -293,6 +317,83 @@ export interface AllyDef {
    * 전문: docs/counter-plan.md 단계 3.
    */
   sunder?: boolean;
+  /**
+   * 채집 **속도** 배수, 정수 퍼센트 (생략 = 100 = 기준 속도, 0 = 못 캔다).
+   * 실제 틱 = max(1, round(자원.ticks × 100 / gatherPct)) — data/resources.ts gatherTicksFor.
+   *
+   * ⚠ **수확량에는 절대 안 곱한다**(gather-spec D8). 칸의 짐값을 셀에 고정해야 맵 전체
+   * 채집 총액이 `Σ(칸별 짐값)`으로 닫히고, 그 상한이 감사 가능한 한 숫자가 된다
+   * (스테이지1 = 559골드). 수확 배율이 붙는 순간 그 상한이 부족 구성에 따라 3배까지 열린다.
+   *
+   * balance.ts 상수가 아니라 여기 있는 이유: (a) sunder가 같은 형태의 선례이고,
+   * (b) 봉투가 이 축을 A/B할 수 있어야 한다 — makeBotSimFor의 allyDefTable 주입구
+   * (tests/sim/botharness.ts)와 DataPatch.allies가 그대로 손잡이가 된다.
+   * 모듈 상수로 두면 그 통로가 없어 채집 축이 봉투에서 **측정 불가**가 된다.
+   */
+  gatherPct?: number;
+  /**
+   * 짐을 몇 개까지 지는가 (생략 = 1). 전투 3종 1, 채집꾼 2. (gather-spec D6)
+   *
+   * ⚠ **수확 배율이 아니다.** 맵 총액은 칸의 짐값 합으로 그대로 닫힌다.
+   *   이 값이 바꾸는 것은 **마을 왕복 횟수**뿐이다 — 두 칸을 연달아 털고 한 번에 배달한다.
+   *   짐이 가득 차면 sim이 자동으로 마을로 향한다. 자동으로 **캐지는 않는다**(D4).
+   *
+   * gatherPct와 같은 자리에 두는 이유도 같다: 봉투가 이 축만 따로 끌 수 있어야 한다.
+   */
+  carryCap?: number;
+}
+
+// ---------------------------------------------------------------------------
+// 채집 자원 — 칸의 정의와 칸의 상태 (수치·가중치는 src/data/resources.ts)
+// ---------------------------------------------------------------------------
+export interface ResourceDef {
+  id: ResourceId;
+  nameKey: string;
+  /** 설명 한 줄 — 자원 패널의 부제 */
+  tagKey: string;
+  /**
+   * 짐 하나를 캐는 데 드는 틱, **전투 3종 기준**(30 = 1초). 정수만.
+   * 실제 틱 = max(1, round(ticks × 100 / (AllyDef.gatherPct ?? 100))) — 속도만 곱한다(D8).
+   * 값의 유도는 docs/gather-spec.md §1-2 (채집꾼 기준 4.0~13.0초).
+   */
+  ticks: number;
+  /**
+   * **짐 값 배수** — 이 종의 한 짐이 기준종(flint = 1.00) 대비 몇 배인가.
+   * 짐값 = round(GATHER_BASE_VALUE × kindMul × (1 + GATHER_DIST_GAIN × 마을거리)).
+   *
+   * ⚠ **units는 폐기했다(D2).** 한 칸은 한 짐이다. "몫 수"가 있으면 한 칸의 총액이
+   *   units × gold로 갈라져 (a) 부분 수확이라는 상태가 생기고 (b) 중단·재개·양보의
+   *   규칙이 전부 두 배가 되며 (c) 배달(D3)이 "몇 몫째를 지고 가는가"로 오염된다.
+   *
+   * 실수인 이유: 정수로 만들려면 기준값을 100배로 두어야 하는데, 그러면 GATHER_BASE_VALUE
+   * 하나로 총액을 되돌린다는 D9의 성질이 두 상수로 갈라진다. 곱셈 결과에는 Math.round가
+   * **정확히 한 번**만 닿고 누적이 없으므로 결정론에 안전하다.
+   */
+  kindMul: number;
+}
+
+/**
+ * 공개 자원 칸 상태 — 판이 시작될 때 목록이 굳고 **taken만 변한다**.
+ * 텄든 안 텄든 배열에서 빠지지 않는다: 배열 순서가 곧 해시 접기 순서라,
+ * 원소가 빠지면 그 순간 결정론이 자료구조 구현에 의존하기 시작한다.
+ */
+export interface ResourceCellState {
+  cellX: number;
+  cellZ: number;
+  kind: ResourceId;
+  /**
+   * 이 칸의 짐값 (정수). **생성 시 한 번 계산하고 그 뒤로 안 변한다.**
+   * 마을거리의 함수라 판마다 같다. UI 배지가 이것 하나만 읽는다(매 프레임 계산 없음).
+   */
+  value: number;
+  /**
+   * **텄는가.** false = 아직 짐이 있다 / true = 이미 누가 가져갔거나 골드로 치웠다.
+   *
+   * ⚠ 이 불린이 `left: number`를 대체한다(D2: 한 칸 한 짐). 그리고 이 값이 true여도
+   *   **소품은 그대로 서 있다**(D1) — 건설 가능 여부는 battle.ts의 scenery Set이 정하고
+   *   이 필드는 거기에 한 글자도 안 닿는다.
+   */
+  taken: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -608,6 +709,49 @@ export interface AllyState {
   attackCdLeft: number;
   /** 교전 중인 적 id (-1 = 없음). 렌더가 공격 모션에 쓴다 */
   targetId: number;
+  /**
+   * 예약한 자원 칸의 셀 키 `z * gridW + x`. **−1 = 채집 명령 없음.**
+   *
+   * 왜 필요한가 (셋 다 이 필드 하나가 한다):
+   *  ① **예약** — 같은 칸을 두 사람이 캐지 못하게 한다. 한 칸에 한 짐이므로(D2)
+   *     둘을 보내면 한 명은 반드시 헛걸음한다. 명령 시점에 살아 있는 아군의 gatherKey를
+   *     훑어 중복이면 예약을 안 붙인다. 순회는 멤버십 검사뿐이라 순서에 무관하다(계약 B).
+   *  ② **도착 판정 대상** — 이 키가 가리키는 칸이 곧 tgtX/tgtZ다.
+   *  ③ **렌더 표식** — 누가 어느 칸으로 가고 있는지(반투명 배지).
+   * 좌표 둘이 아니라 키 하나인 이유: 조회가 키 하나로 끝나고(ResourceField.at) 해시에
+   * 한 줄로 접힌다. −1 센티널은 targetId와 같은 규약이다.
+   *
+   * ⚠ 이 값을 ≥ 0으로 만드는 코드는 **sim/allies.ts moveAlly() 안 한 곳뿐이다.**
+   *   trainAlly의 집결 이동(a.tgtX/tgtZ 직접 대입)은 절대 건드리지 않는다.
+   *   그것이 "탭이 없으면 코인도 없다"(계약 A, 봉투 [5])를 지키는 유일한 방벽이다.
+   */
+  gatherKey: number;
+  /**
+   * 이번 짐에 쌓인 캐기 틱 (0 ~ 실제틱−1). 부분 진행분의 유일한 표현이다.
+   *
+   * 왜 필요한가: 캐기는 여러 틱에 걸치고, 맞으면 **0으로 되돌아간다**(D5). 곧 이 값은
+   * "얼마나 진행했나"이자 "이번에 맞으면 얼마를 잃나"다. 렌더의 채집 게이지도 이것을 읽는다
+   * (비율 0~1은 **렌더가** gatherTicks / gatherTicksFor로 만든다 — sim은 비율을 저장하지 않는다).
+   * **정수다** — 분수를 float로 누적하면 hash()의 v.gold가 흔들린다(bountyPaid와 같은 사고).
+   * 걸어가는 중에는 안 오른다.
+   */
+  gatherTicks: number;
+  /**
+   * 지금 지고 있는 골드 합 (정수). 0 = 빈손.
+   *
+   * 왜 필요한가: 배달은 **마을에 닿는 순간**이고(D3), 그때 지급할 액수는 어느 칸에서 캤는지가
+   * 아니라 **이미 확정된 합**이어야 한다. 칸을 다시 조회하는 설계면 그 사이에 칸이
+   * clearScenery로 사라졌을 때 지급액이 없어진다 — 이미 등에 진 짐이 사라지는 규칙은
+   * 화면에서 설명되지 않는다. 짐은 캐는 순간 **값이 굳는다.**
+   */
+  carryGold: number;
+  /**
+   * 지금 지고 있는 짐의 **개수**. carryCap과 비교하는 값은 골드가 아니라 이것이다.
+   *
+   * 왜 골드로 못 대신하나: 짐값이 5~25로 제각각이라 골드로는 "몇 개 졌는가"를 복원할 수
+   * 없다. 그리고 UI가 머리 위에 그리는 것도 개수(칩 1개/2개)다.
+   */
+  carryCount: number;
   alive: boolean;
 }
 
@@ -719,6 +863,8 @@ export interface BattleStateView {
   allies: readonly AllyState[];
   /** 동시 출동 상한 — 이 수에 도달하면 trainAlly가 거부된다 */
   allyCap: number;
+  /** 자원 칸 — **셀 키 오름차순 고정**. 목록은 안 변하고 taken만 변한다 */
+  resources: readonly ResourceCellState[];
   /** 이번 전투에서 얻은 호박 (결과 화면 표시용) */
   amberEarned: number;
   /** 무한 모드 여부 */
@@ -761,6 +907,26 @@ export type BattleCommand =
        *
        * 셀 범위 밖이거나 대상이 하나도 없으면 false. **찍을 수 있는 칸에 제한은 없다** —
        * 건설 불가 셀도, 경로 셀도, 적 스폰 지점도 지정할 수 있다(사용자 재정의).
+       *
+       * ── 채집 (docs/gather-spec.md) ────────────────────────────────────────
+       * 찍은 칸에 **아직 안 턴 자원이 있으면** 대상은 그 칸으로 걸어가 도착 후 **캔다**.
+       * 자원이 없거나 이미 텄으면 지금까지와 똑같이 그냥 가서 선다. 곧 이 커맨드의 의미는
+       * 한 글자도 안 바뀌었고 **도착지에 뜻이 하나 붙었을 뿐**이다.
+       *
+       * ⚠ **자원 칸을 찍을 때 UI는 반드시 `allyId >= 0`(한 사람)으로 보낸다.**
+       *   한 칸에 한 짐이라 종족 전원을 보내면 나머지가 헛걸음한다. 이 커맨드는 이미
+       *   개체 지정을 지원하므로 새 커맨드가 필요 없다(placement.ts의 pickAllyAt이
+       *   개체를 돌려준다). 빈 칸·경로를 찍으면 지금처럼 `allyId: -1 + defId`(종족 전원)다.
+       *   sim은 그래도 방어한다 — 전원 명령이 자원 칸에 오면 **가장 낮은 id 한 명만**
+       *   예약하고 나머지는 그냥 이동한다(규칙 E-9).
+       *
+       * 왜 gatherAlly라는 새 커맨드를 안 만들었나:
+       *  · 잃는 능력이 없다 — 자원 칸에 파수꾼을 세워 길목을 막는 수는 그대로다.
+       *  · 거부 사유가 안 늘어난다 — 이 커맨드는 격자 안이면 늘 성공한다. "채집꾼이 없다"는
+       *    커맨드 반환값이 아니라 **탭 전 패널**이 말한다(battle.res.sendNone).
+       *  · 커맨드 유니온이 안 늘어 determinism.test.ts의 SCRIPT와 e2e 훅이 그대로다.
+       * 대신 자동화 방벽은 타입이 아니라 **테스트**가 진다 — 5.noGather 다리와
+       * GATHER_SCRIPT 시나리오(docs/gather-spec.md §9).
        */
       type: 'moveAlly';
       allyId: number;
@@ -1022,6 +1188,94 @@ export type SimEvent =
       x: number;
       z: number;
     }
+  // --- 채집 (src/sim/gather.ts) ----------------------------------------------
+  | {
+      /**
+       * 도착해서 캐기 시작 — 발밑 채집 게이지가 여기서 켜진다.
+       * 골드는 안 낸다(D3: 지급은 배달뿐).
+       *
+       * ⚠ **이번 예약에서 딱 한 번만 나간다.** 순진하게 짜면 `gatherTicks === 0`마다
+       *   나가는데, 전선 옆 칸(s1 40칸 중 22칸)에서는 맞을 때마다 진행분이 0으로
+       *   돌아가므로(D5) `BRAWL_COOLDOWN_TICKS = 30` 간격으로
+       *   **`gatherLost{'hit'}` + `gatherStarted`가 쌍으로** 나간다 — 적 셋이 붙으면 초당 6건이다.
+       *   센티널: `a.gatherHpMark === 0`이면 "이번 예약에서 아직 시작 안 함"이다
+       *   (중단 시에는 gatherHpMark를 새 hp로 다시 채우므로 0이 아니다). 필드가 안 는다.
+       */
+      type: 'gatherStarted';
+      allyId: number;
+      defId: AllyId;
+      cellX: number;
+      cellZ: number;
+      kind: ResourceId;
+      /** 이 칸의 짐값 (배지와 같은 숫자) */
+      value: number;
+      /** 이 사람이 이 칸을 캐는 데 걸리는 총 틱 — 렌더가 게이지 분모로 쓴다 */
+      ticks: number;
+    }
+  | {
+      /**
+       * **짐 하나를 등에 졌다** = 칸이 텄다. 두 사건이 같은 순간이라 한 이벤트다.
+       * ⚠ **여기서 골드가 나가지 않는다.** 마을까지 지고 와야 지급된다(D3).
+       *   fx는 이 이벤트에 "짐을 짊어지는" 연출만 붙이고 코인 팝업은 안 띄운다 —
+       *   안 그러면 배달 전에 죽었을 때 화면이 거짓말을 한 것이 된다.
+       *
+       * 발행 빈도 상한 = 정원 6 × (30 / 최소 실제틱 120) = 초당 1.5건. sim 쪽 스로틀 불필요.
+       * (gatherStarted는 다르다 — 위 각주의 스로틀이 **필수**다.)
+       */
+      type: 'gathered';
+      allyId: number;
+      defId: AllyId;
+      cellX: number;
+      cellZ: number;
+      kind: ResourceId;
+      /** 이번에 진 짐의 값 */
+      value: number;
+      /** 진 뒤의 짐 개수 / 이 사람의 상한 — 가득 찼으면 자동 귀환이 시작된 것이다 */
+      carried: number;
+      carryCap: number;
+    }
+  | {
+      /**
+       * **마을에 닿아 지급됐다** — 채집이 골드를 내는 **유일한** 사건.
+       * addGold 수입 호출부가 이것으로 정확히 4곳이 된다
+       * (combat.ts · battle.ts 둘 · gather.ts). 5번째를 만들지 마라.
+       */
+      type: 'gatherDelivered';
+      allyId: number;
+      defId: AllyId;
+      /** 지급액 (정수) = 지고 있던 짐값의 합 */
+      gold: number;
+      /** 몇 짐이었나 (1 또는 carryCap) */
+      loads: number;
+      x: number;
+      z: number;
+    }
+  | {
+      /**
+       * 채집이 **명령 없이** 어긋났다. 사유는 넷:
+       *  · 'hit'     — 맞아서 캐던 진행분이 0으로 돌아갔다 (D5). 짐과 예약은 **유지된다**
+       *  · 'moved'   — 다른 칸으로 가는 moveAlly가 왔다 (예약 해제, 진행분 폐기)
+       *  · 'cleared' — 그 칸이 골드로 치워졌다 (clearScenery)
+       *  · 'died'    — 짐을 진 채 죽었다. gold에 잃은 액수가 실린다
+       * **'gone'(남이 먼저 캤다)는 없다** — 예약이 배타적이라 구조적으로 일어나지 않는다.
+       *
+       * ⚠ 'hit'는 맞을 때마다 나가지 않는다 — **진행분이 0보다 컸을 때만** 나간다.
+       *   그래야 전선에 세워 둔 사람이 초당 여러 건을 뿜지 않는다.
+       */
+      type: 'gatherLost';
+      allyId: number;
+      defId: AllyId;
+      cellX: number;
+      cellZ: number;
+      reason: 'hit' | 'moved' | 'cleared' | 'died';
+      /** 'died'면 잃은 골드, 아니면 0 */
+      gold: number;
+    }
+  /*
+   * ── gatherOrdered 는 **만들지 않는다** ────────────────────────────────────
+   * moveAlly가 이미 allyOrdered를 낸다 — 목표 표식은 그 이벤트가 그대로 세우고,
+   * 찍은 칸이 자원 칸이면 색만 바꾼다(gather-spec §7-2).
+   */
   /*
    * ── allyRetired 는 삭제됐다 (9단계) ────────────────────────────────────────
    * 수명이 사라져 "돌아가는" 사건 자체가 없다. 부족원이 사라지는 길은 이제 하나뿐이다:
@@ -1195,6 +1449,8 @@ export interface BattleSim {
   sellRefund(towerId: number): number | null;
   /** 그 셀에 아직 치우지 않은 소품(나무/바위)이 있는가 */
   hasScenery(cellX: number, cellZ: number): boolean;
+  /** 자원 칸 조회 — 소품이 없거나 격자 밖이면 null. HUD 패널과 e2e 훅이 쓴다 */
+  resourceAt(cellX: number, cellZ: number): ResourceCellState | null;
   /** 지금 그 셀을 치우는 데 드는 골드 (소품이 없으면 null) — 제거 횟수에 따라 오른다 */
   clearSceneryCost(cellX: number, cellZ: number): number | null;
   /** 지금 이 부족원을 출동시키는 데 드는 골드 (나가 있는 인원 수에 따라 오른다) */

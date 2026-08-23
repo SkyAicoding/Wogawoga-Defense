@@ -92,14 +92,17 @@
 import { createBattle } from '@/sim/battle';
 import { buildPath, buildStraight } from '@/sim/path';
 import { ALLY_DEFS, BASE_LEVELS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
-import { SIEGE_ENGAGE_RANGE } from '@/data/balance';
+import { GATHER_BASE_VALUE, SIEGE_ENGAGE_RANGE, gatherValueFor } from '@/data/balance';
+import { ARRIVE_EPS2, RESOURCE_DEFS, resourceKindOf } from '@/data/resources';
 import type {
   AllyDef,
   AllyId,
   BaseLevelDef,
+  BattleCommand,
   BattleSim,
   EnemyDef,
   EnemyId,
+  ResourceCellState,
   SimEvent,
   StageDef,
   TowerDef,
@@ -226,6 +229,149 @@ export type PlacementMode = 'near' | 'cover' | 'kill';
 /** 한 번의 배치 판정에서 허용하는 최대 새로고침 횟수 */
 const REFRESH_MAX_PER_DECISION = 6;
 
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * **채집 팔** (T0. docs/gather-spec.md §9-3 · §12 T0)
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 왜 이 팔이 게임 코드보다 **먼저** 있어야 하는가: 하네스가 채집을 모르면 봉투 20항목을
+ * 2.4시간 태우고도 이 축을 **한 번도 안 밟는다.** 실측 라운드가 `sellTower`·`setTargeting`
+ * 에서 이미 한 번 겪은 함정이다 — 하네스 전체에 그 두 문자열이 **하나도 없었다**(grep 0건).
+ * 곧 그 두 축에 대해 봉투는 "초록"이 아니라 **무측정**이었다.
+ *
+ * ── 정책 (§9-3 그대로. 봇의 기존 커맨드 주기 120틱에 얹는다) ────────────────
+ *  1) 살아 있는 `defId` 인원이 `count` 미만이고 살 수 있으면 `trainAlly` 한 번.
+ *     ⚠ `trainAlly`가 false면 **재시도하지 않는다** — 정원(`canTrainAlly`)이 막은 것이라
+ *       같은 루프에서 다시 눌러도 같은 false가 온다.
+ *  2) 그 종 개체를 **id 오름차순**으로 훑어, 놀고 있는 사람에게 **마을에서 가장 가까운**
+ *     아직 안 텄고 아무도 예약 안 한 칸을 준다(동점이면 셀 키 오름차순).
+ *  3) 짐이 남았는데 더 캘 칸이 없으면 마을로 보낸다 (§4-8 E-18 — 안 그러면 마지막 한 짐이
+ *     영영 안 들어와 총액 항등식이 어긋난다).
+ * 이 정책은 **불도저를 피하지 않는다**(§9-3 못 2). `minValue` 기본이 0인 것도 같은 이유다 —
+ * 봉투가 재야 하는 것은 사람이 할 법한 선택이 아니라 **최대 수입**이다(§9-3 못 3).
+ *
+ * ── ⚠⚠ 지금은 **스텁**이다 — 이 팔이 재는 것과 못 재는 것 ────────────────────
+ * `src/sim/gather.ts`(T2)가 아직 없으므로 sim은 골드를 한 푼도 안 낸다. 그러므로:
+ *  · **`gatherGold`는 구조적으로 0이다.** 0이 나오는 것이 정상이고, 그 사실 자체가
+ *    "채집 팔이 켜졌는데도 수입이 0"이라는 T0의 확인 대상이다.
+ *  · 짐/텄음/왕복은 **하네스가 위치로 흉내낸다**(`gatherStub === true`). 파는 시간(§1-2의
+ *    8초 저울)은 모형에 **없다** — 도착 = 짐을 졌다로 친다. 곧 스텁의 왕복은 진짜보다
+ *    **빠르다**. T2가 오면 `state.resources` · `AllyState.gatherKey/carryCount`가 그대로
+ *    진실이 되고 이 흉내는 한 줄도 안 돈다(`gatherStub === false`).
+ *
+ * ── ⚠⚠⚠ **주입 실험(§1-5-A)의 벽 600을 "상한"으로 읽지 마라** (§1-5-D 방법론 정정) ──
+ * 수입 주입 실험은 **웨이브 경계마다 골드를 공짜로 꽂을 뿐이다.**
+ * (⚠ 그 스크립트는 저장소에 없다 — 실측 라운드의 `econ7.mts`는 롤백으로 사라졌고 T0이
+ *  다시 만들었다. 다시 필요하면 **여섯 줄이면 된다**: `makeBotSimFor`로 만든 sim을 Proxy로
+ *  감싸 `tick`만 가로채고, `state.waveIndex`가 바뀔 때 `state.gold += 총액/웨이브수`를
+ *  더한다. 시드는 `seedsOf('strong'|'base1', FULL)`, 정책은 `STRONG_BOT` / `{}`.
+ *  주입은 정수로 쪼갠다 — 게임의 골드 산술이 전부 정수라 204.5는 실험이 만든 인공물이다.)
+ * 그 모형이 재지 **않는** 것을 전부 적는다 — 전부 진짜 채집이 무는 값이다:
+ *
+ *   | 진짜 채집이 무는 값        | 주입 모형 | 크기                                        |
+ *   |---------------------------|----------|---------------------------------------------|
+ *   | 채집꾼 구입비              | **없음** | 2명 실비용 144골드 (`cost 70` + `×1.05`)      |
+ *   | 정원(`allyCap`) 한 칸      | **없음** | Lv1 정원이 **2**다 (`data/hometown.ts` 표)     |
+ *   | 전투 이탈 시간             | **없음** | 한 짐 왕복 22.0초 × 짐 수 (그동안 봉쇄 0)      |
+ *   | 채집 중 사망 위험          | **없음** | s1 40칸 중 26칸(65%)이 습격대 사거리 안        |
+ *   | 손가락 값                  | **없음** | 짐 하나에 탭 하나. 판당 최대 40탭             |
+ *
+ * 곧 **주입은 진짜 채집보다 언제나 후하다.** 총액 T를 주입했을 때의 봉투 피해는 총액 T짜리
+ * 진짜 채집의 피해보다 **반드시 크거나 같다.** 그러므로 ≈600은 *"진짜 천장이 최소한 여기까지는
+ * 된다"* 는 **천장의 하한**이지 천장이 아니다. 얼마나 더 높은지는 **모른다** — 위 다섯 값을
+ * 합산해 추정하는 것도 안 된다(진짜 채집은 봇에게 "채집꾼에 과투자하는" **새 전략**까지 주고,
+ * 그 방향은 부호조차 모른다).
+ * ⚠ 다음 사람에게: 이 표를 보고 **"600이 상한이다"로 읽으면 틀린다.** T6은 `GATHER_BASE_VALUE`
+ *   를 6에서 **위로 걸어 올리며** 봉투가 실제로 어디서 끊기는지를 이 팔로 다시 잰다.
+ *   그리고 T0 재현에서 600행은 주입 시점을 한 웨이브 옮기는 것만으로 54.20% ↔ 56.65%
+ *   (문턱 55%)로 **부호가 바뀌었다** — 600은 여유가 있는 값이 아니라 **선 위의 값**이다.
+ *
+ * ── T0 실측 (스테이지1 · 창당 160시드 · 별0 · 덱 spear+catapult+frost) ───────
+ * **주입 곡선 재현.** 주입 0행이 원장 여덟 값과 **소수점까지 일치**하므로(1b.slack 49.33% ·
+ * 1b.slackMedian 48.00% · 1a.clearRate 80.63% · 2.perGame 5.725 · 2.median 5 ·
+ * 2.zeroShare 0.63% · 1b.placed 2892 · 2.lostGold 828157) 이 자는 앵커가 잡혀 있다.
+ * 두 열은 주입 **시점**만 다르다 — ⓐ 웨이브 1의 몫을 t=0에 꽂는다 / ⓑ 웨이브가 바뀔 때만.
+ *
+ *   주입/판          1b.slack ⓐ / ⓑ   2.perGame ⓐ / ⓑ   1a.clearRate ⓐ / ⓑ
+ *   0                49.33% / 49.33%   5.725 / 5.725     80.63% / 80.63%   ⟦원장⟧
+ *   400 (w1~10)      52.33% / 52.78%   5.162 / 5.419     90.63% / 88.13%
+ *   600 (w1~10)      **56.65%❌** / 54.20%   5.175 / 5.169     91.25% / 92.50%
+ *   800 (w1~10)      56.83%❌ / 57.80%❌  5.000 / 5.106     91.88% / 93.75%
+ *   800 (w1~40 분산)  56.10%❌ / 57.15%❌  5.019 / 4.963     91.25% / 92.50%
+ *   2045             70.50%❌ / 71.25%❌  3.931❌/ 4.025     96.88% / 96.25%
+ *
+ * **읽는 법 넷.**
+ *  1. `1b.slack`(≤55%)이 **먼저 끊긴다.** ⓐ에서는 **600에서 이미 빨갛고** ⓑ에서는 800이다.
+ *     곧 안전선은 §1-5-A가 적은 400~550보다 **아래**일 수 있다 — 400은 두 열 모두 초록이다.
+ *  2. **600은 천장이 아니라 문턱 위에 걸터앉은 값이다.** 주입 시점을 한 웨이브 옮기는
+ *     것만으로 54.20 ↔ 56.65로 부호가 바뀐다(§1-5-A가 경고한 관측 잡음 ±1.8%p와 같은 급).
+ *     한 점으로 판단하지 마라.
+ *  3. **모양은 안 보인다** — 800을 w1-10에 몰든 w1-40에 펴든 56.83 대 56.10(ⓐ)이다.
+ *     ⇒ §8-3의 소비 곡선은 봉투에 대해 아무것도 증명하지 못한다.
+ *  4. `1a.clearRate`는 **위로만 간다**(80.63 → 96.88). 네 다리가 전부 하한이라 이 축은
+ *     절대 빨개지지 않는다 = 계약이 아무것도 안 잠근다(§9-1 `1a.notTrivial`이 그 자리다).
+ *
+ * **팔 A/B/C.** A = 배포본 / B = 채집 팔 켬(스텁) / C = 채집 끔(A와 같은 opts).
+ *
+ *   팔                    승수      여유(Σ)   판당파괴  판당커맨드  판당수입  무일푼
+ *   A 최강(STRONG_BOT)   160/160   49.33%    3.188     88.84      23,202    17.45%
+ *   B 최강+채집          160/160   **42.95%** 3.681     **154.49** 23,152    70.81%※
+ *   C 최강 대조          160/160   49.33%    3.188     88.84      23,202    17.45%
+ *   A 기본               129/160   21.75%    5.725     82.93      22,311    18.99%
+ *   B 기본+채집          125/160   **16.00%** 6.463     **152.47** 22,400    75.72%※
+ *   C 기본 대조          129/160   21.75%    5.725     82.93      22,311    18.99%
+ *   ※ 정원이 차서 아군이 매물표에서 빠진 몫이다 — `BotResult.brokeTicks`의 ⚠⚠ 참조.
+ *
+ *  · **A와 C는 판 하나까지 완전히 같다**(BotResult 전 필드 일치). 곧 `gather`를 안 켠
+ *    봇은 이 변경으로 **한 자리도 안 움직인다.**
+ *  · **B는 A와 같지 않다.** T0 지시문은 "gather.ts가 없으니 B가 A와 같게 나올 것"으로 봤지만,
+ *    스텁이 **진짜 커맨드를 내기 때문에** 그렇지 않다 — 그리고 그것이 이 팔의 존재 이유다.
+ *    같게 나왔다면 하네스는 여전히 이 축을 **한 번도 안 밟은** 것이다(sellTower 함정의 재발).
+ *  · 그러므로 지금의 B는 **비용만 있고 수입이 0인 팔**이다: 채집꾼 값(판당 353~612골드) ·
+ *    정원 두 칸 · 전투 이탈 9,400~9,531 인원×틱을 전부 내고 골드는 0을 받는다.
+ *    여유가 6.4%p(최강) / 5.8%p(기본) **내려간 것**이 그 값이고, 이는 진짜 채집이 봉투에
+ *    미치는 영향의 **아래쪽 끝**이다(§1-5-A의 주입 곡선이 위쪽 끝인 것과 짝을 이룬다).
+ *  · 채집 계측(판당): 짐 40.00 · 배달 19.2~19.8 · 텄음 칸 **40.00**(= s1 전 칸) ·
+ *    짐 진 채 사망 0.68~1.33명 · 채집 커맨드 66.6~69.9회.
+ *    ⇒ **커맨드가 82.93 → 152.47로 84% 는다.** 이 게임에서 희소한 것이 시간이 아니라
+ *      손가락이라는 §1-6의 논지가 여기서 숫자로 확인된다.
+ *
+ * **배포본 기준선 (신설 계측이 처음 인쇄한 값. 기본 봇 · base1 160시드)**
+ *   판당 커맨드 **82.93**회 ⟦§1-6과 일치⟧ · 종류별 `upgradeTower 44.35 · callWave 19.90 ·
+ *   placeTower 18.68` (판매·타게팅은 **0** — 봇이 안 쓴다) ·
+ *   판당 수입 **22,311** ⟦§1-6과 일치⟧ 중 커맨드가 낸 몫 130.4골드 = **0.58%** ·
+ *   무일푼 **18.99%**(판당 250.8초 / 총 1,320.4초) · 최장 무일푼 중앙 39.3초 · 최악 72.0초 ·
+ *   무일푼 최저 매물가 **min 70 = max 70**.
+ *   ⚠ 마지막 줄이 §8-2가 예언한 이동을 **직접 잰 것**이다: 실측 라운드의 24.62%(325.0초)는
+ *     최저가 **90**(몽둥이꾼)일 때의 값이고, `gatherer`(70)가 표에 들어오자 같은 코드가
+ *     **18.99%(250.8초)**를 인쇄한다. **짐값이 0인 채로** 일어난 몫이다 —
+ *     곧 §0이 말한 "첫 번째 층"은 이미 여기 있고, 봉투 다리는 **한 자리도 안 움직였다**
+ *     (원장 여덟 값 전부 일치). 그 카드를 봇의 아군 정책이 아직 안 뽑기 때문이다.
+ */
+export interface GatherPolicy {
+  /**
+   * 뽑을 종 (기본 `'gatherer'`). 모듈 상수 `ALLY_DEFS`에 그 종이 없으면 이 팔은
+   * **한 줄도 안 돈다** — 되돌리기 대조군(`gather-off`)이 조용히 배포본이 되지 않게.
+   */
+  defId?: AllyId;
+  /**
+   * 유지할 인원. 1 = 주 경로 / 2 = 몰빵 대조군.
+   * ⚠ **`STRONG_BOT`에는 `base` 정책이 없어 마을이 Lv1에 머무르고 정원이 2다.**
+   *   그 팔에서 3 이상을 적으면 `trainAlly`가 조용히 false를 돌려줄 뿐이다.
+   */
+  count: number;
+  /** 이 값 미만인 칸은 무시 (기본 0 = 앞칸도 턴다. §9-3 못 3) */
+  minValue?: number;
+}
+
+/** 채집 후보 칸 하나 — `d2`는 마을까지의 **제곱** 거리(순위에만 쓰므로 제곱근이 필요 없다) */
+interface GatherCell {
+  readonly key: number;
+  readonly x: number;
+  readonly z: number;
+  readonly value: number;
+  readonly d2: number;
+}
+
 export interface BotOptions {
   /**
    * 배치 정책 (기본 `'near'` = 지금까지의 placementKey 그대로).
@@ -347,6 +493,12 @@ export interface BotOptions {
     save?: boolean;
   };
   /**
+   * **채집 정책**. 지정하지 않으면 봇은 채집꾼을 **한 명도** 뽑지 않고 자원 칸을
+   * **한 번도** 찍지 않는다 (= 배포본 봇 그대로. 커밋된 모든 팔의 기준선이 안 움직인다).
+   * 위 `GatherPolicy` 주석에 정책 전문과 **스텁의 한계**가 있다 — 읽고 쓰라.
+   */
+  gather?: GatherPolicy;
+  /**
    * **계측 훅** — 사건 하나와 그 사건이 난 웨이브 번호를 그대로 넘긴다.
    * `BotResult`는 판 하나를 한 줄로 압축하므로 "몇 번째 웨이브에서 맞았나"처럼
    * 구간별로 갈라 보는 질문에는 답할 수 없다. 결과 필드를 종류마다 늘리는 대신
@@ -457,6 +609,98 @@ export interface BotResult {
    * 죽음의 나선(부서진 만큼 다시 못 짓고 계속 줄어드는 상태)의 직접 지표다.
    */
   minTowers: number;
+
+  // ══ 채집 계측 (T0 신설. gather-spec §9-3 "하네스가 새로 인쇄해야 하는 계측") ══
+  /**
+   * 판당 **배달 골드** — 채집이 실제로 낸 수입. `gatherDelivered.gold` 의 합이다.
+   * ⚠ T2 전에는 **구조적으로 0**이다(sim이 지급하지 않는다). 0이 나오는 것이 정상이고,
+   *   그것을 확인하는 것이 T0의 산출물 하나다. `gatherStub`를 함께 읽어라.
+   */
+  gatherGold: number;
+  /** 등에 진 짐의 수 (칸을 텄다 = 짐 하나). 배달과 다르다 — 지고 죽으면 배달이 안 된다 */
+  gatherLoads: number;
+  /** 마을에 닿아 지급된 횟수 (`carryCap` 덕에 배달 1회 = 짐 1~2개) */
+  gatherDeliveries: number;
+  /** 짐을 진 채 죽어 **잃은 액수** — 채집의 위험을 골드 단위로 잰다(§8-4 ③) */
+  gatherLostGold: number;
+  /** 짐을 진 채 죽은 채집꾼 수 */
+  gatherDeaths: number;
+  /** 이 판에서 **텄음**이 된 칸 수 (스테이지1은 40칸이 상한) */
+  takenCells: number;
+  /**
+   * 웨이브대별 배달 골드 — `[w1-10, w11-20, w21-30, w31-40, w41-50]`.
+   * §8-3의 소비 곡선을 확인할 **유일한** 통로다. ⚠ 다만 §1-5-A가 실측으로 못 박았듯이
+   * **모양은 봉투에 대해 아무것도 증명하지 못한다**(800을 w1-10에 몰든 w1-40에 펴든
+   * `1b.slack`이 56.40 대 56.10). 이 배열은 "게임 느낌"의 자료이지 계약의 자료가 아니다.
+   */
+  gatherGoldByBand: readonly number[];
+  /**
+   * 채집꾼이 **채집 심부름 중이었던** 인원×틱 = 채집의 진짜 비용.
+   * 그 시간 동안 그 사람은 조준도 봉쇄도 안 한다(§4-4 D5). `allyTicks`와 같은 단위라
+   * 비율로 읽으면 "아군 시간의 몇 %가 전투에서 빠졌나"가 된다.
+   */
+  allyGatherTicks: number;
+  /** sim이 낸 채집 이벤트 수 (`gatherStarted`/`gathered`/`gatherDelivered`/`gatherLost` 합) */
+  gatherEvents: number;
+  /** 채집 정책이 실제로 낸 커맨드 수 (`trainAlly` + `moveAlly`) */
+  gatherCmds: number;
+  /**
+   * **이 판의 채집이 스텁이었는가.** `state.resources`가 비어 있으면 true =
+   * 짐·텄음·왕복을 하네스가 위치로 흉내낸 것이고 골드는 0이다.
+   * ⚠ 이 플래그가 true인 판의 `gatherGold`를 "채집 수입"으로 읽으면 **거짓말이 된다.**
+   */
+  gatherStub: boolean;
+
+  // ══ 커맨드/수입/무일푼 계측 (T0 신설. 전부 래핑뿐 — sim 동작을 한 줄도 안 바꾼다) ══
+  /**
+   * 판당 커맨드 **전수(종류별)**. 실측이 잰 배포본 봇의 판당 커맨드는 82.93회(15.9초에
+   * 한 번)이고, 이 게임에서 희소한 것은 시간이 아니라 **손가락**이라는 §1-6의 논지가
+   * 여기 걸려 있다. 채집은 짐 하나에 탭 하나이므로 이 표에서 먼저 보인다.
+   * ⚠ **성공한 커맨드만** 센다 — 거부된 명령은 사람의 손가락은 쓰지만 게임은 안 움직인다.
+   */
+  cmdCounts: Readonly<Record<string, number>>;
+  /** 성공한 커맨드 총수 */
+  cmdTotal: number;
+  /**
+   * `applyCommand` **안에서** 발행된 수입 (조기 호출 보너스 · 판매 환불 등).
+   * `goldEarned` 대비 비중이 곧 "누르면 돈이 나오는 축"의 크기다 — 채집의 탭 경제가
+   * 조기 호출과 같은 손가락을 놓고 다투므로(§8-5) 그 기준선이 필요하다.
+   */
+  goldFromCommands: number;
+  /** 틱 안에서 들어온 수입 (현상금 · 웨이브 보상 · **채집 배달**) */
+  goldFromTicks: number;
+  /**
+   * **무일푼 틱** 수 — 잔고가 "지금 살 수 있는 가장 싼 매물"보다 적은 틱.
+   * 실측 기준선: 판의 24.62%(판당 325.0초) · w1-10은 55.29%. 채집이 겨냥하는 자리다.
+   *
+   * ⚠ **매물의 범위**: 손패 카드 · 아군 전 종(정원이 남아 있을 때만) · 마을 업그레이드 ·
+   *   유료 새로고침. **타워 업그레이드와 소품 제거는 뺐다** — 실측이 "무일푼 틱의 최저
+   *   매물가는 전 구간에서 언제나 정확히 90골드(몽둥이꾼)"라고 다섯 번 반복해 확인했고,
+   *   그 둘은 한 번도 최저가 아니었는데 매 틱 세면 판당 백만 번 호출이 된다.
+   *   ⚠ 그 "언제나 90"은 **`gatherer`(70)가 표에 들어오기 전의 값**이다 — 아래
+   *   `brokePriceMin`/`brokePriceMax`가 그 이동(§8-2: 90 → 70)을 직접 인쇄한다.
+   * ⚠ 매물가는 **외곽 루프(120틱)와 커맨드 성공 시점**에 갱신한다. 최대 4초 낡을 수 있고,
+   *   그 낡음이 값을 한쪽으로 밀지 않는다(살 것이 늘든 줄든 다음 루프에 잡힌다).
+   *
+   * ⚠⚠ **읽는 함정 하나 — 정원이 차면 이 값이 뛴다.** 아군은 `allies.length < allyCap()`
+   *   일 때만 매물이다. 채집 팔은 정원(Lv1 = 2)을 채집꾼으로 채우므로 **아군 카드가 표에서
+   *   통째로 빠지고**, 최저 매물가가 70(채집꾼)에서 남은 것들(손패 카드 · 마을 업그레이드 ·
+   *   유료 새로고침)로 뛴다. 실측(스테이지1 160시드): 최강 팔 17.45% → 최강+채집
+   *   **70.81%**, 같은 팔의 `brokePriceMin/Max`가 70/70에서 20/574로 벌어진다.
+   *   이건 골드가 줄어서가 아니다 —
+   *   판당 수입은 23,202 대 23,152로 사실상 같다. **"누를 것이 없다"의 정의가 바뀐 것**이고,
+   *   그것 자체가 정원 한 칸의 값이다(§1-5-D 표의 둘째 줄). 이 수를 "가난해졌다"로 읽으면
+   *   틀린다. 두 팔의 무일푼을 비교하려면 정원이 같은 팔끼리 대야 한다.
+   */
+  brokeTicks: number;
+  /** 전체 틱 수 (무일푼 비율의 분모) */
+  totalTicks: number;
+  /** **최장 무일푼 구간**(틱). 실측 기준선: 판별 중앙값 45.2초(1,356틱) · 최악 77.4초 */
+  brokeRunMax: number;
+  /** 무일푼 틱에서 관측된 최저 매물가의 **최솟값** (매물이 하나도 없었으면 0) */
+  brokePriceMin: number;
+  /** 같은 것의 **최댓값** — 둘이 같으면 "최저 매물가는 언제나 그 값"이 참이다 */
+  brokePriceMax: number;
 }
 
 /**
@@ -816,6 +1060,26 @@ export const STRONG_BOT: BotOptions = {
 };
 
 /**
+ * **최강 팔 + 채집** — 이 안의 **최악 케이스**다 (gather-spec §8-8 [18] `18.strongGather`).
+ * 왜 최악인가: 최강 봇은 이미 방어선이 남아돌아(여유 49.33%) 채집으로 번 골드가 전부
+ * **잉여**가 된다. 곧 채집이 봉투를 미는 힘이 여기서 가장 크다.
+ *
+ * ⚠ **`STRONG_BOT`을 고치지 않고 새 상수를 만든 이유**: `STRONG_BOT`은 봉투 [1-b]·[4]가
+ *   그대로 쓰는 기준점이라 필드를 하나만 더해도 `envelope.playKey`(opts를 JSON으로 접는다)가
+ *   바뀌어 원장 전체가 흔들린다. 팔은 **더하는 것**이지 기준점을 갈아 끼우는 것이 아니다.
+ *
+ * ⚠ **`count: 2`가 상한이다.** 이 팔에는 `base` 정책이 없어 마을이 **Lv1에 머무르고
+ *   정원이 2**다(`src/data/hometown.ts`의 `allyCap` 열). 3을 적으면 셋째부터는
+ *   `canTrainAlly`가 false를 돌려줄 뿐이고, 정책은 그 false를 보고 재시도하지 않는다.
+ *   (검증 A의 C-4가 이 지점을 "정원 6"으로 잘못 계산했다가 정정됐다.)
+ *   곧 이 팔이 채집으로 벌 수 있는 순액은 `총액 − (70 + round(70×1.05)) = 총액 − 144`다.
+ */
+export const STRONG_GATHER_BOT: BotOptions = {
+  ...STRONG_BOT,
+  gather: { count: 2 },
+};
+
+/**
  * 봇 1판 실행. 외곽 루프 1회 = 커맨드 한 묶음 + 120틱.
  * 파괴로 타워 수가 줄면 배치 루프가 자동으로 빈 자리를 채운다(= 재건설).
  */
@@ -908,6 +1172,68 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
   /** 틱 진행 직전 스냅샷 — 파괴 이벤트에는 invested가 없으므로 여기서 조회한다 */
   const investedById = new Map<number, number>();
 
+  // ── T0 신설 계측 (전부 **래핑뿐**. sim 호출의 순서·인자·횟수가 한 자리도 안 바뀐다) ──
+  const cmdCounts = new Map<string, number>();
+  let cmdTotal = 0;
+  let goldFromCommands = 0;
+  let goldFromTicks = 0;
+  let brokeTicks = 0;
+  let totalTicks = 0;
+  let brokeRunMax = 0;
+  let brokeRun = 0;
+  let brokePriceMin = Infinity;
+  let brokePriceMax = 0;
+  let gatherGold = 0;
+  let gatherLoads = 0;
+  let gatherDeliveries = 0;
+  let gatherLostGold = 0;
+  let gatherDeaths = 0;
+  let gatherEvents = 0;
+  let gatherCmds = 0;
+  let allyGatherTicks = 0;
+  /** 웨이브대 5칸 — [w1-10, w11-20, w21-30, w31-40, w41-50] */
+  const gatherGoldByBand = [0, 0, 0, 0, 0];
+  const bandOf = (wave: number): number => Math.min(4, Math.max(0, Math.floor((wave - 1) / 10)));
+
+  /**
+   * **커맨드 래퍼** — `sim.applyCommand`를 그대로 부르고 앞뒤로 세기만 한다.
+   * 골드 차가 양수면 그 커맨드가 **수입을 낸 것**이다(조기 호출 보너스 · 판매 환불).
+   * 이 함수를 통하지 않는 `applyCommand` 호출이 runBot 안에 남으면 표가 조용히 새므로,
+   * 이 파일에는 `sim.applyCommand(` 가 **여기 한 줄만** 있어야 한다.
+   */
+  const cmd = (c: BattleCommand): boolean => {
+    const before = sim.state.gold;
+    const ok = sim.applyCommand(c);
+    const delta = sim.state.gold - before;
+    if (delta > 0) goldFromCommands += delta;
+    if (ok) {
+      cmdCounts.set(c.type, (cmdCounts.get(c.type) ?? 0) + 1);
+      cmdTotal++;
+      menuStale = true;
+    }
+    return ok;
+  };
+
+  /**
+   * **지금 살 수 있는 가장 싼 매물** — 무일푼 판정의 자. 범위와 제외 근거는
+   * `BotResult.brokeTicks` 주석에 있다(타워 업그레이드·소품 제거는 뺐다).
+   * 매물이 하나도 없으면 0을 돌려준다 = "무일푼일 수 없다"(살 것이 없으면 가난이 아니다).
+   */
+  const menuPrice = (): number => {
+    const st = sim.state;
+    let m = Infinity;
+    for (const c of st.hand) if (c) m = Math.min(m, c.cost);
+    if (st.allies.length < sim.allyCap()) {
+      for (const id of Object.keys(ALLY_DEFS) as AllyId[]) m = Math.min(m, sim.allyCost(id));
+    }
+    const b = sim.baseUpgradeCost();
+    if (b !== null) m = Math.min(m, b);
+    if (st.refreshCost > 0) m = Math.min(m, st.refreshCost);
+    return m === Infinity ? 0 : m;
+  };
+  let menuNow = 0;
+  let menuStale = true;
+
   // ── 아군/기지 정책 준비 ────────────────────────────────────────────────────
   /** 경로별 총 길이 — 적의 '기지까지 남은 거리' = totalLength − enemy.dist */
   const pathLens = stage.paths.map((wp) => buildPath(wp).totalLength);
@@ -971,6 +1297,216 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
   const allyAntiAir: AllyId[] = allyOrder.filter((id) => ALLY_DEFS[id].canTargetAir);
   let allyTurn = 0;
 
+  // ══ 채집 팔 (T0) — 정책 전문과 **스텁의 한계**는 GatherPolicy 주석에 있다 ══
+  const gatherPolicy = opts.gather;
+  const gatherDefId: AllyId = gatherPolicy?.defId ?? 'gatherer';
+  /**
+   * ⚠ 타입이 아니라 **표**로 판정한다. `AllyId`에 `'gatherer'`가 있어도 되돌리기
+   * 대조군(`gather-off` 류)은 그 종을 표에서 빼 버릴 수 있고, 그때 이 팔이 조용히
+   * 배포본 봇이 되면 대조군이 실험군을 돌려받는 사고가 된다.
+   */
+  const gatherDef: AllyDef | undefined = ALLY_DEFS[gatherDefId];
+  const gatherOn = gatherPolicy !== undefined && gatherDef !== undefined;
+  const gatherMinValue = gatherPolicy?.minValue ?? 0;
+  /** 짐 상한 (생략 = 1, 채집꾼 2. gather-spec D6) */
+  const gatherCarryCap = Math.max(1, gatherDef?.carryCap ?? 1);
+  /**
+   * sim이 자원 칸을 들고 있는가 (T2 이후). 비어 있으면 **스텁**이다 —
+   * 칸 목록은 `hasScenery`로, 짐값은 `gatherValueFor`로 하네스가 직접 만든다.
+   */
+  const liveResources: readonly ResourceCellState[] | undefined = sim.state.resources;
+  const gatherStub = !(liveResources !== undefined && liveResources.length > 0);
+  const gatherCells: GatherCell[] = [];
+  if (gatherOn) {
+    const bx = stage.baseCell.x;
+    const bz = stage.baseCell.z;
+    const push = (x: number, z: number, value: number): void => {
+      const dx = x - bx;
+      const dz = z - bz;
+      gatherCells.push({ key: z * stage.gridW + x, x, z, value, d2: dx * dx + dz * dz });
+    };
+    if (liveResources !== undefined && liveResources.length > 0) {
+      for (const c of liveResources) push(c.cellX, c.cellZ, c.value);
+    } else {
+      for (let z = 0; z < stage.gridH; z++) {
+        for (let x = 0; x < stage.gridW; x++) {
+          if (!sim.hasScenery(x, z)) continue;
+          const key = z * stage.gridW + x;
+          const kind = resourceKindOf(stage, key);
+          const dx = x - bx;
+          const dz = z - bz;
+          // ⚠ Math.hypot을 쓰지 않는다 — 짐값을 만드는 식이라 balance.gatherValueFor
+          //   주석의 규약(정밀도가 구현 정의인 함수는 골드 식에 안 쓴다)을 그대로 따른다.
+          push(x, z, gatherValueFor(GATHER_BASE_VALUE, RESOURCE_DEFS[kind].kindMul, Math.sqrt(dx * dx + dz * dz)));
+        }
+      }
+    }
+    // 마을에서 가까운 순, 동점이면 셀 키 오름차순 (§9-3의 고르는 법 그대로)
+    gatherCells.sort((a, b) => a.d2 - b.d2 || a.key - b.key);
+  }
+  /** allyId → 예약한 칸 */
+  const gatherClaim = new Map<number, GatherCell>();
+  /** 예약된 셀 키 — 예약은 **배타적**이다(둘을 같은 칸에 보내면 한 명이 헛걸음한다) */
+  const gatherClaimed = new Set<number>();
+  /** 텄음 셀 키 */
+  const gatherTaken = new Set<number>();
+  /** 마을로 보낸 사람 */
+  const gatherHoming = new Set<number>();
+  /** allyId → 진 짐 수 (스텁 전용) */
+  const gatherCarry = new Map<number, number>();
+  /** allyId → 진 짐값 합 (스텁 전용) */
+  const gatherCarryGold = new Map<number, number>();
+  /** 이 팔이 한 번이라도 명령을 낸 사람들 — 스텁의 한 걸음이 훑는 대상 */
+  const gatherIds = new Set<number>();
+
+  /** sim이 진짜 자원 칸을 들고 있으면 텄음을 그쪽에서 받아 온다 */
+  const syncTaken = (): void => {
+    if (gatherStub || liveResources === undefined) return;
+    for (const c of liveResources) if (c.taken) gatherTaken.add(c.cellZ * stage.gridW + c.cellX);
+  };
+  const carryOf = (a: { id: number; carryCount: number }): number =>
+    gatherStub ? (gatherCarry.get(a.id) ?? 0) : (a.carryCount ?? 0);
+  /** 지금 채집 심부름 중인가 — 스텁은 예약으로, 진짜는 `gatherKey`로 판정한다 */
+  const busyOf = (a: { id: number; gatherKey: number }): boolean =>
+    gatherStub ? gatherClaim.has(a.id) || gatherHoming.has(a.id) : (a.gatherKey ?? -1) >= 0;
+  const nextGatherCell = (): GatherCell | undefined => {
+    for (const c of gatherCells) {
+      if (c.value < gatherMinValue) continue;
+      if (gatherTaken.has(c.key) || gatherClaimed.has(c.key)) continue;
+      return c;
+    }
+    return undefined;
+  };
+  const sendHome = (id: number): void => {
+    if (gatherHoming.has(id)) return; // 이미 보냈다 — 같은 명령을 반복하면 이벤트만 쌓인다
+    gatherHoming.add(id);
+    if (cmd({ type: 'moveAlly', allyId: id, cellX: stage.baseCell.x, cellZ: stage.baseCell.z })) {
+      gatherCmds++;
+      gatherIds.add(id);
+    } else {
+      gatherHoming.delete(id);
+    }
+  };
+
+  /**
+   * 채집 판정 — **외곽 루프(120틱)에 얹는다**(§9-3). prep 전용이 아니다:
+   * prep은 90틱(3.0초)이라 채집꾼의 최단 캐기(4.0초)보다도 짧아서, phase를 보면
+   * 채집이 통째로 웨이브 길이에 결합된다(§4-8 E-15).
+   */
+  const stepGather = (): void => {
+    if (!gatherOn || gatherPolicy === undefined) return;
+    const st = sim.state;
+    if (st.phase !== 'wave' && st.phase !== 'prep') return;
+    syncTaken();
+    // 1) 인원 유지. ⚠ `trainAlly`가 false면 **재시도하지 않는다** — 정원이 막은 것이고
+    //    (STRONG_BOT 팔은 Lv1이라 정원 2다) 같은 루프에서 다시 눌러도 같은 false가 온다.
+    let alive = 0;
+    for (const a of st.allies) if (a.alive && a.defId === gatherDefId) alive++;
+    if (alive < gatherPolicy.count && sim.canTrainAlly(gatherDefId)) {
+      const cost = sim.allyCost(gatherDefId);
+      if (cmd({ type: 'trainAlly', defId: gatherDefId })) {
+        // 채집꾼도 부족원이다 — goldAllies에 안 넣으면 goldEarned 항등식이 어긋난다
+        goldAllies += cost;
+        alliesTrained++;
+        gatherCmds++;
+      }
+    }
+    // 2) 개체별 지시 — **id 오름차순**(§9-3). 순서를 정하지 않으면 같은 판이 두 번 다르게 돈다
+    const mine = st.allies.filter((a) => a.alive && a.defId === gatherDefId).sort((a, b) => a.id - b.id);
+    for (const a of mine) {
+      if (busyOf(a)) continue;
+      if (carryOf(a) >= gatherCarryCap) {
+        sendHome(a.id); // 가득 찼다 (D6: sim이 자동 귀환시킨다 — 봇은 그 뜻을 따라간다)
+        continue;
+      }
+      const c = nextGatherCell();
+      if (c === undefined) {
+        // 3) 더 캘 칸이 없다 — 짐이 남았으면 마을로 (§4-8 E-18. 안 그러면 마지막 한 짐이
+        //    영영 안 들어와 총액 항등식 `18.rateCap`이 어긋난다)
+        if (carryOf(a) > 0) sendHome(a.id);
+        continue;
+      }
+      gatherClaimed.add(c.key);
+      gatherClaim.set(a.id, c);
+      gatherHoming.delete(a.id);
+      if (cmd({ type: 'moveAlly', allyId: a.id, cellX: c.x, cellZ: c.z })) {
+        gatherCmds++;
+        gatherIds.add(a.id);
+      } else {
+        gatherClaimed.delete(c.key);
+        gatherClaim.delete(a.id);
+      }
+    }
+  };
+
+  /**
+   * **스텁의 한 걸음** — sim이 채집을 모르는 동안 짐·텄음·왕복을 **위치로** 흉내낸다.
+   * ⚠ 파는 시간(§1-2의 8초 저울)이 모형에 **없다**: 도착 = 짐을 졌다로 친다. 곧 스텁의
+   *   왕복은 진짜보다 빠르고, 이 팔이 실제로 재는 것은 "채집이 봉투를 얼마나 미는가"가
+   *   아니라 **"봇이 채집 명령을 정말로 내고 있는가"** 뿐이다.
+   *   T2가 오면 `gatherStub`가 false가 되어 이 함수는 **한 줄도 안 돈다**.
+   */
+  const stepGatherStub = (): void => {
+    if (gatherIds.size === 0) return;
+    const st = sim.state;
+    for (const id of gatherIds) {
+      let me: (typeof st.allies)[number] | undefined;
+      for (const x of st.allies) {
+        if (x.id === id) {
+          me = x;
+          break;
+        }
+      }
+      if (me === undefined || !me.alive) {
+        // 짐을 진 채 죽었다 — 지고 있던 짐값이 그대로 손실이다 (§8-4 ③)
+        if ((gatherCarry.get(id) ?? 0) > 0) {
+          gatherDeaths++;
+          gatherLostGold += gatherCarryGold.get(id) ?? 0;
+        }
+        const held = gatherClaim.get(id);
+        if (held) gatherClaimed.delete(held.key);
+        gatherClaim.delete(id);
+        gatherCarry.delete(id);
+        gatherCarryGold.delete(id);
+        gatherHoming.delete(id);
+        gatherIds.delete(id);
+        continue;
+      }
+      if (gatherClaim.has(id) || gatherHoming.has(id)) allyGatherTicks++;
+      const dx = me.x - me.tgtX;
+      const dz = me.z - me.tgtZ;
+      if (dx * dx + dz * dz > ARRIVE_EPS2) continue; // 아직 걷는 중
+      const c = gatherClaim.get(id);
+      if (c !== undefined && Math.round(me.tgtX) === c.x && Math.round(me.tgtZ) === c.z) {
+        gatherTaken.add(c.key);
+        gatherClaimed.delete(c.key);
+        gatherClaim.delete(id);
+        gatherLoads++;
+        gatherCarry.set(id, (gatherCarry.get(id) ?? 0) + 1);
+        gatherCarryGold.set(id, (gatherCarryGold.get(id) ?? 0) + c.value);
+      } else if (gatherHoming.has(id)) {
+        gatherHoming.delete(id);
+        if ((gatherCarry.get(id) ?? 0) > 0) {
+          const g = gatherCarryGold.get(id) ?? 0;
+          gatherDeliveries++;
+          gatherGold += g; // ⚠ 스텁에서 이 값은 **언제나 0**이다 (sim이 지급하지 않는다)
+          const b = bandOf(st.waveIndex);
+          gatherGoldByBand[b] = (gatherGoldByBand[b] ?? 0) + g;
+        }
+        gatherCarry.set(id, 0);
+        gatherCarryGold.set(id, 0);
+      }
+    }
+  };
+
+  /** 진짜 sim이 채집을 아는 경우의 틱 계측 — 상태는 sim이 들고 있으므로 세기만 한다 */
+  const stepGatherTicks = (): void => {
+    for (const a of sim.state.allies) {
+      if (!a.alive || a.defId !== gatherDefId) continue;
+      if ((a.gatherKey ?? -1) >= 0 || (a.carryCount ?? 0) > 0) allyGatherTicks++;
+    }
+  };
+
   /**
    * 아군 출동 판정 — "마을 앞까지 온 적이 있으면 뽑는다".
    * 전진 중인 적만이 아니라 **이미 봉쇄된 적도** 트리거로 센다: 앞줄이 붙잡고 있는
@@ -1008,7 +1544,7 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     const cost = sim.allyCost(defId);
     if (st.gold - cost < allyReserve) return;
     if (!sim.canTrainAlly(defId)) return;
-    if (sim.applyCommand({ type: 'trainAlly', defId })) {
+    if (cmd({ type: 'trainAlly', defId })) {
       goldAllies += cost;
       alliesTrained++;
       allyTurn++;
@@ -1021,7 +1557,7 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
        * 여섯을 한 명씩 찍게 하면 급할 때 여섯 번을 눌러야 한다(규칙 2).
        */
       if (allyStance === 'front') {
-        sim.applyCommand({
+        cmd({
           type: 'moveAlly',
           allyId: -1,
           cellX: frontCell.x,
@@ -1040,7 +1576,7 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     const cost = sim.baseUpgradeCost();
     if (cost === null || st.gold - cost < (p.reserve ?? 0)) return;
     if (!sim.canUpgradeBase()) return;
-    if (sim.applyCommand({ type: 'upgradeBase' })) goldBase += cost;
+    if (cmd({ type: 'upgradeBase' })) goldBase += cost;
   };
 
   /**
@@ -1072,7 +1608,7 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     // 소품을 치워서 얻는 자리가 **더 좋을 때만** 산다 (같거나 나쁘면 낭비)
     if (bestBuy && bestBuyKey < bestFreeKey) {
       const paid = sim.clearSceneryCost(bestBuy[0], bestBuy[1]) ?? 0;
-      if (sim.applyCommand({ type: 'clearScenery', cellX: bestBuy[0], cellZ: bestBuy[1] })) {
+      if (cmd({ type: 'clearScenery', cellX: bestBuy[0], cellZ: bestBuy[1] })) {
         clears++;
         clearGold += paid;
         return bestBuy;
@@ -1137,7 +1673,7 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
         const cost = st.refreshCost;
         if (cost > refreshMaxPaid) break;
         if (st.gold - cost < reserveNow()) break;
-        if (!sim.applyCommand({ type: 'refreshHand' })) break;
+        if (!cmd({ type: 'refreshHand' })) break;
         goldTowers += cost;
       }
     }
@@ -1149,7 +1685,7 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       const cell = pickCell(card.towerId, card.cost);
       if (!cell) break;
       const paid = card.cost;
-      if (sim.applyCommand({ type: 'placeTower', handIndex: h, cellX: cell[0], cellZ: cell[1] })) {
+      if (cmd({ type: 'placeTower', handIndex: h, cellX: cell[0], cellZ: cell[1] })) {
         placed++;
         goldTowers += paid;
       }
@@ -1161,7 +1697,39 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
    * 사건 집계 — 외곽 루프 끝(기본)이든 매 틱(계측 훅)이든 **같은 함수**가 처리한다.
    * 두 자리에 같은 코드를 두면 훅을 켠 판과 끈 판의 결과가 갈라질 수 있다.
    */
-  const handleEvent = (ev: SimEvent): void => {
+  const handleEvent = (ev: SimEvent, waveNow: number): void => {
+    if (ev.type === 'gatherDelivered') {
+      // ⚠ 채집이 골드를 내는 **유일한** 사건이다(§3-8 D3). T2 전에는 한 번도 안 온다.
+      gatherEvents++;
+      gatherDeliveries++;
+      gatherGold += ev.gold;
+      const b = bandOf(waveNow);
+      gatherGoldByBand[b] = (gatherGoldByBand[b] ?? 0) + ev.gold;
+      gatherHoming.delete(ev.allyId);
+      return;
+    }
+    if (ev.type === 'gathered') {
+      gatherEvents++;
+      gatherLoads++;
+      gatherTaken.add(ev.cellZ * stage.gridW + ev.cellX);
+      gatherClaimed.delete(ev.cellZ * stage.gridW + ev.cellX);
+      return;
+    }
+    if (ev.type === 'gatherStarted') {
+      gatherEvents++;
+      return;
+    }
+    if (ev.type === 'gatherLost') {
+      gatherEvents++;
+      if (ev.reason === 'died') {
+        gatherDeaths++;
+        gatherLostGold += ev.gold;
+      }
+      if (ev.reason === 'moved' || ev.reason === 'cleared' || ev.reason === 'died') {
+        gatherClaimed.delete(ev.cellZ * stage.gridW + ev.cellX);
+      }
+      return;
+    }
     if (ev.type === 'towerDestroyed') {
       destroyed++;
       lostTiers += ev.tier;
@@ -1188,6 +1756,11 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     guard++;
     const st = sim.state;
     if (st.towers.length < cap) tryPlace(1);
+    // 채집 판정 — **방어선 뒤 · 마을 앞**. 여기에 두는 이유는 stepBase와 같다("방어선은
+    // 세우되 강화보다 먼저"). ⚠ 타워 업그레이드 **앞**이어야 한다: 업그레이드 루프는 매 회
+    // 잔고를 0으로 훑어 가는 무한 흡수구라(towerReserve 주석), 뒤에 두면 채집꾼 70골드를
+    // 영영 못 사고 이 팔이 **아무것도 안 재는 팔**이 된다.
+    stepGather();
     // 홈타운 레벨업은 **웨이브 사이의 결정**이라 외곽 루프에 둔다 (UI도 기지 탭 패널이다).
     // 타워 배치 뒤·업그레이드 앞에 놓아 "방어선은 세우되 강화보다 먼저"가 되게 한다 —
     // 예비비(reserve)를 크게 주면 반대로 '남는 돈으로만' 사는 봇이 된다.
@@ -1202,18 +1775,39 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     }
     if (best) {
       const paid = best.cost;
-      if (sim.applyCommand({ type: 'upgradeTower', towerId: best.id })) goldTowers += paid;
+      if (cmd({ type: 'upgradeTower', towerId: best.id })) goldTowers += paid;
     } else if (st.towers.length >= cap) tryPlace(1.5);
     // 조기 호출: 성한 타워만 있을 때만 (손상 중이면 준비 시간을 수리로 쓴다)
     if (st.phase === 'prep' && st.prepTicksLeft > 0) {
       const damaged = opts.alwaysRush !== true && st.towers.some((t) => t.hp < t.maxHp);
-      if (!damaged) sim.applyCommand({ type: 'callWave' });
+      if (!damaged) cmd({ type: 'callWave' });
     }
     investedById.clear();
     for (const t of st.towers) investedById.set(t.id, t.invested);
+    // 매물가는 외곽 루프마다 다시 읽는다 (사망·정원 변화가 여기서 잡힌다)
+    menuStale = true;
     for (let i = 0; i < 120; i++) {
+      const goldBeforeTick = sim.state.gold;
       sim.tick();
       const s = sim.state;
+      totalTicks++;
+      // 틱 안에서 골드는 **늘기만 한다**(지출은 전부 applyCommand다) — 그래서 양수 차가
+      // 그대로 틱 수입이다: 현상금 · 웨이브 보상 · (T2 이후) 채집 배달.
+      const dGold = s.gold - goldBeforeTick;
+      if (dGold > 0) goldFromTicks += dGold;
+      if (menuStale) {
+        menuNow = menuPrice();
+        menuStale = false;
+      }
+      if (menuNow > 0 && s.gold < menuNow) {
+        brokeTicks++;
+        brokeRun++;
+        if (brokeRun > brokeRunMax) brokeRunMax = brokeRun;
+        if (menuNow < brokePriceMin) brokePriceMin = menuNow;
+        if (menuNow > brokePriceMax) brokePriceMax = menuNow;
+      } else {
+        brokeRun = 0;
+      }
       if (s.phase === 'wave' && s.waveIndex >= MIN_TOWERS_FROM_WAVE && s.towers.length < minTowers) {
         minTowers = s.towers.length;
       }
@@ -1233,16 +1827,22 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       // 아군만 외곽 루프가 아니라 틱 루프 안에서 본다 — 한 판정이 한 명만 뽑으므로
       // 4초마다 보면 정원을 채우는 데 여러 웨이브가 걸린다 (ALLY_DECIDE_INTERVAL 주석)
       if (allyPolicy && i % ALLY_DECIDE_INTERVAL === 0) stepAllies();
+      // 채집의 틱 쪽 — 스텁이면 짐/왕복을 흉내내고, 진짜 sim이면 세기만 한다.
+      // 어느 쪽도 sim을 **한 번도 부르지 않는다**(읽기만 한다).
+      if (gatherOn) {
+        if (gatherStub) stepGatherStub();
+        else stepGatherTicks();
+      }
       // 계측 훅이 있을 때만 **매 틱** 비운다 — 웨이브 번호를 사건과 같은 틱에서 읽어야
       // "몇 번째 웨이브에서 맞았나"가 성립하기 때문이다. 훅이 없으면 한 줄도 안 돈다.
       if (onEvent) {
         for (const ev of sim.drainEvents()) {
-          handleEvent(ev);
+          handleEvent(ev, sim.state.waveIndex);
           onEvent(ev, sim.state.waveIndex);
         }
       }
     }
-    for (const ev of sim.drainEvents()) handleEvent(ev);
+    for (const ev of sim.drainEvents()) handleEvent(ev, sim.state.waveIndex);
   }
   const spent = goldTowers + goldAllies + goldBase + clearGold;
   return {
@@ -1274,5 +1874,25 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     goldScenery: clearGold,
     goldEarned: spent + sim.state.gold - stage.startGold,
     minTowers: minTowers === Infinity ? 0 : minTowers,
+    gatherGold,
+    gatherLoads,
+    gatherDeliveries,
+    gatherLostGold,
+    gatherDeaths,
+    takenCells: gatherTaken.size,
+    gatherGoldByBand,
+    allyGatherTicks,
+    gatherEvents,
+    gatherCmds,
+    gatherStub: gatherOn ? gatherStub : false,
+    cmdCounts: Object.fromEntries([...cmdCounts.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))),
+    cmdTotal,
+    goldFromCommands,
+    goldFromTicks,
+    brokeTicks,
+    totalTicks,
+    brokeRunMax,
+    brokePriceMin: brokePriceMin === Infinity ? 0 : brokePriceMin,
+    brokePriceMax,
   };
 }

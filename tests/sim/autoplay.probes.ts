@@ -91,6 +91,14 @@ const ALLY_OPTS: BotOptions = { towerReserve: 600, allies: { minNear: 1 } };
 /**
  * **위약 아군** — 가격·속도·hp 는 그대로라 골드 흐름이 같고 전투 능력만 0이다.
  * 이 파일에서 가장 강한 대조군 형태이고, 8·12·14가 같은 표를 쓴다.
+ *
+ * ⚠ **`gatherer`는 채집 능력까지 지운다** (`gatherPct: 0` · `carryCap: 1`,
+ * docs/gather-spec.md §12 T1). 위약의 정의가 "같은 골드를 같은 시점에 태우되 **능력만**
+ * 0"인데, 채집꾼의 능력은 전투가 아니라 **캐는 손**이다 — `kill()`만 걸면 위약 채집꾼이
+ * 진짜와 똑같이 캐서 위약 실험의 전제가 통째로 깨진다.
+ * ⚠ 이 항목을 더해도 커밋된 팔의 숫자는 **한 자리도 안 움직인다**: 이 파일의 어떤 정책도
+ * `gatherer`를 뽑지 않고(`allyOrder`는 셋으로 하드코딩돼 있다), `envelope.playKey`는
+ * 표의 **내용이 아니라 id**(`'placeboAllies'`)를 접으므로 캐시 키도 그대로다.
  */
 export const PLACEBO_ALLIES: Record<AllyId, AllyDef> = (() => {
   const kill = (d: AllyDef): AllyDef => ({ ...d, dmg: 0, blocks: false, canTargetAir: false, range: 0 });
@@ -98,6 +106,7 @@ export const PLACEBO_ALLIES: Record<AllyId, AllyDef> = (() => {
     clubber: kill(ALLY_DEFS.clubber),
     slinger: kill(ALLY_DEFS.slinger),
     guardian: kill(ALLY_DEFS.guardian),
+    gatherer: { ...kill(ALLY_DEFS.gatherer), gatherPct: 0, carryCap: 1 },
   };
 })();
 const T_PLACEBO: Tables = { id: 'placeboAllies', allies: PLACEBO_ALLIES };
