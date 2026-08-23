@@ -209,6 +209,20 @@ export class ParticleSystem {
     return m;
   }
 
+  /**
+   * 살아 있는 파티클 수 (두 레이어 합) — **연출 계측 전용**이다.
+   * 판정에도 예산 판단에도 안 쓴다(그건 `load` 의 몫이다). 있는 이유는 하나다:
+   * 파편 몇 점짜리 연출은 화면에서 눈으로 세기에는 너무 작고(0.06타일 ≈ 3px),
+   * 가려지기까지 하면 "정말 났는가"를 캡처로 못 닫는다. 이 값은 그 질문에만 답한다.
+   *
+   * ⚠ **직전 `update()` 시점의 수**다 — `live` 는 매 프레임 갱신에서만 다시 세므로
+   *   `burst()` 바로 뒤에 읽으면 아직 옛 값이다. 스폰 직후를 재려면 `update(0)`을
+   *   한 번 태우고 읽어라(실측 중에 이걸로 한 번 속았다: 델타가 0으로 보였다).
+   */
+  get liveCount(): number {
+    return this.main.live + this.glow.live;
+  }
+
   /** 현재 점유율 0~1 (두 레이어 중 높은 쪽 — 연출 예산 판단용) */
   get load(): number {
     return Math.max(this.main.live / this.main.capacity, this.glow.live / this.glow.capacity);

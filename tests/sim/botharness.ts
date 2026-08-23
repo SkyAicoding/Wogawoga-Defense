@@ -356,6 +356,17 @@ export interface BotOptions {
   onEvent?: (ev: SimEvent, wave: number) => void;
 }
 
+/** 문간 대치 하나 (src/sim/gate.ts) */
+export interface GateStint {
+  defId: EnemyId;
+  /** 문간에 선 채로 버틴 틱 (killed=false 면 마지막 한 입 시점의 값) */
+  ticks: number;
+  /** 그동안 실제로 문 횟수 */
+  bites: number;
+  /** 문간에서 죽었는가 (false = 판이 끝날 때까지 서 있었다) */
+  killed: boolean;
+}
+
 export interface BotResult {
   won: boolean;
   wave: number;
@@ -439,8 +450,30 @@ export interface BotResult {
    * 승수는 ±2가 노이즈이지만 누수 피해는 같은 시드에서 결정론적으로 재현된다.
    */
   leaked: number;
-  /** 기지까지 흘러 들어간 적 마릿수 */
+  /** 기지까지 흘러 들어간 적 마릿수 (`enemyLeaked` 수) */
   leaks: number;
+  // ── 문간 공성 계측 (src/sim/gate.ts. 11단계 신설) ─────────────────────────
+  /**
+   * 보스가 문 앞에 **서서 버틴** 누적 틱. 이 값이 곧 사용자 불만 ③("보스가 마을 앞에서
+   * 안 싸우고 그냥 들어간다")의 단위다 — 문간 도입 전에는 구조적으로 **정확히 0**이었다.
+   * 문간에 서는 것은 보스뿐이므로 판당 보스 마릿수(스테이지1은 5)로 나누면 마리당 값이다.
+   */
+  gateTicks: number;
+  /** 문간에서 마을을 문 횟수 (`gateBite` 수). 봉쇄·스턴 틱에는 안 는다 */
+  gateBites: number;
+  /**
+   * **문간에서 죽은 보스 수**. gateStints.length 와의 차이가 곧 "문간을 못 치우고 끝난 판"이다.
+   * 통과(누수)라는 결말이 사라졌으므로 보스의 결말은 둘뿐이다 — 여기서 죽거나, 마을이 죽거나.
+   */
+  bossKilledAtGate: number;
+  /**
+   * 문간 대치 **하나하나**의 기록. 마리당 분포(중앙값·분위)를 재려면 합계로는 안 된다 —
+   * 판당 보스가 여럿이고 종이 섞이기 때문이다(스테이지1은 spino×4 + trex×1).
+   * ⚠ 판이 끝날 때까지 살아 있던 보스의 `ticks` 는 **마지막 한 입 시점의 값**이라
+   *   최대 한 주기만큼 과소 보고된다(`killed:false` 로 구분된다). 죽은 보스는 정확하다
+   *   — `enemyDied.gateTicks` 가 확정값을 싣는다.
+   */
+  gateStints: readonly GateStint[];
   // ── 골드 배분 계측 (네 갈래가 전부 살아 있는지 재는 단위) ──────────────────
   /** 타워에 넣은 누적 골드 (배치 + 업그레이드) */
   goldTowers: number;
@@ -901,6 +934,9 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
   let baseKills = 0;
   let leaked = 0;
   let leaks = 0;
+  /** 문간 대치 — 열려 있는 것은 enemyId 로, 닫힌 것은 배열로 (gate.ts) */
+  const gateOpen = new Map<number, GateStint>();
+  const gateStints: GateStint[] = [];
   /** 적 id → 마지막으로 피해를 준 출처. enemyDied에 출처가 없어 여기서 귀속시킨다 */
   const lastHit = new Map<number, string>();
   /** 봉쇄 중인 아군 id 집계용 스크래치 (매 틱 재사용 — 할당 없음) */
@@ -1167,8 +1203,19 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       lostTiers += ev.tier;
       lostGold += investedById.get(ev.towerId) ?? 0;
     } else if (ev.type === 'baseDamaged') {
+      // 마을이 받은 **모든** 피해 — 누수든 문간의 한 입이든. 마릿수는 아래 enemyLeaked 가 센다
+      // (문간 도입 전에는 둘이 1:1 이라 한 분기가 겸했는데, 이제는 갈라야 라벨이 안 어긋난다)
       leaked += ev.amount;
+    } else if (ev.type === 'enemyLeaked') {
       leaks++;
+    } else if (ev.type === 'bossAtGate') {
+      gateOpen.set(ev.enemyId, { defId: ev.defId, ticks: 0, bites: 0, killed: false });
+    } else if (ev.type === 'gateBite') {
+      const st = gateOpen.get(ev.enemyId);
+      if (st) {
+        st.ticks = ev.gateTicks;
+        st.bites++;
+      }
     } else if (ev.type === 'baseFired') {
       baseShots++;
     } else if (ev.type === 'allyDied') {
@@ -1179,6 +1226,14 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     } else if (ev.type === 'enemyDied') {
       if (lastHit.get(ev.enemyId) === 'hometown') baseKills++;
       lastHit.delete(ev.enemyId);
+      const st = gateOpen.get(ev.enemyId);
+      if (st) {
+        // enemyDied.gateTicks 가 확정값이다 — 개체는 같은 틱에 풀로 회수된다
+        if (ev.gateTicks !== undefined) st.ticks = ev.gateTicks;
+        st.killed = true;
+        gateStints.push(st);
+        gateOpen.delete(ev.enemyId);
+      }
     }
   };
   const onEvent = opts.onEvent;
@@ -1245,6 +1300,8 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     for (const ev of sim.drainEvents()) handleEvent(ev);
   }
   const spent = goldTowers + goldAllies + goldBase + clearGold;
+  /** 닫힌 대치 + 판 종료 시점에 아직 열려 있던 대치 (gate.ts) */
+  const allStints: GateStint[] = [...gateStints, ...gateOpen.values()];
   return {
     won: sim.state.phase === 'won',
     wave: sim.state.waveIndex,
@@ -1268,6 +1325,11 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     baseKills,
     leaked,
     leaks,
+    // 판이 끝날 때까지 문간에 서 있던 보스도 기록에 남긴다 (killed:false)
+    gateStints: allStints,
+    gateTicks: allStints.reduce((a, g) => a + g.ticks, 0),
+    gateBites: allStints.reduce((a, g) => a + g.bites, 0),
+    bossKilledAtGate: allStints.filter((g) => g.killed).length,
     goldTowers,
     goldAllies,
     goldBase,

@@ -461,6 +461,23 @@ export interface WavePlanParams {
  *   '.' 지상  '~' 물/공허  'o' 건설 슬롯  '#' 장식(바위 등, 건설 불가)
  * 경로 셀은 paths 웨이포인트에서 래스터라이즈되어 지형에 표시된다.
  */
+/**
+ * 문간 공성의 스테이지별 덮어쓰기 — 세 항목 전부 **생략 가능**이고, 생략하면
+ * balance.ts 의 `GATE_BITE_TICKS` / `GATE_BITE_DIVISOR` 와 "켜짐"이 그대로 쓰인다.
+ * 배포 데이터는 한 스테이지도 이 필드를 적지 않는다(= 기본값 그대로).
+ */
+export interface GateSpec {
+  /**
+   * `false` 면 보스도 **종전대로 누수한다**(문간 기능 전체가 꺼진다).
+   * `gate-off` 되돌리기 대조군이 쓰는 유일한 스위치다.
+   */
+  enabled?: boolean;
+  /** 한 입의 주기(틱). 기본 GATE_BITE_TICKS */
+  biteTicks?: number;
+  /** 한 입 = ceil(baseDamage / 이 값). 기본 GATE_BITE_DIVISOR */
+  divisor?: number;
+}
+
 export interface StageDef {
   id: number;
   nameKey: string;
@@ -488,6 +505,17 @@ export interface StageDef {
    * 스웜 종**뿐이라 종을 지정해서 덮어쓴다.
    */
   leakDamage?: Partial<Record<EnemyId, number>>;
+  /**
+   * **문간 공성 손잡이** (src/sim/gate.ts). 생략하면 전부 기본값이다 —
+   * 곧 이 필드를 안 적은 여섯 스테이지의 동작은 balance.ts 상수가 정한다.
+   *
+   * 왜 스테이지에 두는가(= 왜 모듈 상수만으로 두지 않는가): `leakDamage`와 **정확히 같은
+   * 이유**다. 되돌리기 대조군(tests/sim/controls.ts)이 데이터 주입구로만 만들어질 수 있는데,
+   * 문간을 모듈 상수로만 두면 `SIEGE_ENGAGE_RANGE`처럼 **주입구 없는 되돌리기**가 되어
+   * 항목이 통째로 UNPROVEN 으로 태어난다(controls.UNREACHABLE 참조). 새 기능이
+   * 증명 불가능한 채로 들어오지 않게 하려면 손잡이가 `DataPatch` 표면에 닿아야 한다.
+   */
+  gate?: GateSpec;
   baseCell: Vec2;
   baseHp: number;
   startGold: number;
@@ -569,6 +597,29 @@ export interface EnemyState {
    * 그 아군을 난투(brawl)로 반격한다. 공중 적에게는 절대 붙지 않는다 — 날아서 지나간다.
    */
   blockerAllyId: number;
+  /**
+   * **문간에 서서 버틴 누적 틱** (0 = 문간이 아니다). src/sim/gate.ts.
+   *
+   * 이 한 필드가 "문간에 있는가"와 "얼마나 오래 있었는가"를 **동시에** 나타낸다.
+   * 별도의 bool을 두지 않은 이유는 두 값이 동시에 정확해야 안전한 설계를 피하려는
+   * 것이다(entities.ts `bountyPaid` 주석의 논거와 같다) — 상태가 하나면 풀 재사용
+   * 리셋 누락이 한 곳에서만 일어난다.
+   *
+   * 0에서 1이 되는 순간은 `moveEnemies`가 경로 끝에 도달시킨 그 틱이고, 그 뒤로는
+   * **두 번 다시 걷지 않는다**. 곧 이 값이 0보다 크면 좌표가 영구히 고정이다.
+   * 공개 상태다 — 2단계 HUD가 '지금 물고 있는 것'을, 연출이 문간 대치 링을 여기서 읽는다.
+   */
+  gateTicks: number;
+  /**
+   * 다음 한 입까지 남은 틱 (문간이 아니면 항상 0). gate.ts 규칙 3·4.
+   *
+   * `attackCdLeft`(타워 타격)와 **일부러 분리한다** — 같은 이유다(entities.ts
+   * `brawlCdLeft` 주석): 두 행동은 서로 배타이고(문간에 선 보스는 걸어 다니며
+   * 타워를 쏘지 않는다) 합치면 "문간에 서는 순간 타워 쿨다운이 한 박자 밀리는"
+   * 숨은 결합이 생긴다.
+   * 공개 상태인 이유는 2단계 HUD 가 '다음 한 입까지 남은 시간'을 그대로 그리기 때문이다.
+   */
+  gateBiteCdLeft: number;
 }
 
 /**
@@ -826,6 +877,13 @@ export type SimEvent =
       goldNow: number;
       /** 최대 체력 (웨이브 스케일 포함) — 대형/후반 적일수록 사망 폭발을 크게 */
       maxHp: number;
+      /**
+       * **문간에서 죽었다면** 그 자리에서 버틴 틱 수 (문간이 아니었으면 생략).
+       * 여기 싣는 이유: 개체는 이 이벤트 뒤 같은 틱에 풀로 회수되므로
+       * (battle.ts 9단계) 계측이 나중에 `gateTicks`를 읽을 방법이 없다.
+       * 곧 이 필드가 문간 체류의 **유일한 확정 기록**이다.
+       */
+      gateTicks?: number;
     }
   | {
       type: 'enemyLeaked';
@@ -840,6 +898,43 @@ export type SimEvent =
       forfeited: number;
     }
   | { type: 'bossSpawned'; enemyId: number; defId: EnemyId }
+  | {
+      /**
+       * **보스가 문간에 섰다** — 경로 끝에 도달했는데 사라지지 않고 그 자리에 버틴다.
+       * 보스에게 `enemyLeaked`를 **대신하는** 사건이다(src/sim/gate.ts 규칙 1).
+       * 개체당 정확히 한 번 나간다. 끝나는 사건은 `enemyDied` 하나뿐이다 —
+       * 문간에 선 보스가 사라지는 길이 죽음밖에 없기 때문이다.
+       *
+       * 2단계의 문간 집결 버튼이 활성화되는 신호이자, 연출의 대치 링이 켜지는 신호다.
+       */
+      type: 'bossAtGate';
+      enemyId: number;
+      defId: EnemyId;
+      /** 문간 좌표 (= 경로 끝. 사실상 stage.baseCell) */
+      x: number;
+      z: number;
+      /** 이 보스의 한 입 크기 — HUD가 "얼마씩 물리는가"를 미리 보여 줄 수 있다 */
+      bite: number;
+    }
+  | {
+      /**
+       * **한 입** — 문간의 보스가 마을을 물었다. 바로 뒤에 `baseDamaged`가 따라온다.
+       * 순서는 `raidAttack` → `towerDamaged`와 같은 규약이다(siege.ts fireAtTower):
+       * **무는 것이 먼저이고 깎이는 것이 나중**이라야 연출이 인과대로 읽는다.
+       *
+       * `baseDamaged`만으로는 누수와 구분할 수 없어 따로 둔다 — 누수는 적이 사라지지만
+       * 한 입은 무는 자가 그대로 서 있어서 연출(지붕 파편·마을 흔들림)이 달라야 한다.
+       */
+      type: 'gateBite';
+      enemyId: number;
+      defId: EnemyId;
+      /** 실제로 깎은 마을 HP (정수, ≥1) */
+      amount: number;
+      x: number;
+      z: number;
+      /** 이 한 입 시점의 누적 문간 체류 틱 */
+      gateTicks: number;
+    }
   | { type: 'towerPlaced'; towerId: number; defId: TowerId; cellX: number; cellZ: number }
   | { type: 'towerUpgraded'; towerId: number; defId: TowerId; tier: number }
   | { type: 'towerSold'; towerId: number; refund: number }
@@ -1303,6 +1398,23 @@ export interface BattleUiApi {
    */
   clearSelection(): void;
   requestSetTargeting(mode: TargetingMode): void;
+  /**
+   * **문간 집결** — 살아 있는 부족원 **전원**을 마을 셀(`stage.baseCell`)로 되부른다.
+   * 11단계 2단계의 유일한 새 조작이고, 요구하는 것은 **탭 1회**다.
+   *
+   * 왜 새 커맨드가 아닌가: 이건 기존 `moveAlly`(allyId −1, defId 생략 = 전원)를
+   * 마을 셀로 한 번 발행하는 것과 **정확히 같다**. 곧 `src/sim/**` 는 0줄이다.
+   * 시뮬레이션이 새 개념을 배우지 않는다는 뜻이고, 골든 해시도 안 흔들린다.
+   *
+   * 왜 UI 가 셀 좌표를 안 넘기는가: `baseCell` 은 스테이지 정의에 있고 UI 는
+   * 지금 어느 스테이지인지 모른다(`BattleStateView` 에 stageId 가 없다).
+   * 좌표를 아는 쪽(game/battlecontroller)이 채우는 것이 맞다 —
+   * `requestUpgradeBase` 가 레벨을 안 받는 것과 같은 이유다.
+   *
+   * 선택 사항이다 — 목 UI(debug/labs/uilab)처럼 판이 없는 구현은 안 넣어도 된다.
+   * HUD 는 없으면 버튼을 아예 안 그린다(기능 감지).
+   */
+  requestRallyAllies?(): void;
   /** 마을에서 부족원 출동 (골드 부족/상한이면 무시) */
   requestTrainAlly(defId: AllyId): void;
   requestRefresh(): void;

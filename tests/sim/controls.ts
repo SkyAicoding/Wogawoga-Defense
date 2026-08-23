@@ -183,6 +183,46 @@ const leakOff = (s: StageDef): StageDef => {
   return rest as StageDef;
 };
 const leakHalf = (s: StageDef): StageDef => ({ ...s, leakDamage: { compy: 1 } });
+/**
+ * **문간 공성을 통째로 끈다** — 보스도 경로 끝에서 종전대로 누수한다 (src/sim/gate.ts 규칙 1).
+ *
+ * ⚠ 이 되돌리기가 **만들어질 수 있다는 것 자체가 설계 결정**이다. 문간 손잡이를 balance
+ *   모듈 상수로만 뒀으면 `SIEGE_ENGAGE_RANGE` 처럼 주입구 없는 되돌리기가 되어(UNREACHABLE
+ *   참조) 새 기능이 태어나자마자 판별력 없는 자리가 됐을 것이다. 그래서 `StageDef.gate` 에
+ *   뒀다 — 배포 데이터는 이 필드를 한 스테이지도 안 적으므로 값은 한 자리도 안 바뀐다.
+ */
+export const gateOff = (s: StageDef): StageDef => ({
+  ...s,
+  gate: { ...(s.gate ?? {}), enabled: false },
+});
+export const GATE_OFF_PATCH: DataPatch = {
+  id: 'gate-off',
+  why: '문간 공성 끄기 (StageDef.gate.enabled=false)',
+  stage: gateOff,
+};
+/*
+ * ⚠⚠ **카탈로그(CONTROLS)에는 아직 안 넣었다. 왜인지가 이 주석의 전부다.**
+ * (`oldAllyPrices` 와 같은 처분이다 — 지운 게 아니라 무엇이 안 되는지를 여기 남긴다)
+ *
+ * 이 스위트의 계약은 **"기준선이 초록인데 되돌리기가 빨갛게 만든다"** 이다
+ * (autoplay.control.test.ts 의 `notGreen` · `notFired` 두 어서션). `gate-off` 는 그 방향이
+ * **거꾸로**다: 배포 기본값(문간 켜짐)이 지금 봉투를 깨고 있고, 이 패치는 그것을
+ * **오늘 상태로 되돌려 초록으로 만든다**. 곧 겨냥할 다리를 뭘 적든 `notFired` 로 빨개진다.
+ *
+ * 실측으로 확인한 방향(창 strong 160판 · src/sim/gate.ts 헤더의 표):
+ *   다리              배포(문간 켜짐)        gate-off(오늘)
+ *   1b.clearRate      8.75%   ✗ (문턱 97.5%)  100.00% ○
+ *   1b.tailCvar       0.00%   ✗ (문턱 30%)     38.25% ○
+ *   1b.slack          7.85%   ○ (상한 55%)     49.33% ○   ← 상한 다리라 **양쪽 다 초록**이다
+ *   1b.slackMedian    0.00%   ○                48.00% ○   ← 같다
+ * 곧 `gate-off` 가 겨냥할 수 있는 다리는 **하나도 없다**: 문간이 깨는 둘은 기준선이 이미
+ * 빨개서 판정 불가이고, 나머지 둘은 양쪽 다 초록이다.
+ *
+ * **언제 넣는가**: 문간 설계가 고쳐져 배포 기본값이 다시 초록이 되면, 그 순간 이 패치는
+ * 정상 방향의 kill 대조군이 된다(문간을 끄면 [1-a] 하한이나 [1-b] 상한 중 하나가 빨개질
+ * 것이다 — 어느 쪽인지는 그때 실측이 정한다). 패치 함수와 id 를 미리 여기 둔 이유가 그것이고,
+ * tests/sim/gatemeasure.test.ts 는 지금도 이 패치를 그대로 쓴다.
+ */
 
 /**
  * 카탈로그. `targets` 는 tests/sim/autoplay.probes.ts 의 다리 id 다.

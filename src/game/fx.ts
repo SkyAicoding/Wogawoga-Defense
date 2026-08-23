@@ -21,7 +21,7 @@ import { towerTierScale } from '@/render/meshlib/towers';
 import { ATK_LAUNCH } from '@/render/meshlib/gait';
 import type { RaidShotOpts } from '@/render/views/projectileview';
 import type { DioramaCamera } from '@/render/camera';
-import { showBossBanner, showWaveBanner } from '@/ui/screens/battlehud';
+import { noteGateBite, showBossBanner, showWaveBanner } from '@/ui/screens/battlehud';
 import { damageText, spawnDamageNumber } from '@/ui/widgets/damagenumbers';
 import type { DamageKind } from '@/ui/widgets/damagenumbers';
 
@@ -430,6 +430,79 @@ export class FxRouter {
           this.shake(0.4);
           this.buzz(60);
           break;
+        case 'bossAtGate': {
+          /*
+           * **문간 대치가 섰다** (src/sim/gate.ts). 종전에는 이 순간이 곧 보스가 사라지는
+           * 순간이라 연출이 아예 없었다 — 이제는 판에서 가장 긴 대치의 시작이다.
+           *
+           * 흙먼지 링 하나로 끝낸다: 새 메시를 안 만들므로 **드로우콜이 0 늘고**,
+           * 보스 HP 바는 이미 크게 그려지고 있다(views/healthbars.ts — 보스는 폭 1.3에
+           * 높이 0.17). 곧 "누가 문 앞에 섰는지"는 이미 화면에 있고, 여기서 더할 것은
+           * **언제 섰는지** 하나다.
+           * ⚠ 지면에 남는 상시 링(오버레이 instancer 의 새 kind)은 일부러 안 만들었다 —
+           *   그건 towerstatus 가 소유하는 공유 버퍼에 종류를 하나 더 파는 일이고,
+           *   대치 자체는 이 한 번의 먼지와 보스 HP 바로 이미 읽힌다.
+           */
+          const w = s3.cellToWorld(ev.x, ev.z, this.v);
+          s3.particles.burst(w.x, 0.35, w.z, 0xc8b28a, 18, 2.4, 0.07, 0.75, {
+            gravity: 5,
+            drag: 1.6,
+            upBias: 0.15, // 낮게 옆으로 퍼진다 — 착지가 아니라 '버티고 선' 그림이다
+            sizeVar: 0.55,
+          });
+          /*
+           * 한 입 크기를 HUD 에 넘긴다 — 배너(showBossBanner)와 **같은 경로**다.
+           * HUD 는 state 폴링이 원칙이지만 이 한 값만은 폴링으로 못 구한다:
+           * `ceil(baseDamage / gate.divisor)` 의 divisor 가 스테이지 정의에 있고
+           * UI 는 지금 어느 스테이지인지 모른다(BattleStateView 에 stageId 가 없다).
+           * 정확한 값을 아는 쪽이 이미 실어 보내고 있으니 그대로 건넨다.
+           * 놓쳐도 배지 한 칸이 접힐 뿐 초읽기·마을 HP 는 폴링이 정한다.
+           */
+          noteGateBite(ev.enemyId, ev.bite);
+          audio.play('bossRoar');
+          audio.music.setIntensity(3);
+          this.shake(0.28);
+          this.buzz(45);
+          break;
+        }
+        case 'gateBite': {
+          /*
+           * 한 입 — **지붕이 뜯긴다**.
+           *
+           * towerDamaged 의 피격 연출을 글자 그대로 재사용한다: 같은 인스턴서
+           * (s3.particles.burst), 같은 낙하 계수(gravity 9 · drag 1.4 · upBias 0.7),
+           * 같은 종류의 피해 숫자('tower' 색). 새 메시도 새 색도 안 판다 —
+           * 드로우콜이 0 늘고(e2e 예산 90), 무엇보다 **같은 사건에 같은 그림**이라야
+           * 플레이어가 두 번 배우지 않는다: 저것은 내 구조물이 갉히는 소리다.
+           *
+           * towerDamaged 와 다른 점은 셋뿐이다.
+           *  · 파편 색이 RAID_HIT 표(무기별)가 아니라 **지붕 색**이다 — 여기서 갈리는
+           *    것은 때리는 무기가 아니라 맞는 것이고, 맞는 것은 언제나 마을 지붕이다.
+           *  · 높이 0.55 → **1.7**. 타워는 몸통을 맞지만 지붕은 머리 위에서 뜯긴다.
+           *    1.05 로 잡았다가 올렸다 — 실측 캡처에서 파편이 **보스 몸통 뒤에 통째로
+           *    가려졌다**. 문간 보스는 마을 셀과 거리 0이라(1단계 설계의 핵심) 마을
+           *    한복판에 서 있고, trex 는 화면에서 마을보다 크다. 지붕 용마루 높이까지
+           *    올리고 속도를 1.7 → 2.4 로 키워 실루엣 밖으로 튀어나오게 했다.
+           *  · 파편이 두 배(10점)다. 초당 1회뿐이라 상한(TOWER_HIT_FX_MAX)을 나눠 쓸
+           *    필요가 없고, 이건 한 판에서 가장 비싼 사건이다.
+           *
+           * 흔들림·소리는 **일부러 안 붙인다** — 바로 뒤에 오는 baseDamaged 가 맡는다.
+           * 두 사건에 각각 걸면 초당 두 번 흔들려 진폭을 0.15로 낮춘 뜻이 사라진다.
+           */
+          const w = s3.cellToWorld(ev.x, ev.z, this.v);
+          s3.particles.burst(w.x, 1.7, w.z, 0xc8a06a, 10, 2.4, 0.062, 0.55, {
+            gravity: 9,
+            drag: 1.4,
+            upBias: 0.55,
+            sizeVar: 0.6,
+          });
+          const gp = this.worldToScreen(ev.x, 2.1, ev.z);
+          // 타워 피격과 같은 'tower' 색 — 적이 받는 흰 숫자와 **다른 종류**로 읽혀야
+          // 한다(fx.ts towerDamaged 의 같은 자리 주석). 마을이 잃는 HP 는 판에서
+          // 가장 비싼 숫자라 배율도 1 → 1.15 로 살짝 크게 띄운다.
+          if (gp) spawnDamageNumber(gp.sx, gp.sy, `-${Math.round(ev.amount)}`, 'tower', 1.15);
+          break;
+        }
         case 'enemySpawned':
           // 표기 규약(괄호/느낌표)이 이 적의 armor를 알아야 한다. enemyDamaged는 종을
           // 싣고 다니지 않고, 맞는 순간에는 이미 죽어 상태 목록에서 빠졌을 수 있다 —
@@ -496,6 +569,21 @@ export class FxRouter {
             this.bossKills++;
             this.shake(clamp(0.12 * s, 0.12, 0.42));
             this.buzz(40);
+            /*
+             * **문간에서 잡았다** — 함성.
+             * `enemyDied.gateTicks` 는 문간에서 죽은 개체에만 실린다(types.ts:
+             * 개체가 같은 틱에 풀로 회수되므로 이게 문간 체류의 유일한 확정 기록이다).
+             * 곧 이 분기는 "마을 문 앞에서 버텨 이겼다"와 정확히 같은 뜻이다.
+             *
+             * 왜 따로 소리를 파는가: 평범한 보스 처치와 **결말이 다르기 때문**이다.
+             * 문간의 보스는 죽거나 마을을 죽이거나 둘 중 하나로 끝난다(gate.ts 헤더).
+             * 그 갈림에서 이긴 쪽을 enemyDie 하나로 끝내면 판에서 가장 큰 사건이
+             * 가장 작은 소리로 지나간다. 진동도 한 번 더 준다(40 → 40+90 패턴).
+             */
+            if (ev.gateTicks !== undefined) {
+              audio.play('tribeCheer');
+              this.buzz([40, 60, 90]);
+            }
           } else if (s > 1.6) {
             this.shake(0.03 * s);
           }
@@ -828,7 +916,16 @@ export class FxRouter {
           this.foeDef.delete(ev.enemyId);
           break;
         case 'baseDamaged': {
-          this.shake(0.35);
+          /*
+           * 0.35 → 0.15 (11단계 · 문간 공성).
+           * 진폭을 낮춘 것이 아니라 **빈도가 바뀌어서 같은 세기를 유지한 것**이다:
+           * 종전에 baseDamaged는 적이 기지에 닿을 때 **도달당 1회**였는데, 문간의 보스는
+           * GATE_BITE_TICKS(1초)마다 문다(src/sim/gate.ts) — 곧 같은 사건이 **초당 1회**가
+           * 된다. 0.35를 그대로 두면 보스가 문간에 선 8~13초 동안 화면이 쉬지 않고 흔들려
+           * 모바일에서 멀미가 난다. SHAKE_BUDGET이 프레임 총량을 막아 주긴 하지만
+           * 그건 상한이지 리듬이 아니다.
+           */
+          this.shake(0.15);
           audio.play('baseHit');
           this.buzz(50);
           const ratio = ev.hpLeft / Math.max(1, this.baseHpMax);

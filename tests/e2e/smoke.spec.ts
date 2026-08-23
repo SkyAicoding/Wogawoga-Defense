@@ -92,6 +92,19 @@ declare global {
       upgradeBase(): boolean;
       selectedBase(): boolean;
       damageBase(n: number): void;
+      /** 지금 문간에 서 있는 보스들 (src/sim/gate.ts) — DOM 으로는 못 보는 sim 상태 */
+      gateBosses(): {
+        id: number;
+        defId: string;
+        gateTicks: number;
+        cdLeft: number;
+        blockerAllyId: number;
+      }[];
+      rallyAllies(): void;
+      /** 살아 있는 파티클 수 (직전 update 시점) — 작고 가려지는 연출을 개수로 닫는다 */
+      particleCount(): number;
+      /** 루프를 멈춘 채 파티클/카메라 시간만 손으로 진행시킨다 */
+      stepFx(sec: number): void;
     };
   }
 }
@@ -1706,6 +1719,295 @@ test('하늘길: w22부터 익룡이 공중 레인으로 온다 (렌더 + 예산
   expect(info.calls, msg).toBeGreaterThan(0);
   expect(info.calls, msg).toBeLessThanOrEqual(90);
   expect(info.tris, msg).toBeLessThanOrEqual(150_000);
+  await page.evaluate(() => window.__wgd?.pause(false));
+  expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
+});
+
+/**
+ * ── 문간 집결 버튼 + 문간 HUD (11단계 2단계) ────────────────────────────────
+ *
+ * 잠그는 것 다섯:
+ *  (a) **띠는 보스가 문간에 선 동안에만 존재한다** — 그 전에는 DOM 에 있어도 안 보인다.
+ *  (b) **집결 버튼이 44×44 이상이다** — 이 저장소에서 `::after` 로 히트 영역을 넓혔다가
+ *      padding box 기준이라 41px 로 샌 전례가 두 번 있어서, 재는 방식을 두 겹으로 둔다:
+ *      getBoundingClientRect 로 상자를 재고, 그 안쪽 44×44 정사각형의 **네 모서리와
+ *      중심 다섯 점**이 전부 이 버튼에 hit-test 되는지 elementFromPoint 로 확인한다.
+ *      둥근 모서리가 44 안으로 파고들면 상자만 재는 검사는 못 잡는다.
+ *  (c) **탭 1회가 실제로 전원을 되부른다** — 사용자 승인 계약 2-A 가 요구하는 조작량이
+ *      정확히 그것이다. API 를 부르지 않고 **화면의 버튼을 탭해서** 잰다.
+ *  (d) **봉쇄가 서면 HUD 가 "안 물어요"로 바뀐다** — 이 줄이 뜨는 것이 탭의 보상이고,
+ *      뜨지 않으면 플레이어는 자기 조작이 먹혔는지 알 방법이 없다.
+ *  (e) **드로우콜이 0 늘어난다** — 띠는 전부 DOM 이라 새 메시가 0개여야 한다.
+ *      루프를 멈춘 채 on/off/on 세 번을 재서 적·파티클의 움직임이 델타에 안 섞이게 한다.
+ *
+ * ⚠ 왜 웨이브 50까지 가는가: 이 판(s1)에서 타워를 다 세우면 미니보스(w10 spino)는
+ *   문간에 닿기 전에 죽는다. **문간에 실제로 서는 것은 최종 보스**라 거기까지 간다.
+ *   sim 시간은 ff 로 돌리므로 실시간 대기는 없다.
+ * ⚠ 재는 동안 루프를 멈춘다: 문간 보스는 초당 한 입씩 마을을 깎아(마을 29HP = 약 10초)
+ *   swiftshader 의 느린 프레임 사이에 판이 끝나 버린다. fsm.update 는 loop.paused 와
+ *   무관하게 매 rAF 돌므로(game/app.ts) **sim 시간만 멈추고 HUD 는 계속 갱신된다**.
+ */
+test('문간: 보스가 문 앞에 서면 띠가 뜨고, 집결 탭 1회로 붙잡는다 (44×44 · 드로우콜 증가 0)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/?test=1', { waitUntil: 'networkidle' });
+  await page.mouse.click(100, 300);
+  await page.getByRole('button', { name: /전투/ }).first().click();
+  await page.waitForFunction(() => window.__wgd !== undefined);
+  await page.waitForTimeout(900);
+
+  const strip = page.locator('.gate-hud');
+  const rally = page.locator('.gate-rally');
+
+  // (a) 문간이 서기 전 — DOM 에는 있고 화면에는 없다
+  await expect(strip).toHaveCount(1);
+  await expect(strip).toBeHidden();
+
+  // --- 문간 대치가 설 때까지 sim 을 돌린다 ---------------------------------
+  const reached = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.setGold(999_999);
+    for (let i = 0; i < 10; i++) {
+      g.setGold(999_999);
+      if (!g.upgradeBase()) break;
+    }
+    let placed = 0;
+    for (let z = 0; z < 24; z++) {
+      for (let x = 0; x < 24; x++) {
+        if (g.sim.canPlaceAt(x, z)) {
+          g.setGold(999_999);
+          if (g.place(0, x, z)) placed++;
+        }
+      }
+    }
+    for (let i = 0; i < 400; i++) {
+      g.callWave();
+      g.ff(300);
+      if (g.gateBosses().length > 0) {
+        return { placed, wave: g.sim.state.waveIndex, gate: g.gateBosses() };
+      }
+      const ph = g.sim.state.phase;
+      if (ph === 'lost' || ph === 'won') return { placed, end: ph, wave: g.sim.state.waveIndex };
+    }
+    return { placed, none: true };
+  });
+  expect(
+    reached.gate?.length,
+    `문간 대치가 서지 않았다: ${JSON.stringify(reached)}`,
+  ).toBeGreaterThan(0);
+  // 이후 재는 동안 마을이 깎이지 않게 sim 시간을 멈춘다 (HUD 는 계속 돈다)
+  await page.evaluate(() => window.__wgd!.pause(true));
+
+  // (a) 이제는 보인다
+  await expect(strip).toBeVisible();
+  await expect(rally).toBeVisible();
+  // 아무도 안 나가 있으면 되부를 것이 없다 — 숨기지 않고 비활성이다
+  await expect(rally).toBeDisabled();
+
+  // (b) 44×44 — 상자 치수와 hit-test 를 함께 잰다
+  const box = await rally.boundingBox();
+  expect(box, '집결 버튼의 상자를 못 잼').not.toBeNull();
+  expect(box!.width, `집결 버튼 폭 ${box!.width}px`).toBeGreaterThanOrEqual(44);
+  expect(box!.height, `집결 버튼 높이 ${box!.height}px`).toBeGreaterThanOrEqual(44);
+  const hits = await page.evaluate(() => {
+    const el = document.querySelector('.gate-rally')!;
+    const r = el.getBoundingClientRect();
+    const cx = r.x + r.width / 2;
+    const cy = r.y + r.height / 2;
+    const h = 22; // 44×44 정사각형의 반변
+    return (
+      [
+        [cx - h, cy - h],
+        [cx + h, cy - h],
+        [cx - h, cy + h],
+        [cx + h, cy + h],
+        [cx, cy],
+      ] as const
+    ).map(([px, py]) => {
+      const t = document.elementFromPoint(px, py);
+      return t && t.closest('.gate-rally') ? 'ok' : `MISS@${px.toFixed(0)},${py.toFixed(0)}`;
+    });
+  });
+  expect(hits, `44×44 안쪽 다섯 점이 전부 집결 버튼에 닿아야 한다`).toEqual([
+    'ok',
+    'ok',
+    'ok',
+    'ok',
+    'ok',
+  ]);
+
+  // --- 문간 HUD 가 sim 을 그대로 읽는가 -----------------------------------
+  // 이름은 어서션하지 않는다 (카피는 계약이 아니다) — **비어 있지 않은가**와
+  // 마을 HP 숫자가 sim 과 **같은가**만 잠근다.
+  await expect(page.locator('.gate-who')).not.toBeEmpty();
+  const hpText = await page.locator('.gate-hp-num').textContent();
+  const simHp = await page.evaluate(() => {
+    const st = window.__wgd!.sim.state;
+    return `${st.baseHp}/${st.baseHpMax}`;
+  });
+  expect(hpText?.trim(), 'HUD 의 마을 HP 가 sim 과 다르다').toBe(simHp);
+
+  // (e) 드로우콜 — 띠를 껐다 켜도 한 콜도 안 움직인다 (새 메시 0개)
+  const dc = await page.evaluate(async () => {
+    const g = window.__wgd!;
+    const settle = (): Promise<void> =>
+      new Promise((r) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+      );
+    const el = document.querySelector('.gate-hud') as HTMLElement;
+    const prev = el.style.display;
+    await settle();
+    const on1 = g.renderInfo();
+    el.style.display = 'none';
+    await settle();
+    const off = g.renderInfo();
+    el.style.display = prev;
+    await settle();
+    const on2 = g.renderInfo();
+    return { on1, off, on2 };
+  });
+  const dcMsg = `문간 띠 on/off/on 드로우콜: ${JSON.stringify(dc)}`;
+  expect(dc.on1.calls, dcMsg).toBe(dc.off.calls);
+  expect(dc.on2.calls, dcMsg).toBe(dc.off.calls);
+  expect(dc.on1.triangles, dcMsg).toBe(dc.off.triangles);
+  // 예산 자체도 함께 본다 — 문간 대치는 이 판에서 가장 붐비는 프레임 중 하나다
+  expect(dc.on1.calls, dcMsg).toBeLessThanOrEqual(90 + 130);
+
+  /*
+   * ── 한 입의 지붕 파편 (연출) ─────────────────────────────────────────────
+   * towerDamaged 의 임팩트 인스턴서를 그대로 재사용한다(game/fx.ts). 눈으로는 못 닫는다:
+   * 파편이 0.06타일(화면 3px 남짓)인 데다 문간 보스는 마을 셀과 거리 0이라 **제 몸으로
+   * 파편을 가린다**. 그래서 개수로 닫는다 — 한 입 틱에 정확히 10점이 는다.
+   *
+   * 먼저 풀을 비운다: 후반 웨이브는 파티클이 512/512 로 **포화**라 새 파편이 오래된
+   * 슬롯을 재활용해 들어가고, 그러면 델타가 0으로 보인다(실측으로 한 번 속았다).
+   * 그리고 live 는 update 에서만 다시 세므로 burst 직후에 읽으면 옛 값이다 —
+   * 읽기 전에 stepFx 를 한 번 태운다.
+   */
+  const debris = await page.evaluate(async () => {
+    const g = window.__wgd!;
+    // sim 은 멈춘 채 FX 시간만 흘려 있던 파티클을 늙혀 없앤다
+    for (let i = 0; i < 12; i++) {
+      g.stepFx(0.5);
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    }
+    // 다음 한 입 직전까지 한 번에 건너뛴다 (한 틱씩 걸으면 그만큼 마을이 더 깎인다 —
+    // 이 판의 예산은 마을 29HP ≈ 10입뿐이고 아래 집결 검사가 그 나머지를 쓴다)
+    const b0 = g.gateBosses()[0];
+    if (!b0) return { gone: true as const };
+    if (b0.cdLeft > 1) g.ff(b0.cdLeft - 1);
+    g.stepFx(0.0001);
+    const before = g.particleCount();
+    const hpBefore = g.sim.state.baseHp;
+    g.ff(1); // ← 이 한 틱이 한 입이다
+    g.stepFx(0.0001);
+    return {
+      before,
+      after: g.particleCount(),
+      bitDamage: hpBefore - g.sim.state.baseHp,
+      dmgTexts: [...document.querySelectorAll('.dmg--tower')].map((e) => e.textContent ?? ''),
+    };
+  });
+  expect(debris.gone, '한 입을 재기 전에 문간 보스가 사라졌다').toBeFalsy();
+  expect(debris.bitDamage, `한 입이 마을을 깎아야 한다: ${JSON.stringify(debris)}`).toBeGreaterThan(0);
+  expect(
+    debris.after! - debris.before!,
+    `한 입 = 지붕 파편 10점 (towerDamaged 임팩트 인스턴서 재사용): ${JSON.stringify(debris)}`,
+  ).toBe(10);
+  // 피해 숫자도 타워 피격과 **같은 종류**로 뜬다 (적이 받는 흰 숫자와 갈려야 한다)
+  expect(
+    debris.dmgTexts,
+    `한 입은 'tower' 색 피해 숫자를 띄운다: ${JSON.stringify(debris.dmgTexts)}`,
+  ).toContain(`-${debris.bitDamage}`);
+
+  // --- (c)(d) 부족원을 내보냈다가 **탭 1회**로 되부른다 ---------------------
+  /*
+   * 아군은 baseCell 에서 스폰하고 문간 보스도 baseCell 에 서 있다 — 곧 뽑는 즉시
+   * 봉쇄가 선다(1단계 설계의 "첫 틱에 봉쇄 성립"). 집결이 실제로 무언가를 했다고
+   * 말하려면 먼저 내보내 봉쇄를 풀어야 한다. 그게 실제 플레이 흐름이기도 하다.
+   * 몽둥이꾼(1.15타일/초)을 2칸만 — 마을 예산이 29HP ≈ 10입뿐이라 왕복이 그 안이어야 한다.
+   */
+  const sent = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.pause(false);
+    for (let i = 0; i < 6; i++) {
+      g.setGold(999_999);
+      g.trainAlly('clubber');
+    }
+    const bc = g.baseInfo().cell;
+    g.sim.applyCommand({
+      type: 'moveAlly',
+      allyId: -1,
+      cellX: bc.x,
+      cellZ: Math.max(0, bc.z - 2),
+    });
+    /*
+     * 고정 틱 대신 **조건이 될 때까지만** 돌린다. 마을 예산이 29HP ≈ 10입뿐이라
+     * 넉넉히 잡으면 판이 끝나고, 빠듯하게 잡으면 부족원이 아직 못 걸어 나간다 —
+     * 고정값으로는 두 실패 사이의 창이 없다(실측으로 양쪽 다 겪었다).
+     */
+    let ticks = 0;
+    while (ticks < 120 && g.gateBosses().some((b) => b.blockerAllyId >= 0)) {
+      g.ff(10);
+      ticks += 10;
+    }
+    g.pause(true);
+    return { ticks, hp: g.sim.state.baseHp, allies: g.allies().length, gate: g.gateBosses() };
+  });
+  expect(sent.allies, `부족원이 나가 있어야 한다: ${JSON.stringify(sent)}`).toBeGreaterThan(0);
+  expect(
+    sent.gate.every((b) => b.blockerAllyId < 0),
+    `집결을 재려면 먼저 봉쇄가 풀려 있어야 한다: ${JSON.stringify(sent)}`,
+  ).toBe(true);
+  await expect(rally).toBeEnabled();
+  await expect(rally).toHaveClass(/is-urgent/);
+  await expect(page.locator('.gate-cd')).not.toHaveClass(/is-held/);
+
+  /*
+   * **탭 1회.** 모바일 프로젝트에서는 진짜 터치로, 데스크톱 프로젝트에는 터치가 없으므로
+   * 클릭으로 — 어느 쪽이든 **화면의 버튼을 눌러서** 잰다(API 직접 호출이 아니다).
+   * 맥동이 box-shadow/filter 만 움직여 버튼 상자가 정지해 있다는 것도 여기서 함께
+   * 잠긴다: transform 으로 맥동시키면 actionability 가 "not stable"로 30초를
+   * 재시도하다 실패한다(실측). 움직이는 과녁은 손가락에도 같은 값을 물린다.
+   */
+  const hasTouch = await page.evaluate(() => 'ontouchstart' in window);
+  if (hasTouch) await rally.tap();
+  else await rally.click();
+
+  // 되걸어 와 붙잡을 때까지만 sim 을 돌린다 (여기도 고정 틱이 아니라 조건이다)
+  const after = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.pause(false);
+    let ticks = 0;
+    while (ticks < 150 && !g.gateBosses().some((b) => b.blockerAllyId >= 0)) {
+      g.ff(10);
+      ticks += 10;
+      if (g.sim.state.phase === 'lost' || g.gateBosses().length === 0) break;
+    }
+    g.pause(true);
+    return {
+      ticks,
+      hp: g.sim.state.baseHp,
+      phase: g.sim.state.phase,
+      allies: g.allies().length,
+      gate: g.gateBosses(),
+    };
+  });
+  expect(
+    after.gate.some((b) => b.blockerAllyId >= 0),
+    `집결 탭 1회로 문간 보스가 붙잡혀야 한다: ${JSON.stringify(after)}`,
+  ).toBe(true);
+
+  // (d) HUD 가 그 사실을 말한다 — 맥동은 멎고 초읽기 칩은 "안 물어요"가 된다
+  await expect(page.locator('.gate-cd')).toHaveClass(/is-held/);
+  await expect(rally).not.toHaveClass(/is-urgent/);
+
   await page.evaluate(() => window.__wgd?.pause(false));
   expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
 });

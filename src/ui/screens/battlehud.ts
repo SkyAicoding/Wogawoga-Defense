@@ -30,8 +30,10 @@ import {
   ALLY_ICON_SVG,
   amberSvg,
   createTowerCard,
+  enemyIconSvg,
   goldSvg,
   hometownIconSvg,
+  rallySvg,
   sceneryIconSvg,
   towerCountSvg,
   towerIconSvg,
@@ -53,6 +55,31 @@ const ARM_TIMEOUT_MS = 4000;
 
 // --- 배너 (모듈 스코프 — HUD 장착 중에만 동작) -------------------------------
 let bannerHost: HTMLElement | null = null;
+
+/*
+ * ── 문간 한 입 크기 (모듈 스코프) ──────────────────────────────────────────
+ * HUD 의 규칙은 "state 폴링, 이벤트 의존 금지"다. 이 한 값만 예외를 둔다.
+ *
+ * 왜 폴링으로 못 구하는가: 한 입은 `ceil(baseDamage / gate.divisor)` 인데
+ * `gate.divisor` 는 **스테이지 정의**에 있고(types.StageDef.gate) UI 는 지금 어느
+ * 스테이지인지 모른다 — `BattleStateView` 에 stageId 가 없다. 배포 데이터가 이 필드를
+ * 한 스테이지도 안 적으니 기본값 4를 박아 넣으면 오늘은 맞겠지만, 누가 한 스테이지에
+ * divisor 를 적는 날 **HUD 가 조용히 거짓말을 시작한다**. 그건 안 그리느니만 못하다.
+ *
+ * 그래서 정확한 값을 아는 쪽(sim)이 이미 실어 보내는 `bossAtGate.bite` 를 받는다.
+ * 배너(showWaveBanner/showBossBanner)와 **똑같은 경로**다 — 이 파일 헤더가 이미
+ * 인정한 예외이고, game/fx 가 부른다.
+ *
+ * ⚠ 이 값은 **장식이다**. 문간이 서 있는가 · 초읽기 · 마을 HP 는 전부 폴링이 정한다.
+ * 곧 이 표가 비어 있어도(목 UI, 이벤트를 놓친 프레임) HUD 는 배지 한 칸만 접고
+ * 나머지는 정확히 그린다. 절대 여기에 판정을 걸지 말 것.
+ */
+const gateBiteSize = new Map<number, number>();
+
+/** game/fx 의 bossAtGate 핸들러가 부른다 — 그 보스의 한 입 크기 */
+export function noteGateBite(enemyId: number, bite: number): void {
+  gateBiteSize.set(enemyId, bite);
+}
 
 function pushBanner(className: string, text: string): void {
   if (!bannerHost || !bannerHost.isConnected) return;
@@ -168,6 +195,52 @@ export function createBattleHud(): Screen<GameFacade> {
   /** 제거 확인 무장 상태 — true일 때만 다음 탭이 실제로 골드를 쓴다 */
   let scArmed = false;
   let scArmTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /*
+   * ── 문간 띠 (11단계 2단계) ──────────────────────────────────────────────────
+   * 보스가 마을 문간에 서 있는 동안에만 존재한다. 두 줄이다:
+   *   1줄 — 지금 물고 있는 것 (아이콘 + 이름 + ×N) · 한 입 크기 배지
+   *   2줄 — 마을 HP 바 · 초읽기 칩 (봉쇄/스턴이면 "안 물어요"로 바뀐다)
+   * 왼쪽 끝에 집결 버튼이 붙는다.
+   *
+   * ── 왜 그 외에는 **아예 안 보이는가** (브리프가 판단을 요구한 자리) ──────────
+   * (1) 세로 예산. 이 저장소의 CSS 주석은 390px 폭/높이에서 상·하단이 이미 포화라고
+   *     여러 번 실측으로 적어 놨다(.hud-top-row 320px 절, .home-ally 가로모드 절).
+   *     한 판에서 문간이 서 있는 시간은 웨이브당 8~13초다. 나머지 몇 분을 죽은 줄
+   *     하나로 채우면 손패·마을 패널이 그만큼 밀린다.
+   * (2) 비활성 버튼은 **가르치지 못한다**. 95%의 시간을 못 누르는 버튼으로 서 있으면
+   *     플레이어는 그것을 배경으로 학습한다. 이 버튼이 파는 것은 "지금"이고,
+   *     그래서 **나타나는 것 자체가 신호**다 (맥동 + bossAtGate 포효 + 보스 배너).
+   * (3) 이 파일의 선례와 같다 — 웨이브 시작 버튼(callWaveBtn)과 미리보기 띠는
+   *     prep 이 아니면 display:none 이지 비활성으로 남지 않는다.
+   * (4) 8단계에서 아군 바를 숨겼다가 "발견 가능성 0"으로 되돌린 사고와는 **다르다**.
+   *     그때 숨긴 것은 **유일한 입구**였다. 집결은 유일한 입구가 아니다 —
+   *     판 위에서 부족원을 탭해 마을 칸을 찍는 길이 그대로 살아 있고(placement.ts),
+   *     집결 버튼은 그 4탭을 1탭으로 줄이는 **지름길**이다. 지름길은 필요할 때
+   *     나타나면 되고, 상시 칸을 살 만큼 비싸지 않다.
+   */
+  let gateHud!: HTMLElement;
+  let gateRallyBtn!: HTMLButtonElement;
+  let gateIco!: HTMLElement;
+  let gateWho!: HTMLElement;
+  let gateMore!: HTMLElement;
+  let gateBiteBadge!: HTMLElement;
+  let gateHpFill!: HTMLElement;
+  let gateHpNum!: HTMLElement;
+  let gateCd!: HTMLElement;
+  let gateCdFill!: HTMLElement;
+  let gateCdTxt!: HTMLElement;
+  /** 직전 프레임의 문간 서명 — 켜짐/꺼짐과 종 교체에만 DOM 을 만진다 */
+  let lastGateSig = '';
+  /** 아이콘 innerHTML 은 비싸다 — 종이 바뀔 때만 다시 그린다 */
+  let lastGateDefId = '';
+  /*
+   * 초읽기 막대의 **분모**. 상수(GATE_BITE_TICKS)를 안 쓰는 이유는 divisor 배지와
+   * 같다 — 주기도 스테이지가 덮을 수 있는 값이다(types.StageDef.gate.biteTicks).
+   * gate.ts 는 문간에 서는 그 틱에 쿨다운을 가득 채우고 한 입마다 다시 채우므로,
+   * **지금까지 본 최댓값**이 곧 그 주기다. 표시 대상이 바뀌면 0으로 되돌린다.
+   */
+  let gateCdFull = 0;
 
   // 마을 패널 — 선택 타워/소품 패널과 같은 자리, 같은 톤. 레벨업(2단 확인) + 출동(1탭)
   let htPanel!: HTMLElement;
@@ -539,6 +612,53 @@ export function createBattleHud(): Screen<GameFacade> {
         allySection,
       );
 
+      // --- 문간 띠 (보스가 문 앞에 선 동안에만) ------------------------------
+      gateIco = h('span', { class: 'gate-ico' });
+      gateWho = h('span', { class: 'gate-who' });
+      gateMore = h('span', { class: 'gate-more' });
+      gateBiteBadge = h('span', { class: 'gate-bite' });
+      gateHpFill = h('div', { class: 'gate-hp-fill' });
+      gateHpNum = h('span', { class: 'gate-hp-num' });
+      gateCdFill = h('div', { class: 'gate-cd-fill' });
+      gateCdTxt = h('span', { class: 'gate-cd-txt' });
+      gateCd = h('div', { class: 'gate-cd' }, gateCdFill, gateCdTxt);
+      /*
+       * 집결 버튼. **44×44 이상**이 계약이라 폭·높이를 CSS 에 못 박고 e2e 가
+       * getBoundingClientRect 로 실측한다 — 이 저장소에서 `::after` 로 히트 영역을
+       * 넓힌 자리가 padding box 기준이라 41px 로 샌 전례가 두 번 있다.
+       * 여기서는 확대용 ::after 를 **아예 안 쓴다**: 버튼 자체가 이미 크고,
+       * 넓히면 그 위 마을 패널 닫기 버튼과 히트 영역이 겹친다.
+       */
+      gateRallyBtn = h('button', {
+        class: 'gate-rally hud-item',
+        attrs: {
+          type: 'button',
+          'aria-label': t('battle.gate.rallyHint'),
+          title: t('battle.gate.rallyHint'),
+        },
+        onClick: () => api(facade)?.requestRallyAllies?.(),
+      },
+        h('span', { class: 'gate-rally-ico', html: rallySvg }),
+        h('span', { class: 'gate-rally-txt', text: t('battle.gate.rally') })) as HTMLButtonElement;
+      // 컨테이너에는 hud-item 을 안 준다 — 띠의 빈 자리를 탭하면 판으로 통과해야 한다
+      // (소품/마을 패널 배경과 같은 규약).
+      gateHud = h('div', { class: 'gate-hud', attrs: { style: 'display:none' } },
+        gateRallyBtn,
+        h('div', { class: 'gate-body' },
+          h('div', { class: 'gate-row gate-row--who' },
+            gateIco,
+            gateWho,
+            gateMore,
+            h('span', { class: 'gate-row-spacer' }),
+            gateBiteBadge,
+          ),
+          h('div', { class: 'gate-row gate-row--meter' },
+            h('div', { class: 'gate-hp' }, gateHpFill, gateHpNum),
+            gateCd,
+          ),
+        ),
+      );
+
       // --- 웨이브 시작 버튼 ------------------------------------------------
       callWaveSub = h('span', { class: 'callwave-sub' });
       callWaveBtn = h('button', {
@@ -561,7 +681,15 @@ export function createBattleHud(): Screen<GameFacade> {
       // (상단은 390px에서 이미 포화라 HUD_TOP_PX를 한 자리도 안 건드린다)
       band = createWavePreview();
 
+      /*
+       * 문간 띠는 하단 덩어리의 **맨 위**다. 세 가지를 동시에 만족하는 유일한 자리다:
+       *  · 상단 HUD 를 한 자리도 안 건드린다 (HUD_TOP_PX 74 는 카메라 예약이다).
+       *  · 흐름 안에 있어 나타날 때 위로 자라고, 사라지면 자리를 통째로 돌려준다.
+       *  · 390×844 세로에서 **엄지 구역**이다 — 요구 조작이 "8초 안에 탭 1회"이므로
+       *    상단(반대쪽 끝)에 두면 한 손으로는 그 8초를 못 지킨다.
+       */
       const bottom = h('div', { class: 'hud-bottom' },
+        gateHud,
         panelHost,
         scPanel,
         htPanel,
@@ -602,6 +730,12 @@ export function createBattleHud(): Screen<GameFacade> {
       band = null;
       preview = null;
       previewWaveNo = -1;
+      // 문간 표는 판 단위로 산다 — 안 지우면 다음 판의 같은 id 가 지난 판의 한 입
+      // 크기를 물려받는다 (sim 의 풀 재사용 누출과 정확히 같은 종류의 사고다).
+      gateBiteSize.clear();
+      lastGateSig = '';
+      lastGateDefId = '';
+      gateCdFull = 0;
     },
 
     update(facade) {
@@ -678,6 +812,9 @@ export function createBattleHud(): Screen<GameFacade> {
         c.setCounter(counteredBy(def, 0, entries), favoredAgainst(def, 0, entries));
       });
       setText(refreshLabel, s.refreshCost === 0 ? t('common.free') : fmt(s.refreshCost));
+
+      // --- 문간 띠 ---------------------------------------------------------
+      updateGateHud(b);
 
       // 웨이브 시작 버튼 (prep 중에만)
       const prep = s.phase === 'prep';
@@ -831,6 +968,146 @@ export function createBattleHud(): Screen<GameFacade> {
       }
     },
   };
+
+  /**
+   * 문간 띠 갱신 — **전부 state 폴링이다** (한 입 크기 배지 하나만 예외, 모듈 상단 주석).
+   *
+   * 고르는 규칙: 문간에 둘 이상이 서 있으면 **가장 먼저 물 놈**을 그린다
+   * (gateBiteCdLeft 최소, 동률이면 gateTicks 큰 쪽 = 먼저 선 쪽). 초읽기가 말하는
+   * "다음 한 입"이 화면의 초읽기와 어긋나면 안 되기 때문이다. 나머지는 ×N 로만 센다.
+   * 집결 버튼은 어느 놈이 그려지든 **전원을 되부른다** — 표시와 조작의 대상이 다르지만,
+   * 되부르는 것이 전원이라 그 차이가 플레이어에게 손해로 돌아오지 않는다.
+   */
+  function updateGateHud(b: BattleUiApiExt): void {
+    const s = b.sim.state;
+    // 승패가 확정되면 조작이 전부 거부된다 — 살아 있는 척하는 버튼을 남기지 않는다
+    const over = s.phase === 'won' || s.phase === 'lost';
+
+    let lead: (typeof s.enemies)[number] | null = null;
+    let count = 0;
+    if (!over) {
+      for (const e of s.enemies) {
+        if (!e.alive || e.gateTicks <= 0) continue;
+        count++;
+        if (
+          lead === null ||
+          e.gateBiteCdLeft < lead.gateBiteCdLeft ||
+          (e.gateBiteCdLeft === lead.gateBiteCdLeft && e.gateTicks > lead.gateTicks)
+        ) {
+          lead = e;
+        }
+      }
+    }
+
+    // 문간이 비면 표도 비운다 — 개체 id 는 풀에서 재사용되므로 남겨 두면
+    // 다음 보스가 지난 보스의 한 입 크기를 물려받는다.
+    if (count === 0 && gateBiteSize.size > 0) gateBiteSize.clear();
+
+    if (lead === null) {
+      if (lastGateSig !== '') {
+        lastGateSig = '';
+        lastGateDefId = '';
+        gateCdFull = 0;
+        gateHud.style.display = 'none';
+      }
+      return;
+    }
+    if (lastGateSig !== `${lead.id}`) gateCdFull = 0;
+
+    // 봉쇄·스턴이면 안 문다 (src/sim/gate.ts 규칙 2 = siege.ts 규칙 1-b·5 상속).
+    // 이 두 줄이 집결 버튼을 누른 **보상**이라 판정을 HUD 가 다시 세우지 않고
+    // sim 상태를 그대로 읽는다 — 규칙이 바뀌면 화면이 저절로 따라간다.
+    const stunned = lead.statuses.some((st) => st.kind === 'stun' && st.remainingTicks > 0);
+    const held = lead.blockerAllyId >= 0;
+    const bite = gateBiteSize.get(lead.id);
+    const hpRatio = s.baseHpMax > 0 ? Math.max(0, s.baseHp) / s.baseHpMax : 0;
+
+    if (lastGateSig === '') gateHud.style.display = '';
+
+    if (lead.defId !== lastGateDefId) {
+      lastGateDefId = lead.defId;
+      gateIco.innerHTML = enemyIconSvg(lead.defId);
+      setText(gateWho, t(`enemy.${lead.defId}.name`));
+    }
+    setText(gateMore, count > 1 ? t('battle.gate.more', { n: count }) : '');
+    gateMore.style.display = count > 1 ? '' : 'none';
+
+    /*
+     * 한 입 크기 배지 — 아는 경우에만. "−3 · 5입 남음"의 뒷쪽이 실제로 쓰이는 숫자다
+     * (한 입 = 1초이므로 그대로 "마을이 몇 초 버티는가"로 읽힌다).
+     *
+     * ⚠ 이 값은 **감속이 걸리지 않은** 한 입이다. gate.ts 규칙 9가 감속만큼 실제 피해를
+     *   깎으므로(실측: 배지 −3 인데 실제로 마을이 2 깎였다), 얼음탑 사거리 안에서는
+     *   화면이 실제보다 크게 말한다.
+     *   **일부러 그대로 둔다.** 두 가지 이유다:
+     *    · 오차의 방향이 안전하다 — 항상 **비관적**이라 남은 시간을 실제보다 길게
+     *      약속하는 일이 없다. 경보가 틀리는 방향은 이쪽이어야 한다.
+     *    · 정확히 맞히려면 slowFactor 를 UI 가 다시 구현해야 하고, 그건 sim 규칙 하나를
+     *      두 곳에 두는 일이다(이 파일이 반복해 경계하는 종류의 결합). 규칙이 바뀌면
+     *      조용히 갈라진다.
+     *   곧 배지는 "아무도 안 도와줄 때 얼마씩 물리는가"를 말한다.
+     */
+    const bitesLeft = bite !== undefined && bite > 0 ? Math.max(0, Math.ceil(s.baseHp / bite)) : null;
+    if (bite !== undefined && bitesLeft !== null) {
+      setText(
+        gateBiteBadge,
+        `${t('battle.gate.bite', { n: bite })} · ${t('battle.gate.bitesLeft', { n: bitesLeft })}`,
+      );
+      gateBiteBadge.style.display = '';
+    } else {
+      gateBiteBadge.style.display = 'none';
+    }
+
+    /*
+     * 경보 문턱 — **띠 안의 두 자리가 같은 사실로 켜진다**.
+     * 처음에는 막대를 비율 30%로, 배지를 "3입 남음"으로 각각 잡았다가 되돌렸다:
+     * 실측 캡처에서 11/29(38%)일 때 막대는 초록인데 배지는 "4입 남음"이라, 한 화면에서
+     * 두 경보가 서로 다른 말을 했다. 이 띠가 파는 사실은 비율이 아니라 **몇 번 더
+     * 물리면 끝나는가**이므로 그쪽으로 통일한다.
+     * 한 입 크기를 모르면(배지가 접힌 프레임) 종전의 비율 30%로 되돌아간다 —
+     * 아는 것이 없을 때 쓰던 잣대라 그대로가 맞다.
+     */
+    const crit = bitesLeft !== null ? bitesLeft <= 3 : hpRatio <= 0.3;
+    cls(gateBiteBadge, 'is-crit', crit && !held && !stunned);
+
+    // 마을 HP — 상시 HUD 에서는 3D 바로 옮겨 갔지만(render/views/healthbars.ts kind 4),
+    // 문간에서는 초읽기와 **같은 눈높이**에 있어야 뜻이 선다: 이 띠가 파는 정보는
+    // "다음 한 입까지 얼마"가 아니라 "마을이 몇 입 더 버티나"다.
+    gateHpFill.style.width = `${(hpRatio * 100).toFixed(1)}%`;
+    cls(gateHpFill, 'is-low', crit);
+    setText(gateHpNum, `${Math.max(0, Math.ceil(s.baseHp))}/${s.baseHpMax}`);
+
+    // 초읽기 — 소수 한 자리. 주기가 1초라 정수로 자르면 늘 "1초"만 보인다.
+    const stopped = held || stunned;
+    cls(gateCd, 'is-held', stopped);
+    if (stopped) {
+      setText(gateCdTxt, held ? t('battle.gate.blocked') : t('battle.gate.stunned'));
+      // 봉쇄는 쿨다운이 흐르고 스턴은 언다(gate.ts 규칙 2). 그래도 **막대는 채워 둔다** —
+      // 이 순간 화면이 말해야 하는 것은 "지금은 안 물린다" 하나이고, 흐르는 막대는
+      // 그 반대로 읽힌다.
+      gateCdFill.style.width = '100%';
+    } else {
+      const cd = Math.max(0, lead.gateBiteCdLeft);
+      if (cd > gateCdFull) gateCdFull = cd;
+      setText(gateCdTxt, t('battle.gate.next', { s: (cd / TICK_RATE).toFixed(1) }));
+      // 남은 비율이 아니라 **찬 비율**을 그린다 — 게이지가 차오르다 터지는 그림이라야
+      // 다가오는 사건으로 읽힌다(줄어드는 막대는 '내가 잃는 중'으로 읽힌다).
+      const pct = gateCdFull > 0 ? 100 - Math.min(100, (cd / gateCdFull) * 100) : 0;
+      gateCdFill.style.width = `${pct.toFixed(1)}%`;
+    }
+
+    // 집결 버튼 — 나가 있는 부족원이 하나도 없으면 되부를 것이 없다.
+    // 그때도 **숨기지 않고 비활성**으로 둔다: 여기서 사라지면 "왜 안 나오지"가 되고,
+    // 비활성 사유(아무도 안 나가 있다)는 바로 위 부족 칩이 n/6 으로 이미 말하고 있다.
+    const canRally = s.allies.length > 0 && b.requestRallyAllies !== undefined;
+    cls(gateRallyBtn, 'is-disabled', !canRally);
+    // 맥동은 **물릴 수 있는 동안에만**. 이미 붙잡아 놨는데 계속 뛰면 "아직 덜 했다"는
+    // 거짓말이 된다 — 맥동이 멎는 것이 성공의 신호다.
+    cls(gateRallyBtn, 'is-urgent', canRally && !stopped);
+    gateRallyBtn.disabled = !canRally;
+
+    lastGateSig = `${lead.id}`;
+  }
 
   /** 선택 타워 상태 조회 */
   function selectedTowerState(b: BattleUiApiExt | null): TowerState | null {

@@ -13,6 +13,8 @@ declare const process: {
 declare module 'node:fs' {
   export function readFileSync(path: string, encoding: 'utf8'): string;
   export function writeFileSync(path: string, data: string, encoding: 'utf8'): void;
+  /** 문간 실측(tests/sim/gatemeasure.test.ts)이 표를 파일로 낸다 — 통과한 it 의 stdout 은 접힌다 */
+  export function appendFileSync(path: string, data: string, encoding: 'utf8'): void;
   export function mkdirSync(path: string, options?: { recursive?: boolean }): void;
   export function existsSync(path: string): boolean;
 }

@@ -171,6 +171,24 @@ export const allyGuardianSvg = SVG(
    <path d="M38 18 L38 36" stroke="#7a5230" stroke-width="2.5"/>`,
 );
 
+/**
+ * 문간 집결 아이콘 — 움막 지붕 + 안쪽으로 모이는 화살 셋.
+ *
+ * 부족 아이콘 3종과 **일부러 실루엣을 겹치지 않게** 잡았다: 저 셋은 "누구를 뽑는가"이고
+ * 이건 "어디로 모으는가"다. 사람 몸이 들어가면 네 번째 종족으로 읽힌다.
+ * 지붕은 hometownIconSvg 와 같은 형태·같은 색이라 "마을로"가 낱말 없이 읽힌다.
+ */
+export const rallySvg = SVG(
+  `<path d="M24 5 L42 20 L38 20 L38 27 L10 27 L10 20 L6 20 Z"
+     fill="#c49a5e" stroke="#4a3018" stroke-width="3" stroke-linejoin="round"/>
+   <path d="M5 40 L17 40 M17 40 L12 35 M17 40 L12 45"
+     fill="none" stroke="#ffd04a" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+   <path d="M43 40 L31 40 M31 40 L36 35 M31 40 L36 45"
+     fill="none" stroke="#ffd04a" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+   <path d="M24 31 L24 43 M24 43 L19 38 M24 43 L29 38"
+     fill="none" stroke="#ffd04a" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>`,
+);
+
 export const ALLY_ICON_SVG: Record<AllyId, string> = {
   clubber: allyClubberSvg,
   slinger: allySlingerSvg,

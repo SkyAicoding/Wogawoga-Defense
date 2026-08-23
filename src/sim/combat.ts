@@ -3,6 +3,7 @@
  * 감산(최소 1) → 가죽 타격당 상한(최소 1) → hp 감소
  * → **살점 값**: 몫 경계를 넘을 때마다 bounty의 몫, 사망 시 잔액 (settleBounty).
  * 기지 누수는 baseDamaged로 이어진다 — 남은 몫은 몰수된다.
+ * **보스만 예외다**: 경로 끝에서 사라지지 않고 문간에 서므로 leakEnemy가 gate로 갈라진다.
  * 타워 피해(적 부족의 공격)도 여기 있다 — 감쇠/방어 없이 정수 피해가 그대로 들어간다.
  * 상태이상 부여는 attack/status 쪽에서 담당 (순환 임포트 방지).
  */
@@ -14,6 +15,16 @@ import {
   hideCapFor,
 } from '@/data/balance';
 import type { AllySim, EnemySim, SimCtx } from './entities';
+/*
+ * ⚠ **의도된 순환 참조**: combat → gate → status → combat.
+ * 헤더의 "순환 임포트 방지"는 **상태이상 부여**를 여기 두지 말라는 규칙이고, 그건 그대로다.
+ * 이 세 모듈의 참조는 전부 **함수 선언**이라 모듈 평가 시점에 호출되는 것이 하나도 없다
+ * (ESM 호이스팅으로 안전하고, 실제로 tsc·vitest·vite build 셋 다 조용하다).
+ * 그래도 굳이 여기 갈림을 두는 이유는 규칙 1의 근거 그대로다 — "경로 끝에 닿았다"의
+ * 판정이 이동 단계 밖에도 생길 수 있는데, 갈림이 호출자 쪽에만 있으면 새 호출자가
+ * 조용히 보스를 지운다. 그 실수는 **한 판이 끝난 뒤에야** 드러난다.
+ */
+import { enterGate, isGateBoss } from './gate';
 
 export function addGold(ctx: SimCtx, delta: number): void {
   ctx.view.gold += delta;
@@ -174,6 +185,9 @@ export function damageEnemy(
       bounty: e.bounty,
       goldNow: paid,
       maxHp: e.maxHp,
+      // 문간에서 죽었다면 그 자리에서 버틴 틱 — 개체는 같은 틱에 풀로 회수되므로
+      // 여기 안 실으면 계측이 다시 읽을 방법이 없다 (types.ts enemyDied.gateTicks)
+      ...(e.gateTicks > 0 ? { gateTicks: e.gateTicks } : {}),
     });
   } else {
     const paid = settleBounty(ctx, e, false);
@@ -279,6 +293,14 @@ export function damageAlly(ctx: SimCtx, a: AllySim, amount: number, attacker: En
  */
 export function leakEnemy(ctx: SimCtx, e: EnemySim): void {
   if (!e.alive) return;
+  // **보스는 누수하지 않는다 — 문간에 살아서 선다** (src/sim/gate.ts 규칙 1).
+  // 이 한 줄이 갈림길 전체다. 여기에 두는 이유는 "경로 끝에 닿았다"를 판정하는 자리가
+  // 이동 단계 말고도 생길 수 있어서다 — 갈림이 호출자 쪽에만 있으면 새 호출자가
+  // 조용히 보스를 지운다. 아래 `enemyLeaked`가 보스에게 **절대 안 나가는** 것도 여기서 보장된다.
+  if (isGateBoss(ctx, e)) {
+    enterGate(ctx, e);
+    return;
+  }
   e.alive = false;
   ctx.events.push({
     type: 'enemyLeaked',

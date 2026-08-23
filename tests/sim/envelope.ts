@@ -164,6 +164,15 @@ export interface Profile {
   readonly blocks: number;
   /** 블록당 개수 배율 */
   readonly scale: number;
+  /**
+   * **블록 선택자** — `BLOCKS` 의 어느 블록부터 쓸지. 없으면 0(= 종전 동작 그대로).
+   *
+   * 왜 있는가: 봉투는 항목을 4블록 합산으로 판정하는데, "이 변경이 어느 블록에서
+   * 무너지는가"는 합산값에서 안 보인다. 블록 하나만 밟는 프로파일을 만들면 같은 판정
+   * 코드를 블록별로 그대로 돌릴 수 있다(`tests/sim/blocktable.test.ts`).
+   * ⚠ `FULL`·`FAST` 는 이 필드를 안 쓰므로 봉투·대조군의 표본은 **한 톨도 안 변한다**.
+   */
+  readonly blockAt?: number;
 }
 export const FULL: Profile = { name: 'full', blocks: 4, scale: 1 };
 /**
@@ -214,7 +223,8 @@ export function seedBlocks(name: WinName, prof: Profile = FULL): number[][] {
   const w = winOf(name);
   const nb = Math.min(w.blocks ?? BLOCKS.length, prof.blocks);
   const per = Math.max(1, Math.round(w.per * prof.scale));
-  return BLOCKS.slice(0, nb).map((b) =>
+  const at = prof.blockAt ?? 0;
+  return BLOCKS.slice(at, at + nb).map((b) =>
     Array.from({ length: per }, (_, i) => b + STRIDE * (w.off + i)),
   );
 }
@@ -689,6 +699,19 @@ export interface Mde {
   readonly n: number;
   /** 판정에 쓴 α */
   readonly alpha: number;
+  /**
+   * **지금 실측에서 실제로 판정에 기여한 짝의 수** (= 두 팔의 결과가 갈린 짝).
+   * `flips` 가 "몇 판이 더 뒤집히면 빨개지는가"라면 이 값은 **"뒤집힐 판이 있기는 한가"**다.
+   *
+   * ⚠ 왜 따로 드는가 — `flips` 만으로는 **공허한 통과를 못 잡는다.** `mdeGuard` 는
+   * `onlyA += m` 을 가정하고 α 를 넘기는 최소 m 을 찾으므로, 두 팔이 **한 판도 못 이기고
+   * 여유가 양쪽 다 정확히 0**이어도 `minPairs(α)` = 5 를 조용히 돌려준다. 그 5는 게임의
+   * 성질이 아니라 **α 의 상수**다. 곧 판이 통째로 무너져 비교할 것이 없어진 트리에서
+   * 여섯 방어용 계약이 전부 "MDE 5판" 을 달고 초록으로 통과한다.
+   * 이 필드는 `mdeMsg` 에 **넣지 않는다** — 다리 값이 바뀌면 원장이 통째로 낡기 때문이고,
+   * 검사는 메타 it 한 곳에서만 하면 충분하다.
+   */
+  readonly decided: number;
 }
 
 /** `signP(k,k) ≤ α` 를 만족하는 최소 k — 한쪽으로만 쏠린 쌍이 몇 개여야 유의한가 */
@@ -700,6 +723,8 @@ export function minPairs(alpha: number): number {
 /** 방어용(지배 금지) 다리의 MDE */
 export function mdeGuard(d: Duel, alpha = ALPHA_GUARD): Mde {
   const pairs = minPairs(alpha);
+  /** 두 축을 합쳐 "결과가 갈린 짝" 수 — 0이면 이 비교는 아무것도 판정하지 않았다 */
+  const decided = d.onlyA + d.onlyB + d.slackPos + d.slackNeg;
   for (let m = 0; m <= d.n; m++) {
     const onlyA = Math.min(d.n, d.onlyA + m);
     const onlyB = Math.max(0, d.onlyB - m);
@@ -709,9 +734,9 @@ export function mdeGuard(d: Duel, alpha = ALPHA_GUARD): Mde {
       onlyA >= onlyB &&
       sPos >= sNeg &&
       Math.min(signP(onlyA, onlyA + onlyB), signP(sPos, sPos + sNeg)) <= alpha;
-    if (red) return { pairs, flips: m, n: d.n, alpha };
+    if (red) return { pairs, flips: m, n: d.n, alpha, decided };
   }
-  return { pairs, flips: Infinity, n: d.n, alpha };
+  return { pairs, flips: Infinity, n: d.n, alpha, decided };
 }
 
 /** `pairedSign` 으로 판정하는 방어용 다리([13])의 MDE */
@@ -720,9 +745,9 @@ export function mdeSign(pos: number, neg: number, n: number, alpha = ALPHA_GUARD
   for (let m = 0; m <= n; m++) {
     const p = Math.min(n, pos + m);
     const q = Math.max(0, neg - m);
-    if (signP(p, p + q) <= alpha) return { pairs, flips: m, n, alpha };
+    if (signP(p, p + q) <= alpha) return { pairs, flips: m, n, alpha, decided: pos + neg };
   }
-  return { pairs, flips: Infinity, n, alpha };
+  return { pairs, flips: Infinity, n, alpha, decided: pos + neg };
 }
 
 /** MDE 등록부 — 메타 it 이 "실패 불가능한 계약이 없다"를 검사할 때 읽는다 */

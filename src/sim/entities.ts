@@ -118,6 +118,8 @@ function makeEnemy(): EnemySim {
     attackAnimLeft: 0,
     attackAnimTicks: 0,
     blockerAllyId: -1,
+    gateTicks: 0,
+    gateBiteCdLeft: 0,
     def: null as unknown as EnemyDef, // 스폰 시 반드시 채워짐
     stunImmuneUntil: -1,
     siegeMul: 1,
@@ -144,6 +146,14 @@ function resetEnemy(e: EnemySim): void {
   e.siegeMul = 1;
   e.blockerAllyId = -1;
   e.brawlCdLeft = 0;
+  // **문간 상태 — 리셋 누락이 곧 결정론 파괴다** (gate.ts).
+  // gateTicks 가 남아 있으면 새로 스폰된 개체가 태어나자마자 "문간에 서 있는 것"이 되어
+  // moveEnemies 가 첫 틱부터 그 개체를 붙잡고(두 번 다시 안 걷는다) updateGate 가
+  // 스폰 지점에서 마을을 물기 시작한다. 그 감소량이 풀 재사용 순서를 타므로 시드마다
+  // 갈리고, 곧 hash() 가 갈린다 — bountyPaid 가 당한 것과 **정확히 같은 모양**의 사고다.
+  // (전례가 있어서 여기 상수로 못박는다. tests/sim/gate.test.ts 가 이 성질을 잠근다)
+  e.gateTicks = 0;
+  e.gateBiteCdLeft = 0;
   // 살점 값의 **지급 이력**도 같다 — 안 지우면 trex(bountyPaid 480)를 죽인 슬롯을
   // 물려받은 compy가 "이미 480을 받은 적"으로 취급돼 평생 한 푼도 못 받는다.
   // 그 감소량이 풀 재사용 순서를 타므로 시드마다 갈리고, 곧 hash()가 갈린다.

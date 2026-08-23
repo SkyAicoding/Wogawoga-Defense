@@ -7,6 +7,7 @@ import type {
   AllyId,
   BattleSim,
   BattleUiApi,
+  EnemyId,
   ResultSummary,
   StageDef,
   TargetingMode,
@@ -206,6 +207,29 @@ export class BattleController {
       requestTrainAlly: (defId: AllyId) => {
         // 경로는 sim이 결정론적으로 고른다 (allies.ts 규칙 1) — UI는 종만 고른다
         if (self.sim.applyCommand({ type: 'trainAlly', defId })) audio.play('uiTap');
+      },
+      requestRallyAllies: () => {
+        /*
+         * 문간 집결 — 살아 있는 부족원 **전원**을 마을 셀로. sim 은 한 줄도 안 늘었다:
+         * 기존 moveAlly 의 "allyId −1 + defId 생략 = 전원" 갈래를 그대로 쓴다
+         * (types.ts BattleCommand.moveAlly 주석 참조).
+         *
+         * 판 위 선택을 먼저 푸는 이유: 부족 선택이 살아 있으면 **다음 캔버스 탭이
+         * 또 하나의 moveAlly 가 된다**(placement.ts). 집결시켜 놓고 화면을 한 번
+         * 만졌다가 방금 부른 전원이 엉뚱한 칸으로 되돌아 나가는 사고가 그것이다.
+         * 집결은 "여기서 조작이 끝난다"는 뜻이라 선택도 같이 닫는다.
+         *
+         * 아무도 안 나가 있으면 moveAlly 가 false 를 돌려주고 소리도 안 난다 —
+         * 눌린 척하지 않는다.
+         */
+        self.placement.clearAllySelection();
+        const ok = self.sim.applyCommand({
+          type: 'moveAlly',
+          allyId: -1,
+          cellX: self.stage.baseCell.x,
+          cellZ: self.stage.baseCell.z,
+        });
+        if (ok) audio.play('uiTap');
       },
       requestRefresh: () => {
         if (self.sim.applyCommand({ type: 'refreshHand' })) audio.play('cardRefresh');
@@ -566,6 +590,25 @@ export class BattleController {
         return ok;
       },
       allyCost: (defId: AllyId): number => this.sim.allyCost(defId),
+      // 문간 검증용 — HUD/집결 버튼은 DOM으로 보이지만 "지금 문간에 누가 섰는가"는
+      // sim 상태라 e2e가 읽을 창이 따로 필요하다 (src/sim/gate.ts).
+      gateBosses: (): { id: number; defId: EnemyId; gateTicks: number; cdLeft: number; blockerAllyId: number }[] =>
+        this.sim.state.enemies
+          .filter((e) => e.alive && e.gateTicks > 0)
+          .map((e) => ({
+            id: e.id,
+            defId: e.defId,
+            gateTicks: e.gateTicks,
+            cdLeft: e.gateBiteCdLeft,
+            blockerAllyId: e.blockerAllyId,
+          })),
+      // 연출 계측용 — 문간 한 입의 지붕 파편처럼 **작고 가려지는** 연출은 캡처로
+      // 못 닫는다(0.06타일 ≈ 3px, 게다가 보스 몸통 뒤다). 개수로 닫는다.
+      particleCount: (): number => this.stage3d.particles.liveCount,
+      rallyAllies: (): void => {
+        this.api.requestRallyAllies?.();
+        this.processEvents();
+      },
       canTrainAlly: (defId: AllyId): boolean => this.sim.canTrainAlly(defId),
       // 홈타운 방어/레벨업 검증용 — 최대 레벨·골드 부족 거부까지 그대로 밟는다
       baseInfo: (): {

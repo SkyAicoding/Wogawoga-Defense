@@ -396,16 +396,59 @@ describe('autoplay 난이도 봉투', () => {
     expect(missing, 'MDE 가 등록되지 않은 방어용 다리 — envelope.guard 를 거치지 않고 손으로 판정했다').toEqual([]);
     const rows: string[] = [];
     const impossible: string[] = [];
+    const vacuous: string[] = [];
     for (const id of GUARD_LEGS) {
       const m = snap.get(id)!;
-      rows.push(`  ${id} — ${Number.isFinite(m.flips) ? `${m.flips}판` : '∞'} / 표본 ${m.n}판 · 같은 방향 쌍 ${m.pairs}개 · α ${m.alpha}`);
+      rows.push(
+        `  ${id} — ${Number.isFinite(m.flips) ? `${m.flips}판` : '∞'} / 표본 ${m.n}판 · 같은 방향 쌍 ${m.pairs}개 · ` +
+          `갈린 짝 ${m.decided}개 · α ${m.alpha}`,
+      );
       if (!Number.isFinite(m.flips) || m.flips > m.n) impossible.push(id);
+      if (m.decided === 0) vacuous.push(id);
     }
     expect(
       impossible,
       `\n══ 최소 검출 효과크기 (얼마나 나빠지면 빨개지는가) ══\n${rows.join('\n')}\n\n` +
         '⚠ 위 다리는 **어떤 결과가 나와도 실패할 수 없다.** 마진을 넣거나 문턱을 만지지 말고 ' +
         '표본(창의 per)을 키워라 — 이 형태의 계약에서 검출력은 불일치 쌍 수에서만 나온다.',
+    ).toEqual([]);
+
+    /**
+     * ── ⚠ `flips` 가 못 잡는 두 번째 구멍: **공허한 통과** ───────────────────────
+     * 위 검사는 "산술적으로 몇 판이면 빨개지는가"만 본다. 그런데 `mdeGuard` 는
+     * `onlyA += m` 을 가정하므로, 두 팔이 **한 판도 못 이기고 여유가 양쪽 다 0**인
+     * 트리에서도 `minPairs(α)` = 5 를 돌려준다 — 게임의 성질이 아니라 α 의 상수다.
+     * 곧 판이 통째로 무너지면 여섯 방어용 계약이 전부 "MDE 5판"을 달고 **초록**이 된다.
+     *
+     * 실측으로 확인했다 — 배포 트리와 문간 공성 브랜치를 같은 창(4블록 FULL)으로 나란히 쟀다.
+     * 배포 쪽 값은 원장이 들고 있으므로 인용으로 적는다(손으로 베끼면 낡는다):
+     *   다리                배포 트리                              무너진 트리
+     *   6.dozer             ⟦원장 6.dozer.notDominant = MDE 3판/80⟧      MDE 5판/80
+     *   7.unit              ⟦원장 7.unit.notDominant = MDE 18판/80⟧      MDE 5판/80
+     *   7.base600           ⟦원장 7.base600.notDominant = MDE 22판/80⟧   MDE 5판/80
+     *   7.baseNat           ⟦원장 7.baseNat.notDominant = MDE 1판/80⟧    MDE 5판/80
+     *   10.tribe            ⟦원장 10.tribe.notDominant = MDE 9판/80⟧     MDE 5판/80
+     *   13.tribe.notAhead   ⟦원장 13.tribe.notAhead = MDE 11판/24⟧       MDE 5판/24
+     * **서로 다른 여섯 게임의 여섯 숫자가 하나의 상수로 수렴하는 것**이 그 상태의 지문이다.
+     * (무너진 쪽 열은 이 트리의 브랜치 실측이라 원장에 없다. 갈린 짝은 앞의 다섯이 전부 0,
+     *  [13]만 4 로 살아남았다 — 무한 모드는 마을 HP 로 안 끝나 여유 축이 죽지 않기 때문이고,
+     *  그래서 이 검사는 [13]을 통과시킨다. 배포 쪽 갈린 짝은 4 / 62 / 95 / 56 / 83 / 18 이라
+     *  가장 얇은 [6]도 0 에서 넷 떨어져 있다.)
+     * (원인은 `slackOf = baseHpLeft / baseHpMax` 다 — 모든 판이 마을 0으로 끝나면 여유 축이
+     *  통째로 0이 되고, 승수 축도 0/n 대 0/n 이라 `dominant` 의 두 축이 동시에 죽는다.)
+     *
+     * ⚠ 여기서 걸리면 **문턱이 아니라 게임을 고쳐라.** 이 다리는 "갈린 짝이 0이다"라고만
+     *   말하고, 그건 표본이 모자란 것이 아니라 **비교할 것이 남지 않은 것**이다.
+     *   판별력: 이 검사를 배포 트리(02a6062)에 걸면 여섯 다 갈린 짝 ≥ 4 로 초록이고,
+     *   문간 공성 브랜치에 걸면 여섯 다 0 으로 빨갛다.
+     */
+    expect(
+      vacuous,
+      `\n══ 최소 검출 효과크기 ══\n${rows.join('\n')}\n\n` +
+        '⚠ 위 다리는 **두 팔의 결과가 한 짝도 갈리지 않았다**(승수·여유 양축 전부). ' +
+        '곧 "지배 전략이 아니다"가 참이라서 통과한 것이 아니라, **비교할 것이 없어서** 통과했다. ' +
+        'MDE 가 유한하게 찍히는 것에 속지 마라 — 그 값은 α 의 상수(minPairs)이지 게임의 성질이 아니다. ' +
+        '문턱을 만지지 말고 왜 두 팔이 똑같이 전멸하는지를 먼저 고쳐라.',
     ).toEqual([]);
     process.stdout.write(`\n══ 지배 금지 계약의 최소 검출 효과크기 (α ${ALPHA_GUARD}) ══\n${rows.join('\n')}\n`);
   }, 30_000);

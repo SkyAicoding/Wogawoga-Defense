@@ -116,6 +116,8 @@ function enemy(o: Partial<EnemyState> = {}): EnemyState {
     attackCdLeft: 0,
     towerTargetId: -1,
     siegeHoldLeft: 0,
+    gateTicks: 0,
+    gateBiteCdLeft: 0,
     attackAnimLeft: 0,
     attackAnimTicks: 0,
     blockerAllyId: -1,

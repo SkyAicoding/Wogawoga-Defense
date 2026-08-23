@@ -319,6 +319,33 @@ export const SIEGE_ADVANCE_TICKS = 120;
  */
 export const RAID_ATTACK_ANIM_TICKS = 12;
 
+/**
+ * **문간 한 입의 주기** (틱). 보스가 마을 문 앞에 서서 무는 간격 — 30틱 = 1초.
+ *
+ * 왜 1초인가: 이 값이 정하는 것은 DPS가 아니라 **플레이어가 반응할 수 있는 단위**다.
+ * 문간 공성의 계약(src/sim/gate.ts 규칙 3)이 "첫 1초에 죽이거나 봉쇄하면 피해 0"인데,
+ * 주기가 이보다 짧으면 그 약속이 화면에서 지켜지지 않고(반응 전에 이미 두 입) 길면
+ * 마을 HP 게이지가 몇 십 초씩 멈춰 있어 "지금 물리고 있다"가 안 읽힌다.
+ * 정확히 1초라 HUD가 초 단위 카운트다운을 그대로 그릴 수 있다(2단계 (b)).
+ */
+export const GATE_BITE_TICKS = 30;
+/**
+ * **문간 한 입의 크기** = `ceil(baseDamage / GATE_BITE_DIVISOR)`.
+ *
+ * 곧 이 값은 "보스를 문간에 몇 초 방치하면 종전의 누수 한 번과 같은 값을 치르는가"다.
+ * 4면 4초, 8이면 8초. 적 데이터(baseDamage)를 **한 값도 안 바꾸고** 문간의 세기만
+ * 여기서 정한다 — 종의 서열(trex 12 > spino 5 > compy 3…)이 그대로 문간에 상속된다.
+ *
+ * ⚠ **왜 나눗셈이고 왜 올림인가.** 곱셈 상수(초당 N)로 두면 종 서열이 지워져 문간에서
+ * compy와 trex가 같은 무게가 된다. 올림은 하한 1을 공짜로 준다 — 곧 어떤 divisor에서도
+ * "한 입은 반드시 1 이상"이라 gate.ts 의 교착 불가능성 증명(마을 HP 카운트다운)이
+ * 이 상수에 의존하지 않는다.
+ *
+ * 값 4 = trex(12) 3/초 → 스테이지1 마을 25가 **8.3초** · spino(5) 2/초 → 12.5초.
+ * 실측 스윕은 src/sim/gate.ts 헤더의 표를 보라(4/6/8 3점).
+ */
+export const GATE_BITE_DIVISOR = 4;
+
 /** 티어/별/내구도 배율 → 타워 최대 HP (정수). sim과 UI가 같은 함수를 쓴다. */
 export function towerMaxHpFor(tier: number, stars = 0, toughness = 1): number {
   const t = Math.max(0, Math.floor(tier));

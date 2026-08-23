@@ -108,6 +108,10 @@ export class WaveSpawner {
     // 사거리에 들어서는 즉시 첫 타격 (siege.ts 규칙 6)
     e.attackCdLeft = 0;
     e.towerTargetId = -1;
+    // 문간 상태 — resetEnemy 가 이미 0으로 못박지만 여기서도 명시한다
+    // (shieldHitsLeft·attackCdLeft 가 양쪽에 적혀 있는 것과 같은 관행. gate.ts)
+    e.gateTicks = 0;
+    e.gateBiteCdLeft = 0;
     e.alive = true;
     e.boss = def.boss ?? false;
     // 보상 배율 — 예산을 넘겨 부푼 편성(습격대 최소 인원)에서만 1 미만이다.

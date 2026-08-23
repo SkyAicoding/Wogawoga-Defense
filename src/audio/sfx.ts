@@ -12,7 +12,7 @@ export type SfxName =
   | 'spearThrow' | 'catapultLaunch' | 'boulderImpact' | 'lightningZap'
   | 'fireWhoosh' | 'frostCast' | 'poisonSpit' | 'drumBuff'
   | 'enemyHit' | 'enemyDie' | 'bossRoar' | 'baseHit'
-  | 'towerFall'
+  | 'towerFall' | 'tribeCheer'
   | 'waveStart' | 'waveClear' | 'earlyCall'
   | 'victory' | 'defeat' | 'starUp' | 'amberGain';
 
@@ -286,6 +286,44 @@ const RECIPES: Record<SfxName, Recipe> = {
       noiseSrc(ctx, lp, t0 + 0.05, 0.9, rng, true);
       // 바닥에 닿는 쿵
       tone(ctx, env(ctx, dest, t0 + 0.2, 0.9, 0.006, 0.55), 'sine', 70 * j(rng), t0 + 0.2, 0.5, 38);
+    },
+  },
+  /**
+   * 부족의 함성 — **문간에서 보스를 잡은 순간에만** 울린다(game/fx.ts enemyDied).
+   *
+   * 왜 전용 소리인가: 문간의 대치는 "보스가 죽거나 마을이 죽거나" 둘 중 하나로만
+   * 끝난다(src/sim/gate.ts). 그 갈림에서 이긴 쪽을 enemyDie(0.34초 블립) 하나로
+   * 끝내면 판에서 가장 큰 사건이 가장 작은 소리로 지나간다.
+   *
+   * 구성(사람 목소리 흉내 — 샘플 0개):
+   *  · 포먼트 세 겹 — 톱니 3개를 220/330/440Hz 부근에서 **살짝 어긋나게** 띄우고
+   *    밴드패스(중심 900Hz, Q 1.1)로 통과시킨다. 배음이 정수비를 벗어나 있어야
+   *    '한 사람'이 아니라 '여럿'으로 읽힌다.
+   *  · 우 — 하고 차오르는 곡선: 전체 게인이 0.28초에 걸쳐 열리고(다른 원샷의 5~10ms
+   *    어택과 정반대다) 0.85초에 걸쳐 닫힌다. 이 느린 어택 하나가 '함성'과
+   *    '비명'을 가른다.
+   *  · 손뼉/발구름 — 밴드패스 노이즈 두 점(0.06초, 0.19초)으로 앞을 튀긴다.
+   * 사전 렌더 목록에는 안 넣는다 — 한 판에 많아야 몇 번이다.
+   */
+  tribeCheer: {
+    dur: 1.25,
+    build(ctx, dest, t0, rng) {
+      const bp = filt(ctx, env(ctx, dest, t0, 0.5, 0.28, 0.85), 'bandpass', 900, 1.1);
+      for (const f of [222, 331, 447]) {
+        const o = tone(ctx, bp, 'sawtooth', f * j(rng), t0, 1.05, f * 1.09);
+        // 목이 흔들리는 비브라토 — 셋을 조금씩 다른 속도로 흔들어 합창으로 만든다
+        const lfo = ctx.createOscillator();
+        lfo.frequency.value = 4.4 + rng.range(0, 2.2);
+        const lg = ctx.createGain();
+        lg.gain.value = f * 0.02;
+        lfo.connect(lg).connect(o.frequency);
+        lfo.start(t0);
+        lfo.stop(t0 + 1.1);
+      }
+      // 손뼉 두 점
+      for (const dt of [0.06, 0.19]) {
+        noiseSrc(ctx, filt(ctx, env(ctx, dest, t0 + dt, 0.3, 0.004, 0.1), 'bandpass', 1900, 0.9), t0 + dt, 0.11, rng);
+      }
     },
   },
   // 둔탁한 쿵(120→50Hz) + 경보 2연 비프(740Hz) — 기지 피격
