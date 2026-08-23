@@ -108,8 +108,11 @@ export const RESOURCE_DEFS: Readonly<Record<ResourceId, ResourceDef>> = {
  *    안 넣으면 설원의 식량이 berry 하나뿐이다.
  *  · **화산에 식량이 0인 것은 의도다.** 마지막 스테이지의 대가이고, 그 보상이 obsidian 34%다.
  *
- * 바이옴별 kindMul 가중평균(스테이지 총액 추정에 쓴다):
- *   grassland 0.954 · jungle 0.938 · desert 1.000 · snow 0.997 · swamp 0.953 · volcano 1.190
+ * 바이옴별 kindMul 가중평균(스테이지 총액 추정에 쓴다) — **손계산으로 재검산한 값이다**:
+ *   grassland 0.9540 · jungle 0.9340 · desert 0.9994 · snow 0.9952 · swamp 0.9532 · volcano 1.1898
+ * ⚠ 명세 §1-4 표의 jungle 0.938 · desert 1.000 · snow 0.997 은 **틀렸다**(§1-7 이 맞다).
+ *   여기 값이 옳다 — 가중치×배수÷100 을 세 사람이 독립으로 다시 계산해 일치시켰다.
+ *   주석 전용이라 코드는 안 움직이지만, 이 저장소에서 틀린 근거는 다음 사람을 잘못 인도한다.
  */
 export const RESOURCE_WEIGHTS: Readonly<
   Record<BiomeId, readonly (readonly [ResourceId, number])[]>
@@ -228,7 +231,15 @@ export const ARRIVE_EPS2 = 1e-6;
  * 통하고, 렌더는 **자기가 가진 것을 그대로 넣는다**(렌더는 `@/sim`을 못 읽는다).
  */
 export function isGathering(a: AllyState): boolean {
-  if (a.gatherKey < 0) return false;
+  // ⚠ `a.gatherKey < 0` 이 아니라 `!(a.gatherKey >= 0)` 이다 — 한 글자가 아니라 방향의 문제다.
+  // 아군은 **풀에서 재사용**된다(entities.ts resetAlly). tsc 가 강제하는 것은 `makeAlly` 리터럴
+  // 하나뿐이라, 누가 resetAlly 에서 gatherKey 초기화를 빠뜨리면 이 함수가 `undefined` 를 받는다.
+  // 그때 `undefined < 0` 은 false → **"캐는 중"으로 읽힌다.** 이 함수는 §4-4 에서 **전투 불능**
+  // 판정에 쓰이므로, 그 순간 목표(=집결 지점)에 서 있는 부족원이 조준도 봉쇄도 안 하는 사람이
+  // 되고 봉투가 통째로 조용히 흔들린다 — **타입 오류는 0건이다.**
+  // `undefined >= 0` 은 false 이므로 이 형태는 안전한 쪽으로 닫힌다.
+  // resetAlly 다섯 줄이 첫째 방어선이고 이것은 둘째 방어선이다.
+  if (!(a.gatherKey >= 0)) return false;
   const dx = a.x - a.tgtX;
   const dz = a.z - a.tgtZ;
   return dx * dx + dz * dz <= ARRIVE_EPS2;
