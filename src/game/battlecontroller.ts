@@ -605,6 +605,19 @@ export class BattleController {
       // 연출 계측용 — 문간 한 입의 지붕 파편처럼 **작고 가려지는** 연출은 캡처로
       // 못 닫는다(0.06타일 ≈ 3px, 게다가 보스 몸통 뒤다). 개수로 닫는다.
       particleCount: (): number => this.stage3d.particles.liveCount,
+      // 누적 스폰 수 — 풀 포화·앰비언트에 안 타는 쪽. 두 읽기 사이에 프레임을 안 끼우면
+      // "이 한 틱의 사건이 낸 파티클"만 갈라진다 (particles.ts spawnedTotal 주석).
+      particlesSpawned: (): number => this.stage3d.particles.spawnedTotal,
+      sellAllTowers: (): number => {
+        // 계측 격리용 — 타워가 쏘는 동안에는 궤적/불티가 매 틱 섞여 들어와
+        // 파편 10점을 갈라낼 수 없다. 문간 대치 자체는 타워와 무관하게 그대로 선다.
+        let n = 0;
+        for (const t of [...this.sim.state.towers]) {
+          if (this.sim.applyCommand({ type: 'sellTower', towerId: t.id })) n++;
+        }
+        this.processEvents();
+        return n;
+      },
       rallyAllies: (): void => {
         this.api.requestRallyAllies?.();
         this.processEvents();

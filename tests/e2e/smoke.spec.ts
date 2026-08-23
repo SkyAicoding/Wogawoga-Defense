@@ -103,6 +103,10 @@ declare global {
       rallyAllies(): void;
       /** 살아 있는 파티클 수 (직전 update 시점) — 작고 가려지는 연출을 개수로 닫는다 */
       particleCount(): number;
+      /** 누적 스폰 수 (단조) — 풀 포화·앰비언트에 안 타는 계측기 */
+      particlesSpawned(): number;
+      /** 계측 격리용 — 타워를 전부 팔아 궤적/불티를 지운다. 판 개수를 돌려준다 */
+      sellAllTowers(): number;
       /** 루프를 멈춘 채 파티클/카메라 시간만 손으로 진행시킨다 */
       stepFx(sec: number): void;
     };
@@ -1883,48 +1887,83 @@ test('문간: 보스가 문 앞에 서면 띠가 뜨고, 집결 탭 1회로 붙�
    * ── 한 입의 지붕 파편 (연출) ─────────────────────────────────────────────
    * towerDamaged 의 임팩트 인스턴서를 그대로 재사용한다(game/fx.ts). 눈으로는 못 닫는다:
    * 파편이 0.06타일(화면 3px 남짓)인 데다 문간 보스는 마을 셀과 거리 0이라 **제 몸으로
-   * 파편을 가린다**. 그래서 개수로 닫는다 — 한 입 틱에 정확히 10점이 는다.
+   * 파편을 가린다**(실측 캡처에서 통째로 가려져 높이를 1.05 → 1.7 로 올렸다).
    *
-   * 먼저 풀을 비운다: 후반 웨이브는 파티클이 512/512 로 **포화**라 새 파편이 오래된
-   * 슬롯을 재활용해 들어가고, 그러면 델타가 0으로 보인다(실측으로 한 번 속았다).
-   * 그리고 live 는 update 에서만 다시 세므로 burst 직후에 읽으면 옛 값이다 —
-   * 읽기 전에 stepFx 를 한 번 태운다.
+   * 재는 법을 네 번 고쳤다. 버린 것들과 이유를 남긴다 — 다음 사람이 같은 길을 또 걷지 않게.
+   *  (1) 살아 있는 파티클 수의 델타 → **항상 0**. 후반 웨이브는 풀이 512/512 로 포화라
+   *      새 파편이 오래된 슬롯을 재활용해 들어간다.
+   *  (2) 풀을 비우고 다시 → 6판 중 1판만 맞았다(384→384, 496→512). `update()` 가 매
+   *      프레임 앰비언트를 다시 채우고, live 는 update 에서만 세므로 두 읽기 사이에
+   *      프레임을 안 끼울 수가 없다.
+   *  (3) 누적 스폰 수(단조) + **대조 틱 빼기** → 여전히 흔들렸다. 실측 control 9 · bite 10:
+   *      타워를 다 팔아도 **마을이 스스로 쏘는** 틱과 안 쏘는 틱이 갈린다(baseFired +
+   *      화살 착탄). 뺄셈의 전제인 "잡음이 두 틱에 같다"가 거짓이다.
+   *  (4) 지금 것 — 잡음은 **항상 0 이상**이므로 여러 한 입 틱의 **최솟값**을 본다.
+   *      거짓 실패가 원리적으로 불가능하고(≥10 은 항상 참), 조용한 틱이 한 번이라도
+   *      섞이면 파편이 줄어든 회귀를 잡는다. 여기에 **DOM 을 비우고 재는** 결정적
+   *      검사를 하나 더 붙인다: 타워를 다 팔았으므로 이 자리의 'tower' 색 피해 숫자는
+   *      한 입 말고는 나올 데가 없다(towerDamaged 가 물리적으로 불가능하다).
    */
-  const debris = await page.evaluate(async () => {
+  const debris = await page.evaluate(() => {
     const g = window.__wgd!;
-    // sim 은 멈춘 채 FX 시간만 흘려 있던 파티클을 늙혀 없앤다
-    for (let i = 0; i < 12; i++) {
-      g.stepFx(0.5);
-      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    const sold = g.sellAllTowers();
+    // ⚠ 필드 이름은 `cdLeft` 다. `cd` 로 잘못 적었다가 한참 헤맸다 — tsconfig 가
+    //   tests/e2e 를 exclude 하므로 **tsc 가 이 파일의 오타를 안 잡는다**.
+    //   그때 증상은 "ff 가 안 도는 것처럼 보임"이었다(undefined > 4 가 false 라 건너뛴다).
+    const at = (): { cdLeft: number } | null => g.gateBosses()[0] ?? null;
+
+    /*
+     * 대조 틱 — 쿨다운이 넉넉히 남은 자리에서 "물지 않는 한 틱"을 잰다.
+     * 이미 한 입이 코앞이면(cdLeft ≤ 2) **먼저 물고 지나간다** — 그래야 쿨다운이 가득
+     * 차서 뒤로 물러설 자리가 생긴다. 이걸 안 하면 대조 틱이 그대로 한 입이 되어
+     * 뺄셈의 전제가 깨진다(실측: controlBit 이 0 대신 2로 나왔다).
+     */
+    let b = at();
+    if (!b) return { gone: true as const };
+    if (b.cdLeft <= 2) {
+      g.ff(b.cdLeft + 1);
+      b = at();
+      if (!b) return { gone: true as const };
     }
-    // 다음 한 입 직전까지 한 번에 건너뛴다 (한 틱씩 걸으면 그만큼 마을이 더 깎인다 —
-    // 이 판의 예산은 마을 29HP ≈ 10입뿐이고 아래 집결 검사가 그 나머지를 쓴다)
-    const b0 = g.gateBosses()[0];
-    if (!b0) return { gone: true as const };
-    if (b0.cdLeft > 1) g.ff(b0.cdLeft - 1);
-    g.stepFx(0.0001);
-    const before = g.particleCount();
-    const hpBefore = g.sim.state.baseHp;
-    g.ff(1); // ← 이 한 틱이 한 입이다
-    g.stepFx(0.0001);
-    return {
-      before,
-      after: g.particleCount(),
-      bitDamage: hpBefore - g.sim.state.baseHp,
-      dmgTexts: [...document.querySelectorAll('.dmg--tower')].map((e) => e.textContent ?? ''),
-    };
+    if (b.cdLeft > 4) g.ff(b.cdLeft - 4);
+    const hp0 = g.sim.state.baseHp;
+    g.ff(1);
+    const controlBit = hp0 - g.sim.state.baseHp;
+
+    // 한 입 틱 여러 번 — 각 틱의 스폰 델타를 모은다
+    const deltas: number[] = [];
+    const damages: number[] = [];
+    let dmgTexts: string[] = [];
+    for (let k = 0; k < 3; k++) {
+      b = at();
+      if (!b) break;
+      if (b.cdLeft > 1) g.ff(b.cdLeft - 1);
+      // 마지막 회차만 DOM 을 비우고 잰다 — 이 한 입이 띄운 숫자만 남긴다
+      if (k === 2) document.querySelectorAll('.dmg').forEach((e) => e.remove());
+      const s0 = g.particlesSpawned();
+      const hp1 = g.sim.state.baseHp;
+      g.ff(1);
+      deltas.push(g.particlesSpawned() - s0);
+      damages.push(hp1 - g.sim.state.baseHp);
+      if (k === 2) {
+        dmgTexts = [...document.querySelectorAll('.dmg--tower')].map((e) => e.textContent ?? '');
+      }
+    }
+    return { sold, controlBit, deltas, damages, dmgTexts, phase: g.sim.state.phase };
   });
   expect(debris.gone, '한 입을 재기 전에 문간 보스가 사라졌다').toBeFalsy();
-  expect(debris.bitDamage, `한 입이 마을을 깎아야 한다: ${JSON.stringify(debris)}`).toBeGreaterThan(0);
+  const dMsg = JSON.stringify(debris);
+  expect(debris.controlBit, `대조 틱은 물지 않아야 한다: ${dMsg}`).toBe(0);
+  expect(debris.deltas!.length, `한 입을 세 번 재야 한다: ${dMsg}`).toBe(3);
+  expect(debris.damages!.every((d) => d > 0), `한 입마다 마을이 깎여야 한다: ${dMsg}`).toBe(true);
   expect(
-    debris.after! - debris.before!,
-    `한 입 = 지붕 파편 10점 (towerDamaged 임팩트 인스턴서 재사용): ${JSON.stringify(debris)}`,
-  ).toBe(10);
-  // 피해 숫자도 타워 피격과 **같은 종류**로 뜬다 (적이 받는 흰 숫자와 갈려야 한다)
-  expect(
-    debris.dmgTexts,
-    `한 입은 'tower' 색 피해 숫자를 띄운다: ${JSON.stringify(debris.dmgTexts)}`,
-  ).toContain(`-${debris.bitDamage}`);
+    Math.min(...debris.deltas!),
+    `한 입 틱은 최소 지붕 파편 10점을 낸다 (towerDamaged 임팩트 인스턴서 재사용): ${dMsg}`,
+  ).toBeGreaterThanOrEqual(10);
+  // 피해 숫자도 타워 피격과 **같은 종류**로 뜬다 (적이 받는 흰 숫자와 갈려야 한다).
+  // 타워를 다 팔았으므로 이 자리의 'tower' 색 숫자는 한 입 말고 나올 데가 없다.
+  const lastDmg = debris.damages![debris.damages!.length - 1];
+  expect(debris.dmgTexts, `한 입은 'tower' 색 피해 숫자를 띄운다: ${dMsg}`).toEqual([`-${lastDmg}`]);
 
   // --- (c)(d) 부족원을 내보냈다가 **탭 1회**로 되부른다 ---------------------
   /*

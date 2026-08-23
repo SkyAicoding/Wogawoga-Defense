@@ -135,6 +135,8 @@ export class ParticleSystem {
   private ambientArea = new THREE.Box3();
   private ambientBudget = 0;
   private time = 0;
+  /** 누적 스폰 수 (계측 전용 · 단조) — spawnedTotal 참조 */
+  private spawned = 0;
   /** 저사양에서는 개수만 줄이고 크기·수명·쇼크웨이브로 임팩트를 유지한다 */
   private qualityCount: number;
 
@@ -184,6 +186,7 @@ export class ParticleSystem {
 
   private spawn(glow: boolean): P {
     const layer = glow ? this.glow : this.main;
+    this.spawned++;
     // 순환 커서 — 가득 차면 가장 오래된 것 재사용
     for (let i = 0; i < layer.capacity; i++) {
       layer.cursor = (layer.cursor + 1) % layer.capacity;
@@ -207,6 +210,21 @@ export class ParticleSystem {
     if (load > 0.62) m *= big ? 0.72 : 0.42;
     if (load > 0.85) m *= big ? 0.55 : 0.28;
     return m;
+  }
+
+  /**
+   * **지금까지 스폰한 누적 개수** — 연출 계측 전용, 단조 증가, 되돌지 않는다.
+   *
+   * `liveCount` 가 못 하는 일을 한다. 살아 있는 수는 두 가지에 오염된다:
+   *  · 풀 포화 — 후반 웨이브는 512/512 라 새 파편이 오래된 슬롯을 **재활용**해
+   *    들어가고, 그러면 델타가 0으로 보인다(실측으로 겪었다).
+   *  · 환경 파티클 — `update()` 가 매 프레임 앰비언트를 다시 채워 델타에 섞인다.
+   * 누적 개수는 스폰 순간에 오르므로 둘 다 안 탄다. 무엇보다 **update() 를 안 태워도
+   * 읽을 수 있어서**, 두 읽기 사이에 프레임을 한 장도 안 끼울 수 있다 —
+   * 곧 "이 한 틱의 사건이 낸 파티클"만 정확히 갈라낼 수 있다.
+   */
+  get spawnedTotal(): number {
+    return this.spawned;
   }
 
   /**
