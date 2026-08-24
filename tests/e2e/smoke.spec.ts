@@ -1533,7 +1533,7 @@ test('채집: 영구 그림 값은 +1 (버스트와 갈라 잰다) · 전 구간
  *     `SCENERY_DENSITY 0.3` 이 정하는 건설 가능 칸 수가 바뀌어 봉투가 통째로 흔들린다.
  *  ④ **유료 제거 비용이 안 변한다** — 채집과 `clearScenery` 는 같은 칸에 붙는 별개의 동사다.
  */
-test('채집: 한 사이클이 실제로 돈다 · 탭 없으면 0 · 텄어도 건설 불가(D1)', async ({ page }) => {
+test('채집: 한 사이클이 실제로 돈다 · 사람 없으면 0 · 캔 자리는 비고 다시 자란다', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
@@ -1686,20 +1686,76 @@ test('채집: 한 사이클이 실제로 돈다 · 탭 없으면 0 · 텄어도 
       ` 인데 지급은 ${paid} (${cycle.before} → ${cycle.after})`,
   ).toBe(expected);
 
-  // ── ③④ 텄어도 건설 불가이고 제거 비용도 그대로 ─────────────────────────────
+  /*
+   * ── ③ **캔 자리는 비고 건설 가능해진다** ─────────────────────────────────────
+   *
+   * ⚠⚠ **이 절은 정확히 뒤집혔다. 무엇이 왜 바뀌었는지 적는다.**
+   *   옛 계약(D1): "다 캔 칸은 **그루터기로 남고 건설 불가**를 유지한다."
+   *     근거는 `SCENERY_DENSITY = 0.3` 이 정하는 건설 가능 칸 수가 밸런스라는 것이었고,
+   *     그 판정으로 봉투 [6](불도저)의 [치명] 위험을 없앴다.
+   *   지금(사용자 재정의): "채집 후 있던 자원은 **사라져야 해**."
+   *     소품이 사라지는데 못 짓게 두면 **안 보이는 장애물**이 된다 — 그게 더 나쁘다.
+   *
+   * ⚠ 그래서 이 어서션들을 **지우지 않고 부호를 뒤집었다.** 재는 대상은 같다
+   *   ("캔 칸이 어떤 상태가 되는가"), 참인 답이 반대가 되었을 뿐이다.
+   *   뒤집힌 대가는 감추지 않고 원장이 숫자로 든다 — `18.opened` 순열림 40.00.
+   *
+   * 그리고 **재생이 그 대가의 완화 장치**다: 열린 칸은 영구가 아니다(④).
+   */
   const after = await page.evaluate((taken) => {
     const g = window.__wgd!;
     const c = taken[0]!;
     return {
       canPlace: g.sim.canPlaceAt(c.x, c.z),
       hasScenery: g.sim.hasScenery(c.x, c.z),
-      clearCost: g.clearSceneryCost(c.x, c.z),
       cell: c,
     };
   }, cycle.taken);
-  expect(after.canPlace, `D1 위반 — 텄는데 건설 가능해졌다 (${JSON.stringify(after.cell)})`).toBe(false);
-  expect(after.hasScenery, '텄는데 소품이 사라졌다 — 그루터기로 남아야 한다').toBe(true);
-  expect(after.clearCost, '텄더니 유료 제거 비용이 사라졌다').not.toBeNull();
+  expect(after.canPlace, `캔 자리인데 아직 못 짓는다 (${JSON.stringify(after.cell)})`).toBe(true);
+  expect(after.hasScenery, '캔 자리인데 소품이 그대로 있다 — 사라져야 한다').toBe(false);
+
+  /*
+   * ── ④ **다시 자란다. 단 타워를 지으면 영영 안 자란다** ──────────────────────
+   * 이 두 줄이 이 기능이 만드는 **진짜 선택**이다: 지금 지을까(칸을 영구히 얻고 그 자원을
+   * 태운다), 두고 계속 캘까(수입은 이어지지만 그 칸이 주기마다 다시 막힌다).
+   * ⚠ 재생을 안 재면 "캔 자리가 빈다"만 남아 **자원이 유한하다는 성질만 확인**하게 된다.
+   */
+  const regrow = await page.evaluate((taken) => {
+    const g = window.__wgd!;
+    const wait = g.sim.state.resources.filter((r) => r.taken && r.regrowAt > 0);
+    if (wait.length === 0) return { ok: false as const };
+    const target = wait[0]!;
+    // 다른 칸 하나에는 타워를 세워 재생권을 태운다 (R3)
+    const burn = wait.length > 1 ? wait[1]! : null;
+    let burnBuilt = false;
+    if (burn) {
+      g.setGold(99_999);
+      burnBuilt = g.place(0, burn.cellX, burn.cellZ);
+    }
+    const need = target.regrowAt - g.sim.state.tick;
+    g.ff(Math.max(1, need + 60));
+    const t2 = g.sim.state.resources.find((r) => r.cellX === target.cellX && r.cellZ === target.cellZ)!;
+    const b2 = burn
+      ? g.sim.state.resources.find((r) => r.cellX === burn.cellX && r.cellZ === burn.cellZ)!
+      : null;
+    return {
+      ok: true as const,
+      grewBack: !t2.taken,
+      canPlaceAfterRegrow: g.sim.canPlaceAt(target.cellX, target.cellZ),
+      burnBuilt,
+      burnedStillTaken: b2 ? b2.taken : null,
+      burnedRegrowAt: b2 ? b2.regrowAt : null,
+    };
+  }, cycle.taken);
+  expect(regrow.ok, '재생을 기다리는 칸이 하나도 없다 (표본이 성립하지 않는다)').toBe(true);
+  if (regrow.ok) {
+    expect(regrow.grewBack, '주기가 지났는데 다시 안 자랐다').toBe(true);
+    expect(regrow.canPlaceAfterRegrow, '다시 자랐는데 아직 지을 수 있다 — 막혀야 한다').toBe(false);
+    if (regrow.burnBuilt) {
+      expect(regrow.burnedStillTaken, '타워를 지은 칸이 다시 자랐다 (R3 위반)').toBe(true);
+      expect(regrow.burnedRegrowAt, '타워를 지은 칸의 재생권이 안 탔다 (R3 위반)').toBe(0);
+    }
+  }
 
   expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
 });
