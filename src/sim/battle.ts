@@ -54,7 +54,14 @@ import { recomputeBuffs, updateProjectiles, updateTowers } from './attack';
 import { addGold, leakEnemy } from './combat';
 import { Economy, sceneryClearCostFor, sellRefundFor } from './economy';
 import { pathFor, World, type EnemySim, type SimCtx } from './entities';
-import { ResourceField, cancelGatherersOf, updateGather } from './gather';
+import {
+  ResourceField,
+  burnRegrow,
+  cancelGatherersOf,
+  takeCell,
+  updateGather,
+  updateRegrow,
+} from './gather';
 import {
   baseNextStats,
   allyCapFor,
@@ -106,8 +113,10 @@ class Battle implements BattleSim {
   /** 경로가 지나는 셀 — 건설 불가 (render와 동일 래스터라이즈) */
   private readonly pathCells: ReadonlySet<number>;
   /**
-   * 나무/바위 등 소품 셀 — 건설 불가 (render와 동일 시드).
-   * clearScenery로 치우면 여기서 빠져 그 자리에 타워를 지을 수 있게 된다.
+   * 나무/바위 등 소품 셀 — **"유료로 치우지 않았다"** 하나만 뜻한다 (render와 동일 시드).
+   * `clearScenery`로 치우면 여기서 빠진다.
+   * ⚠ **이 집합 혼자로는 건설 가능을 못 정한다** — 다 캔 칸도 열려야 하기 때문이다(D1 뒤집힘).
+   *   판정은 언제나 `grown()` 하나를 거친다.
    */
   private readonly scenery: Set<number>;
   /** 치운 소품 셀 키 — 제거 순서대로. length가 곧 다음 제거 비용의 지수 */
@@ -119,8 +128,14 @@ class Battle implements BattleSim {
     //   ctx와 view가 **같은 배열**을 들어야 하기 때문이다(둘이 갈리면 UI가 다른 판을 그린다).
     const pathCells = rasterizePathCells(stage);
     const scenery = sceneryCells(stage, pathCells);
-    // 자원 밭 — 소품 칸의 **뜻**만 얹는다. `scenery` Set 자체는 한 글자도 안 바뀐다(D1).
-    const resources = new ResourceField(stage, scenery, { baseValue: tuning?.gatherBaseValue });
+    // 자원 밭 — 소품 칸의 **뜻**만 얹는다. `scenery` Set 자체는 한 글자도 안 바뀐다:
+    // 그 집합의 뜻은 "유료로 치우지 않았다" 하나로 남고, 건설 가능은 아래 `grown()` 이
+    // 그 집합과 `taken` 의 **곱**으로 정한다.
+    const resources = new ResourceField(stage, scenery, {
+      baseValue: tuning?.gatherBaseValue,
+      regrowMax: tuning?.gatherRegrowMax,
+      regrowTicks: tuning?.gatherRegrowTicks,
+    });
     const groundPaths = stage.paths.map((w) => buildPath(w));
     const airPaths =
       stage.airPaths && stage.airPaths.length > 0
@@ -156,7 +171,8 @@ class Battle implements BattleSim {
       allyCap: ALLY_MAX_ACTIVE,
       amberEarned: 0,
       endless: opts.endless,
-      // ctx.resources.list와 **같은 배열 객체**다 — 목록은 안 변하고 taken만 변한다
+      // ctx.resources.list와 **같은 배열 객체**다 — 목록은 안 변하고
+      // 상태 셋(taken·regrowAt·regrowsLeft)만 변한다
       resources: resources.list,
     };
     this.ctx = {
@@ -223,6 +239,12 @@ class Battle implements BattleSim {
     updateHometown(ctx);
     // 8) 투사체 이동/명중 (타워 투사체와 홈타운 화살이 같은 단계를 탄다)
     updateProjectiles(ctx);
+    // 8-a) 재생 — 다 캔 칸이 T틱 뒤 같은 종·같은 값으로 돌아온다 (R2).
+    //   **8-b 앞**인 이유 셋은 `updateRegrow` 헤더에 있다(요약: 이 틱에 자란 칸을 같은 틱의
+    //   8-c가 잡는다 · 자라는 칸에는 예약이 없다 · 커맨드는 tick() 밖이라 경합이 없다).
+    //   ⚠ 방치 판에서도 매 틱 돈다 — 다만 40칸 전부 조기 반환이라 **상태 변화 0 · 이벤트 0 ·
+    //     rng 0**이고, 그래서 economy.fillHand 의 드로우가 한 칸도 안 밀린다.
+    updateRegrow(ctx);
     // 8-b) 채집 — 캐기 진행 · 짐 확정 · 자동 귀환 · **배달** (docs/gather-spec.md §4-7)
     //  한 자리가 네 조건을 동시에 만족한다:
     //   · 4) moveAllies 뒤 → **같은 틱의 도착**과 **같은 틱의 배달 진입**을 읽는다(지연 없음)
@@ -409,6 +431,14 @@ class Battle implements BattleSim {
       buffDmgPct: 0,
       buffRatePct: 0,
     };
+    // R3) **타워가 선 칸은 영영 안 자란다.** 이 기능이 만드는 진짜 선택이 이 두 줄이다:
+    //   "지금 지을까(칸을 영구히 얻고 그 자원을 태운다), 두고 계속 캘까(수입은 계속되지만
+    //    T틱마다 그 칸이 다시 막힌다)". 팔아도 안 돌아온다(burnRegrow 주석의 근거 셋).
+    // ⚠ 매 틱 "이 칸에 타워가 있나"를 묻지 **않는다** — 40칸 × 타워수 조회가 매 틱 돌고,
+    //   그 조회는 towers 풀의 swap-remove 순서를 타는 순간 계약 B를 깬다. 배치 시점에
+    //   한 번 태우는 편이 규칙도 비용도 작고, 누락은 hash()의 regrowsLeft 가 잡는다.
+    const rc = ctx.resources.at(cellZ * ctx.opts.stage.gridW + cellX);
+    if (rc) burnRegrow(rc);
     ctx.world.towers.add(t);
     ctx.events.push({ type: 'towerPlaced', towerId: t.id, defId: t.defId, cellX, cellZ });
     this.economy.onPlaced(ctx, handIndex);
@@ -463,10 +493,14 @@ class Battle implements BattleSim {
     this.scenery.delete(key);
     this.clearedScenery.push(key);
     // 치운 칸의 짐은 **버려진다** — 소품이 사라졌는데 배지가 짐값을 계속 그리거나 그 칸을
-    // 다시 채집 대상으로 찍을 수 있으면 안 된다. **여기서 짐을 버리는 것이 D1이 만든
-    // `clearScenery`의 기회비용이다**(다 캐도 칸은 안 열리므로, 치우는 쪽이 값을 낸다).
+    // 다시 채집 대상으로 찍을 수 있으면 안 된다. 그것이 이 상품의 기회비용이다.
+    // ⚠⚠ **`burn = true` 다 (R-f).** `r.taken = true` 를 직접 쓰면 **돈 내고 치운 칸이
+    //   T틱 뒤 다시 자라 건설 불가로 돌아간다** — 그러면 `dozer` 팔이 오늘과 다른 판을 밟아
+    //   6.clears·6.rateCap·6.dozer.notDominant·6.discord 가 전부 흔들리고, "채집 정책이 없는
+    //   팔은 비트 동일"이라는 이 라운드 전체의 안전 논거가 한 줄 때문에 무너진다.
+    //   그 실패는 조용하다: 타입 오류 0건이고, 짧은 판에서는 T가 안 지나 아무 일도 안 난다.
     const r = this.ctx.resources.at(key);
-    if (r) r.taken = true;
+    if (r) takeCell(this.ctx, r, true);
     cancelGatherersOf(this.ctx, key);
     ctx.events.push({
       type: 'sceneryCleared',
@@ -587,9 +621,21 @@ class Battle implements BattleSim {
     // **텐 순서는 안 접는다.** clearedScenery가 순서까지 접는 이유는 그 순서가 다음
     //   제거값의 지수이기 때문인데, 채집에는 순서에 의존하는 값이 하나도 없다.
     //   같은 집합을 다른 순서로 텄다면 아군의 위치·gatherTicks가 이미 갈려 있다.
+    // ⚠ **셋을 접는다.** 재생이 들어오면서 상태가 하나에서 셋으로 늘었다:
+    //  · taken       — 뜻이 하나 늘었다. 이제 이 비트가 **건설 가능 여부**이기도 하다(D1 뒤집힘).
+    //                  갈리면 canPlaceAt 이 갈린 것이고, 그건 판이 통째로 갈린다.
+    //  · regrowAt    — **taken 에서 유도되지 않는다.** 같은 틱에 똑같이 "텄음"인 두 칸도
+    //                  자라는 틱이 다르면 **일꾼이 다음에 어디로 가는가**(pickAutoCell)와
+    //                  **그 칸에 지을 수 있는 마지막 틱**이 다르다. 1틱만 어긋나도 타워 한 기의
+    //                  자리가 갈리고, 그 발산은 몇 백 틱 뒤 gold 로만 보인다.
+    //  · regrowsLeft — **판당 총액의 상한 그 자체다.** 0 은 광물·유료 제거·타워 소각이 만드는
+    //                  되돌릴 수 없는 사실이고, R3 소각을 한 번 빠뜨리면 이 값이 안 접힐 때
+    //                  판이 끝날 때까지 아무 데서도 안 드러난다.
     for (const r of ctx.resources.list) {
       h = mix(h, r.cellX * 1000 + r.cellZ);
       h = mix(h, r.taken ? 1 : 0);
+      h = mix(h, r.regrowAt);
+      h = mix(h, r.regrowsLeft);
     }
     return h;
   }
@@ -664,13 +710,31 @@ class Battle implements BattleSim {
     return { wave: w, entries, totalHp, totalCount, goldReward: def.goldReward, hasAir, boss };
   }
 
+  /**
+   * 그 칸에 **지금 소품이 서 있는가.** 건설 가능/불가의 **유일한** 지형 판정이다.
+   *
+   * ⚠ D1이 뒤집혔다(사용자 재정의): 다 캔 칸은 소품이 사라지고 **건설 가능해진다.**
+   *   그렇지 않으면 화면에 아무것도 없는데 못 짓는 칸이 되고, 그건 설명할 방법이 없다.
+   * ⚠ `scenery` Set 과 `taken` 이 **각자** "지을 수 있나"를 말하게 두면 두 답이 갈리는
+   *   날이 온다. 판정을 하나 만들고 `canPlaceAt`·`hasScenery` 둘 다 이것을 부른다.
+   *
+   * 두 사실의 **곱**이다:
+   *   ① 유료로 치우지 않았다 (`scenery` — 그 집합의 뜻은 한 글자도 안 바뀐다)
+   *   ② 지금 다 자라 있다   (`resources` 의 `taken` — 재생하면 다시 `false` 가 된다)
+   */
+  private grown(key: number): boolean {
+    if (!this.scenery.has(key)) return false;
+    const r = this.ctx.resources.at(key);
+    return r !== null && !r.taken;
+  }
+
   canPlaceAt(cellX: number, cellZ: number): boolean {
     const stage = this.ctx.opts.stage;
     if (!Number.isInteger(cellX) || !Number.isInteger(cellZ)) return false;
     // 자유 배치: 경로/물/장식('#')/소품(나무·바위)이 아닌 빈 땅 어디든.
-    // 치운 소품 셀은 scenery에서 빠졌으므로 여기서 통과한다
+    // 치운 소품 셀도 **다 캔 소품 셀도** 여기서 통과한다 — 둘 다 화면에서 비어 있다.
     if (!isBuildableCell(stage, this.pathCells, cellX, cellZ)) return false;
-    if (this.scenery.has(cellZ * stage.gridW + cellX)) return false;
+    if (this.grown(cellZ * stage.gridW + cellX)) return false;
     return this.towerAt(cellX, cellZ) === null;
   }
 
@@ -678,8 +742,10 @@ class Battle implements BattleSim {
    * 자원 칸 조회 — 소품이 없거나 격자 밖이면 null. HUD 자원 패널과 e2e 훅이 쓴다.
    * `hasScenery`와 **같은 정수/범위 가드**를 쓴다 — 두 답이 갈리면 "소품은 있는데 자원은
    * 없다"는 칸이 생기고, 화면이 그 차이를 설명할 방법이 없다.
-   * ⚠ **`taken`을 걸러 내지 않는다.** 텄음 칸도 그루터기로 서 있고(D1) 배지가 회색으로
-   *   그것을 그려야 한다. "캘 수 있는가"는 호출부가 `taken`으로 판단한다.
+   * ⚠ **`taken`을 걸러 내지 않는다.** 텄음 칸도 목록에 남아 있고(칸은 사라지지 않는다 —
+   *   `regrowAt` 이 붙은 채 자라기를 기다린다), 호출부가 `taken`으로 "지금 캘 수 있는가"와
+   *   "지금 비어 있는가"를 함께 읽는다. ⚠ 옛 주석의 "텄음 칸도 그루터기로 서 있고(D1)"는
+   *   **거짓이 됐다** — 사용자가 그 판정을 뒤집었다.
    */
   resourceAt(cellX: number, cellZ: number): ResourceCellState | null {
     const stage = this.ctx.opts.stage;
@@ -688,11 +754,18 @@ class Battle implements BattleSim {
     return this.ctx.resources.at(cellZ * stage.gridW + cellX);
   }
 
+  /**
+   * 그 칸에 **지금 소품이 서 있는가** — 이름과 뜻이 다시 일치한다.
+   * ⚠ 텄음 칸에서 `false` 를 준다 ⇒ `clearSceneryCost` 가 자동으로 `null` 이 되고
+   *   `cmdClearScenery` 가 그 자리에서 거부한다(R-e). **이미 비어 있고 이미 지을 수 있는
+   *   칸에 380골드를 받는 것은 사기다.** 부수 효과가 이 기능의 핵심이다: 재생을 끄는
+   *   유일한 길이 "그 자리에 타워를 짓는 것"으로 좁아진다(R3).
+   */
   hasScenery(cellX: number, cellZ: number): boolean {
     const stage = this.ctx.opts.stage;
     if (!Number.isInteger(cellX) || !Number.isInteger(cellZ)) return false;
     if (cellX < 0 || cellX >= stage.gridW || cellZ < 0 || cellZ >= stage.gridH) return false;
-    return this.scenery.has(cellZ * stage.gridW + cellX);
+    return this.grown(cellZ * stage.gridW + cellX);
   }
 
   clearSceneryCost(cellX: number, cellZ: number): number | null {
@@ -769,6 +842,18 @@ class Battle implements BattleSim {
 export interface BattleTuning {
   /** 짐값의 기준 크기 (생략 = `GATHER_BASE_VALUE`) */
   gatherBaseValue?: number;
+  /**
+   * 칸당 **재생 횟수 상한** (생략 = `GATHER_REGROW_MAX`).
+   * ⚠ **판당 총액을 닫는 값이 이것이다** — 총액 = Σ value × (1 + regrowsLeft).
+   * 대조군 둘이 이 인자 하나로 성립한다: `gather-regrow-off`(0 = 재생 없는 세계 복원,
+   * 음성 대조)와 `gather-regrow-x3`(3 = 총액 폭주, 계약 다리 전부를 겨냥).
+   */
+  gatherRegrowMax?: number;
+  /**
+   * 재생 주기 틱 (생략 = `GATHER_REGROW_TICKS`).
+   * 총액이 아니라 **모양**만 바꾼다 — 단위 테스트가 T를 짧게 잡아 재생을 강제하는 데 쓴다.
+   */
+  gatherRegrowTicks?: number;
 }
 
 export function createBattle(options: BattleOptions, tuning?: BattleTuning): BattleSim {

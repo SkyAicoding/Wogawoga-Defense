@@ -487,7 +487,16 @@ export class BattleController {
         ev.type === 'towerDestroyed'
       ) {
         this.placement.refreshSelection();
-      } else if (ev.type === 'sceneryCleared') {
+      } else if (ev.type === 'sceneryCleared' || ev.type === 'gathered') {
+        /*
+         * 소품이 사라지면 그 칸의 **제거 패널**(380골드 안내)이 거짓이 된다.
+         * ⚠ `gathered` 가 여기 온 것이 이번 개정이다 — R1로 다 캔 칸이 사라지고
+         *   건설 가능해지면서 `hasScenery` 가 그 자리에서 false 가 된다(clearSceneryCost
+         *   도 함께 null 이 된다, E-R4). 이 줄이 없으면 방금 캔 칸에 "치우기 380골드"
+         *   패널이 그대로 떠 있고, 누르면 아무 일도 안 일어난다.
+         * 재생(gatherRegrown)은 반대 방향이라 여기 필요 없다 — 소품이 **없던** 칸이
+         *   생기는 것이고, 그 칸은 애초에 선택돼 있을 수 없다.
+         */
         this.placement.refreshScenerySelection();
       }
     }

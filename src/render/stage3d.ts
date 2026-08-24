@@ -54,6 +54,19 @@ export interface Stage3D {
    */
   clearScenery(cellX: number, cellZ: number): boolean;
   /**
+   * **채집으로 텄다 / 다시 자랐다** 를 화면에 옮긴다 (gather-spec R1·R2).
+   *
+   * clearScenery(골드 제거)와 갈리는 점 셋:
+   *  · 되돌릴 수 있다 — 소품을 dispose 하지 않고 정점만 접는다(props.setCellTaken)
+   *  · 재병합이 없다 — 판당 100회를 넘는 사건이라 재병합은 프레임에서 읽힌다
+   *  · 바닥 결을 안 얹는다 — 다시 자랄 자리에 풀을 심으면 재생 때 그 풀을 걷어야 하고,
+   *    그 걷어내기가 다시 재병합이다. 갓 캔 칸이 맨땅으로 보이는 것은 사실이기도 하다.
+   * 배치 하이라이트는 **켜고 끈다** — R1로 텄음 칸은 건설 가능해졌으므로.
+   *
+   * @returns 그 셀이 소품 칸이면 true (이미 골드로 치운 칸이면 false)
+   */
+  setSceneryTaken(cellX: number, cellZ: number, taken: boolean, instant?: boolean): boolean;
+  /**
    * 그 셀 소품의 셀 중심 대비 산포 오프셋 (소품이 없으면 null).
    * 선택 링을 실제 밑동에 맞추는 데 쓴다.
    */
@@ -157,8 +170,13 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
   const healthbars = new HealthBarView(scene);
   const decals = new Decals(scene, terrain.cellToWorld);
   const towerStatus = new TowerMarksView();
-  // 자유 배치: 배치 모드 하이라이트는 건설 가능한 셀(소품 제외) — 바닥 결과 같은 목록
-  decals.init(bareCells, stage.paths);
+  /*
+   * 자유 배치: 배치 모드 하이라이트는 건설 가능한 셀(소품 제외) — 바닥 결과 같은 목록.
+   * ⚠ **소품 칸도 같이 굽되 꺼진 채로 넣는다**(세 번째 인자). 채집이 칸을 여는 순간
+   *   (gather-spec R1) 그 칸은 건설 가능해지므로 하이라이트에 들어와야 하고, 재생하면
+   *   다시 나가야 한다. 미리 구워 두지 않으면 그 여닫이가 판당 104회의 재병합이 된다.
+   */
+  decals.init(bareCells, stage.paths, sceneryList);
   const particles = new ParticleSystem(scene, q.particleMax);
   if (q.ambientParticles) particles.setEnvironment(stage.biome, terrain.aabb);
 
@@ -185,13 +203,22 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
       // 치운 자리도 이제 맨 셀이다 — 결을 얹지 않으면 그 칸만 대머리로 남아
       // "치운 자리"가 아니라 렌더 버그로 보인다
       groundDetail.addCell(cellX, cellZ);
-      decals.addSlotCell(cellX, cellZ);
+      decals.setSlotCell(cellX, cellZ, true);
       towerStatus.clearCell(cellX, cellZ);
+      return true;
+    },
+    setSceneryTaken(cellX: number, cellZ: number, taken: boolean, instant = false): boolean {
+      if (!props.setCellTaken(cellX, cellZ, taken, instant)) return false;
+      // 텄으면 지을 수 있다 · 자랐으면 다시 못 짓는다 — 하이라이트가 sim 의 판정과
+      // 같은 방향으로만 움직인다. 이 한 줄이 빠지면 "빛나는데 못 짓는 칸"이 생긴다.
+      decals.setSlotCell(cellX, cellZ, taken);
       return true;
     },
     sceneryOffset: (cellX: number, cellZ: number) => props.offsetOf(cellX, cellZ),
     update(dt: number): void {
       time += dt;
+      // 소품 등장/퇴장 — 도는 셀이 없으면 첫 줄에서 즉시 반환한다(대부분의 프레임)
+      props.tick(dt);
       towers.update(dt);
       towerStatus.tick(dt);
       healthbars.tick(dt);

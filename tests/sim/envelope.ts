@@ -279,8 +279,14 @@ export interface DataPatch {
    *
    * 함수가 아니라 값인 이유: 배포본 값이 상수 하나라 "곱하기"가 아니라 "이 값으로 놓기"가
    * 읽기 쉽고, 대조군의 신원(`id`)이 곧 그 숫자를 설명한다.
+   *
+   * ⚠ **재생 축도 같은 이유로 여기 있다**(`regrowMax`). 판당 총액을 닫는 것은 재생 주기 T가
+   *   아니라 **칸당 재생 횟수 상한**이므로(총액 = Σ v × (1 + regrowsLeft)), 그 축을 A/B 하지
+   *   못하면 `gather-regrow-off`(재생 없는 세계 복원 = 음성 대조)도
+   *   `gather-regrow-x3`(총액 폭주 = 계약 다리를 실제로 깨는 팔)도 만들 수 없다.
+   *   둘 다 없으면 재생이 만든 새 다리가 전부 UNPROVEN 으로 태어난다.
    */
-  readonly gather?: { readonly baseValue: number };
+  readonly gather?: { readonly baseValue?: number; readonly regrowMax?: number };
 }
 
 /** 배포본 그대로 */
@@ -363,7 +369,9 @@ export function makeSim(
     towers,
     // 짐값 기준 — 패치가 없으면 undefined 를 넘겨 **배포본 상수 하나**가 그대로 읽힌다
     // (D9: 되돌리는 손잡이는 GATHER_BASE_VALUE 하나여야 한다)
-    p.gather ? { gatherBaseValue: p.gather.baseValue } : undefined,
+    p.gather
+      ? { gatherBaseValue: p.gather.baseValue, gatherRegrowMax: p.gather.regrowMax }
+      : undefined,
   );
   return { sim, stage };
 }

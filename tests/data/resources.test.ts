@@ -28,13 +28,16 @@ import {
   GATHER_BASE_VALUE,
   GATHER_DIST_GAIN,
   GATHER_DELIVER_RANGE,
+  GATHER_REGROW_MAX,
   gatherValueFor,
 } from '@/data/balance';
 import {
+  REGROWABLE_KINDS,
   RESOURCE_DEFS,
   RESOURCE_WEIGHTS,
   gatherTicksFor,
   isGathering,
+  isWorkerDef,
   resourceKindOf,
 } from '@/data/resources';
 
@@ -43,7 +46,18 @@ import {
  * 정정대로 실측으로 유도했다 — balance.ts 의 상수 주석에 유도 전문이 있다), 이 파일의
  * 총액 표 전부가 여기에 걸려 있다. 아래 첫 어서션이 이 값과 배포본 상수를 묶는다.
  */
-const B = 6;
+const B = 3;
+
+/**
+ * 칸당 재생 횟수 상한 — **판당 총액을 닫는 값이다.** `B`와 같은 이유로 여기 한 번 더 적고
+ * 아래에서 배포본 상수와 어긋나지 않음을 어서션으로 묶는다.
+ */
+const R = 1;
+
+/** 한 칸이 판 전체에서 낼 수 있는 수확 횟수 — 광물은 1, 재생종은 1 + R (R4) */
+function harvestsOf(kind: ResourceId): number {
+  return 1 + (REGROWABLE_KINDS.has(kind) ? R : 0);
+}
 
 const ALL_RESOURCE_IDS: readonly ResourceId[] = [
   'berry',
@@ -250,10 +264,11 @@ describe('분포 충실도 (§9-1 ⑥ — ±20%p · 모든 종 1개 이상)', ()
 });
 
 describe('총액 (§9-1 ⑦) — 이 한 줄이 D9의 감사 가능성 전부다', () => {
-  it('6스테이지 총액을 인쇄하고 **스테이지1 === 745**를 잠근다', () => {
+  it('6스테이지 총액을 인쇄하고 **스테이지1 짐값합 281 / 판당 총액 494**를 잠근다', () => {
     const totals: number[] = [];
-    // ⚠ 이 한 줄이 "여기서 잠근 총액"과 "게임이 실제로 내는 총액"을 갈라지지 못하게 한다.
+    // ⚠ 이 두 줄이 "여기서 잠근 총액"과 "게임이 실제로 내는 총액"을 갈라지지 못하게 한다.
     expect(GATHER_BASE_VALUE, 'balance.GATHER_BASE_VALUE 와 이 파일의 B 가 어긋났다 — 총액 표가 거짓이 된다').toBe(B);
+    expect(GATHER_REGROW_MAX, 'balance.GATHER_REGROW_MAX 와 이 파일의 R 이 어긋났다 — 판당 총액 표가 거짓이 된다').toBe(R);
     console.log(`[resources] 스테이지별 채집 총액 (GATHER_BASE_VALUE = ${B} 기준)`);
     for (const stage of STAGES) {
       const field = fieldOf(stage, B);
@@ -270,37 +285,48 @@ describe('총액 (§9-1 ⑦) — 이 한 줄이 D9의 감사 가능성 전부다
       );
     }
 
-    // 스테이지1 = 559골드 (B = 6). 부록 A의 검산 상수와 함께 잠근다.
+    // 스테이지1 짐값합 = 281골드 (B = 3). 부록 A의 검산 상수와 함께 잠근다.
     const s1 = fieldOf(STAGES[0] as StageDef, B);
     expect((STAGES[0] as StageDef).id).toBe(1);
     expect(s1.length).toBe(40);
     expect(s1.reduce((n, c) => n + c.dist, 0)).toBeCloseTo(306.4476, 4);
-    expect(totals[0]).toBe(559);
+    expect(totals[0]).toBe(281);
     // 종류 배정도 사실이다 — wood 15 · berry 11 · stone 8 · fruit 4 · honey 2
     const s1kinds: Record<string, number> = {};
     for (const c of s1) s1kinds[c.kind] = (s1kinds[c.kind] ?? 0) + 1;
     expect(s1kinds).toEqual({ wood: 15, berry: 11, stone: 8, fruit: 4, honey: 2 });
     const s1vals = s1.map((c) => c.value).sort((a, b) => a - b);
-    expect([s1vals[0], median(s1vals), s1vals[s1vals.length - 1]]).toEqual([5, 14, 25]);
+    expect([s1vals[0], median(s1vals), s1vals[s1vals.length - 1]]).toEqual([3, 7, 13]);
 
     /*
-     * ⚠⚠ **아래 벽(§1-5-B)의 전제가 자동 채집으로 바뀌었다 — 다시 유도한다.**
+     * ⚠⚠ **아래 벽(§1-5-B, 짐값 평균 > 조기 호출 13.66)은 이 라운드에 폐기했다.**
      *
      * 옛 유도: 조기 호출 완벽 연타가 13.66골드/탭이고, 채집은 **1탭 = 짐 하나**라
      *   짐값 평균이 13.66 아래면 "이미 있는 버튼보다 못한 잡일"이 되어 아무도 안 누른다.
-     *   그래서 B = 8(18.63/탭)이 6(13.97/탭)보다 안전하다는 것이 T6의 근거 하나였다.
      *
-     * 지금은 **1탭 = 짐 하나가 아니다.** 일꾼은 `trainAlly` 한 번이면 명령 없이 스스로
-     * 캐고 지고 와서 다시 나간다(사용자 항목 2·4). 곧 탭당 값의 분모가 "짐 수"가 아니라
-     * **"뽑은 사람 수"**로 바뀌었다 — 실측으로 채집꾼 하나가 판 전체에서 캐 오는 몫은
-     * 판당 배달 528골드 / 뽑은 인원 9.39명 ≈ **56골드/탭**이고, 조기 호출 13.66의 4.1배다.
-     * 곧 이 벽은 더 이상 B를 아래에서 묶지 않는다.
+     * 그 전제는 **규칙 8(자동 채집)이 이미 없앴다.** 지금은 1탭 = 짐 하나가 아니다 —
+     * 일꾼은 `trainAlly` 한 번이면 명령 없이 스스로 캐고 지고 와서 다시 나가고, 채집은
+     * 탭을 **한 번도** 안 쓴다(조기 호출은 탭 40회를 요구한다). 곧 그 벽은 두 수입원이
+     * 같은 손가락을 놓고 다투던 세계의 값이고, 그 세계는 없어졌다. 그런데 저장소는 그 벽을
+     * 지운 적이 없어서 옛 어서션(`559 / 40 > 13.66`)이 여유 0.31골드로 남아 있었다 —
+     * 그건 계약이 아니라 **지뢰**다(B를 정하는 진짜 근거는 위쪽 `18.*` 여유인데, 아래에서
+     * 아무 근거 없는 벽이 먼저 터진다).
+     * ⇒ 여기서 지운다. `balance.GATHER_BASE_VALUE` 주석이 그 유도를 전부 들고 있고,
+     *   **명세 §1-5-B 정정은 남은 문서 부채**다.
      *
-     * 그래서 아래 어서션은 **남기되 뜻이 달라졌다**: "짐 하나가 조기 호출 한 번보다는
-     * 값이 있다"는 읽기 좋은 하한이고, B를 정하는 것은 이제 위쪽(18.* 계약 여유)뿐이다.
-     * 실측 여유는 얇다(13.97 대 13.66) — 그 사실을 감추지 않고 적어 둔다.
+     * 대신 **실제로 구속하는 둘**을 잠근다:
+     *  ① 판당 총액 = Σ v × (1 + 재생 횟수) = **494** — `18.rateCap` 이 재는 바로 그 수다.
+     *     ⚠ 이 식이 재생 뒤의 총액 항등식이고, **판 길이·일꾼 수·재생 주기 T 와 무관**하다.
+     *  ② 짐값 하한 — 정수 반올림이 짐을 "+1"짜리 연극으로 만들지 않는다.
      */
-    expect(559 / 40).toBeGreaterThan(13.66);
+    const s1Total = s1.reduce((n, c) => n + c.value * harvestsOf(c.kind), 0);
+    const s1Harvests = s1.reduce((n, c) => n + harvestsOf(c.kind), 0);
+    expect(s1Total, '스테이지1 판당 채집 총액 (= 18.rateCap 의 문턱)').toBe(494);
+    expect(s1Harvests, '스테이지1 판당 수확 상한 (= 18.harvests 의 문턱)').toBe(72);
+    // 재생종 32칸 · 광물 8칸 (R4: stone·flint·obsidian 은 안 자란다)
+    expect(s1.filter((c) => REGROWABLE_KINDS.has(c.kind)).length).toBe(32);
+    expect(s1.filter((c) => !REGROWABLE_KINDS.has(c.kind)).length).toBe(8);
+    expect(s1vals[0], '짐 하나가 최소 2골드는 된다 — 정수 반올림의 바닥').toBeGreaterThanOrEqual(2);
   });
 
   it('`resources.stageSpread` — 나머지 다섯이 s1의 **1.5배 이하**다', () => {
@@ -351,10 +377,10 @@ describe('총액 (§9-1 ⑦) — 이 한 줄이 D9의 감사 가능성 전부다
 
 describe('gatherValueFor — round는 정확히 한 번만 닿는다', () => {
   it('마을 셀(거리 0)의 값은 기준값 × 배수의 반올림이다', () => {
-    expect(gatherValueFor(B, 1, 0)).toBe(6);
-    // ⚠ 리터럴이 아니라 **B**를 쓴다 — 여기 8이 박혀 있어서 짐값을 6으로 되돌리자
-    //   이 한 줄만 갈라졌다(round(8×0.73)=6 대 실제 round(6×0.73)=4).
+    // ⚠ 리터럴이 아니라 **B**를 쓴다 — 한때 여기 `toBe(6)` 이 박혀 있어서 B가 6 → 3 으로
+    //   내려가자 이 한 줄만 갈라졌다(같은 병이 8 → 6 때도 났다).
     //   이 테스트가 재려는 것은 값이 아니라 **round 가 정확히 한 번만 닿는다**이다.
+    expect(gatherValueFor(B, 1, 0)).toBe(B);
     expect(gatherValueFor(B, RESOURCE_DEFS.berry.kindMul, 0)).toBe(Math.round(B * 0.73));
   });
 
@@ -365,7 +391,7 @@ describe('gatherValueFor — round는 정확히 한 번만 닿는다', () => {
     expect(gatherValueFor(100, 1, 10)).toBe(280); // 100 × (1 + 0.18 × 10)
   });
 
-  it('명령당 값의 폭이 4.5배를 넘는다 (s1 최소 5 → 최대 25, B = 6)', () => {
+  it('명령당 값의 폭이 4.5배를 넘는다 — **반올림 전** 값으로 잰다', () => {
     /**
      * ⚠ 한때 여기 `toBe(5)`가 박혀 있었다(B = 6에서 5 → 25). **그 5.0은 설계가 아니라
      * 반올림의 우연이었다** — 폭을 만드는 것은 B가 아니라 두 끝 칸의 `kindMul × 거리이득`
@@ -373,18 +399,31 @@ describe('gatherValueFor — round는 정확히 한 번만 닿는다', () => {
      *     stone(1.21) × (1 + 0.18 × 13.93)   4.2439
      *     ─────────────────────────────── = ────── = 4.637
      *     berry(0.73) × (1 + 0.18 × 1.41)    0.9153
-     * 반올림이 그 위에 얹혀 B = 6 이면 25/5 = 5.000, B = 8 이면 34/7 = 4.857로 흔들린다.
-     * 그래서 문턱을 **반올림 전 값(4.637) 아래**인 4.5로 잡는다 — 이건 완화가 아니라
-     * B에 안 흔들리는 자리로 옮긴 것이고, 실제 폭은 값과 함께 인쇄한다.
-     * (자동 채집 도입 뒤 B가 8 → 6으로 되돌아와 두 끝 값도 7/34 → 5/25로 돌아왔다.
-     *  문턱 4.5는 그때도 지금도 한 자리도 안 건드렸다 — 그것이 이 자리를 고른 이유다.)
+     *
+     * ⚠⚠ **이번 라운드에 선언을 다시 유도했다 — 문턱 4.5는 한 자리도 안 건드렸다.**
+     *   옛 어서션은 **반올림된** 두 끝 값의 비를 쟀고, 그 비는 B가 내려갈수록 계단이 굵어져
+     *   설계값 4.637에서 멀어진다: B = 8 → 34/7 = 4.857 · B = 6 → 25/5 = 5.000 ·
+     *   **B = 3 → 13/3 = 4.333**(문턱 아래). 곧 재생 라운드가 B를 3으로 내리자 이 다리가
+     *   **짐값 설계가 아니라 정수 반올림 때문에** 빨개졌다.
+     *   처방은 문턱을 내리는 것이 **아니라**(이 저장소의 규칙) 재는 것을 설계값으로 되돌리는
+     *   것이다 — 이 다리가 지키려던 명제는 처음부터 *"먼 돌과 가까운 딸기의 값 차가 4.5배를
+     *   넘는다"* 였고 그건 `kindMul`·`GATHER_DIST_GAIN`·좌표가 정하지 반올림이 정하지 않는다.
+     *   판별력은 그대로다: `kindMul` 표나 `GATHER_DIST_GAIN` 을 좁히면 여기가 곧장 빨개진다.
+     *   ⚠ 대신 **플레이어가 실제로 보는 폭은 좁아졌다**(5.000 → 4.333배, 3 → 13골드).
+     *     그건 B = 3 이 치른 정직한 대가이고, 아래에서 함께 인쇄해 감추지 않는다.
      */
+    // 반올림을 무력화할 만큼 큰 기준값으로 같은 밭을 다시 만든다 — 식은 그대로다.
+    const RAW_B = 1_000_000;
+    const rawVals = fieldOf(STAGES[0] as StageDef, RAW_B).map((c) => c.value);
+    const rawSpread = Math.max(...rawVals) / Math.min(...rawVals);
+    expect(rawSpread, '반올림 전 값의 폭 — kindMul·거리이득·좌표만의 함수다').toBeGreaterThan(4.5);
     const vals = fieldOf(STAGES[0] as StageDef, B).map((c) => c.value);
     const lo = Math.min(...vals);
     const hi = Math.max(...vals);
-    expect([lo, hi]).toEqual([5, 25]);
-    expect(hi / lo).toBeGreaterThan(4.5);
-    console.log(`[resources] 명령당 값의 폭 = ${(hi / lo).toFixed(3)}배 (${lo} → ${hi}) · 반올림 전 4.637배`);
+    console.log(
+      `[resources] 명령당 값의 폭 = 반올림 전 ${rawSpread.toFixed(3)}배 · ` +
+        `배포본(B = ${B}) 실제 ${(hi / lo).toFixed(3)}배 (${lo} → ${hi})`,
+    );
   });
 });
 

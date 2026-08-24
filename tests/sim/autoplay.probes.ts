@@ -599,6 +599,21 @@ const IDLE_GOLD_CAP = 500;
  *   `state.allies` 가 늘 비어 있고, `updateGather` 의 순회가 0번 돌아 **채집 수입 경로가
  *   존재하지 않는다**(§8-6). 그건 밸런스 주장이 아니라 코드 경로의 부재이고, 여기서
  *   실행으로 확인한다 — 짐값을 200 으로 올려도(맵 위 18,595골드) 두 값은 0이다.
+ *
+ * ⚠⚠ **재생이 들어오면서 그 증명이 한 겹 약해졌다 — 그래서 이 카운터가 더 중요해졌다.**
+ *   `updateRegrow`(8-a) 는 방치 판에서도 **매 틱 실제로 돈다**. 곧 근거가 "코드가 안 돈다"가
+ *   아니라 **"돌지만 아무 일도 안 한다"** 로 바뀌었다. 그 사슬은 이렇다:
+ *     ① `trainAlly` 가 0번 → `state.allies` 가 늘 비어 있다
+ *     ② `gatherKey` 를 0 이상으로 만드는 경로는 둘뿐이고(`moveAlly`·`updateAllyAuto`)
+ *        **둘 다 살아 있는 아군을 순회한다** → 어떤 예약도 안 붙는다
+ *     ③ `taken` 을 true 로 만드는 자리도 둘뿐이다(`updateGather` ②의 짐 확정 ·
+ *        `cmdClearScenery`). 전자는 예약이 있어야 도달하고(②에 의해 불가), 후자는
+ *        커맨드다(①에 의해 안 나간다) → **어떤 칸도 taken 이 안 된다**
+ *     ④ ⇒ `updateRegrow` 첫 줄 `regrowAt === 0` 이 매 틱 전 칸에서 참 →
+ *        **상태 변화 0 · 이벤트 0 · rng 소비 0** (economy.fillHand 의 드로우가 안 밀린다)
+ *   그 ④를 말이 아니라 **실행으로** 확인하는 것이 아래 `startsWith('gather')` 한 줄이다 —
+ *   재생 이벤트 이름이 `gatherRegrown` 인 덕에 이 카운터가 공짜로 그것까지 잡는다.
+ *   ⚠ 이름을 `resourceRegrown` 으로 바꾸면 그 확인이 **조용히 사라진다.**
  */
 function runIdle(
   seed: number,
@@ -1367,19 +1382,30 @@ const GATHER_ALLIN_RATIO = 0.8;
 /**
  * 스테이지1 짐값 총액 — **배포본 값에서만** 뽑는다(패치를 안 태운다).
  * `18.rateCap` 이 재는 것은 "이 판이 총액보다 더 벌지 않았다"이고, 그 총액은 **배포본
- * 계약**이라 대조군(`gather-x4`)이 짐값을 네 배로 올려도 여기는 안 따라가야 한다.
- * 따라가면 그 다리는 자기 자신을 재는 항등식이 되어 **절대 안 빨개진다.**
+ * 계약**이라 대조군(`gather-x4`·`gather-regrow-x3`)이 짐값이나 재생 횟수를 올려도 여기는
+ * 안 따라가야 한다. 따라가면 그 다리는 자기 자신을 재는 항등식이 되어 **절대 안 빨개진다.**
  * 자원 밭은 시드와 무관하므로(§5-1 셀 단독 해시) 시드 하나로 충분하고, 이 숫자 자체는
- * tests/data/resources.test.ts 가 745 로 따로 잠근다.
+ * tests/data/resources.test.ts 가 따로 잠근다.
+ *
+ * ⚠ **재생이 들어오면서 식이 하나 넓어졌다**: `Σ v` 가 아니라 **`Σ v × (1 + 재생 횟수)`** 다.
+ *   그런데 그 수 역시 **좌표만의 함수**다(`resourceKindOf` 는 셀 단독 해시, `REGROWABLE_KINDS`
+ *   는 상수). 곧 총액은 여전히 **계산이 아니라 사실**이고 이 다리는 여전히 항등식이다.
+ * ⚠⚠ 그리고 이 식은 **판 길이·일꾼 수·재생 주기 T 에 의존하지 않는다.** 그것이 이 설계에서
+ *   T가 아니라 재생 횟수 상한을 안전 손잡이로 고른 이유이고, **무한 모드에서도 참인 이유**다.
+ * ⚠ `regrowsLeft` 는 판이 시작되면 줄어든다 — 그래서 **첫 틱 전의 sim** 을 읽는다(지금도 그렇다).
  */
-let s1FieldCache: { total: number; cells: number } | null = null;
-function s1GatherField(): { total: number; cells: number } {
+let s1FieldCache: { total: number; cells: number; harvests: number } | null = null;
+function s1GatherField(): { total: number; cells: number; harvests: number } {
   if (s1FieldCache === null) {
     const { sim } = makeSim({ stageId: 1, seed: BLOCKS[0]!, deck: STAGE1_DECK, patch: BASE });
-    s1FieldCache = {
-      total: sim.state.resources.reduce((n, r) => n + r.value, 0),
-      cells: sim.state.resources.length,
-    };
+    let total = 0;
+    let harvests = 0;
+    for (const r of sim.state.resources) {
+      const n = 1 + r.regrowsLeft; // 광물은 1, 그 외는 1 + GATHER_REGROW_MAX
+      total += r.value * n;
+      harvests += n;
+    }
+    s1FieldCache = { total, cells: sim.state.resources.length, harvests };
   }
   return s1FieldCache;
 }
@@ -1391,7 +1417,10 @@ function s1GatherField(): { total: number; cells: number } {
  *
  * ── ⚠ 왜 "같은 봇 + 채집 대 같은 봇" 이 아닌가 (실측이 형식을 정했다) ────────
  * 처음에는 그 형태로 쟀다. 결과: 짝 지배검정이 **B = 6 에서도 발화**한다.
- * 지금 배포본(자동 채집 · B = 6)의 같은 검정은 ⟦원장 18.strongGather.duel = 여유부호 57:33⟧ 이다.
+ * 지금 배포본의 같은 검정은 감시 다리 `18.strongGather.duel` 이 매 실행 원장에 적는다 —
+ * 여기에 그 숫자를 베끼지 않는다(값이 밸런스를 만질 때마다 움직인다). 인용은 **안 움직이는
+ * 부분**만 건다: 두 팔 다 ⟦원장 18.strongGather.duel = 승 160/160 대 160/160⟧ 으로 완주율이
+ * 천장에 붙어 있고, 그래서 이 검정이 실제로 읽는 것은 승수가 아니라 **여유 부호**뿐이다.
  * 아래 세 줄은 **이 트리에 재현할 창이 없는 이력**이라 손으로 적는다(B 를 갈아 끼운 실측):
  *   자동 전 B = 8 → 62:34 · 자동 전 B = 6 → 58:35 (p 1.10e-2) · dominant
  *   자동 전 B = 4 → 48:37 (p 1.39e-1) · **not dominant**
@@ -1442,8 +1471,8 @@ export function judge18(patch: DataPatch = BASE, prof: Profile = FULL): Judged {
   const per = (rs: readonly BotResult[], g: (r: BotResult) => number): number => mean(rs.map(g));
   const haul = (r: BotResult): number => r.gatherGold + r.gatherLostGold;
   const maxHaul = Math.max(...gatherArms.map(haul));
-  const maxTaken = Math.max(...gatherArms.map((r) => r.takenCells));
-  const { total: s1Total, cells } = s1GatherField();
+  const maxHarvests = Math.max(...gatherArms.map((r) => r.harvests));
+  const { total: s1Total, cells, harvests: s1Harvests } = s1GatherField();
   const idleGold = idle.reduce((n, r) => n + r.gatherGold, 0);
   const idleEvents = idle.reduce((n, r) => n + r.gatherEvents, 0);
   const sd = duel(strongG, strong, nb(prof));
@@ -1451,23 +1480,33 @@ export function judge18(patch: DataPatch = BASE, prof: Profile = FULL): Judged {
   const legs: Leg[] = [
     precondition('18.gatherHappens',
       [...branches.map((b) => b.rs), strongG].every(
-        (rs) => per(rs, (r) => r.gatherDeliveries) > 0 && per(rs, (r) => r.gatherGold) > 0 && per(rs, (r) => r.takenCells) > 0,
+        (rs) =>
+          per(rs, (r) => r.gatherDeliveries) > 0 &&
+          per(rs, (r) => r.gatherGold) > 0 &&
+          per(rs, (r) => r.harvests) > 0 &&
+          per(rs, (r) => r.regrows) > 0,
       ),
-      '채집 팔이 **실제로 캔다** — 배달·수입·텄음 칸이 판당 0이 아니다. ' +
-        '⚠ 이 전제가 없으면 아래 전부가 "아무것도 안 재고 통과"한다(옛 봉투가 sellTower·setTargeting 에서 겪은 함정)',
+      '채집 팔이 **실제로 캔다 — 그리고 실제로 다시 자란다.** 배달·수입·수확·**재생**이 판당 0이 아니다. ' +
+        '⚠ 이 전제가 없으면 아래 전부가 "아무것도 안 재고 통과"한다(옛 봉투가 sellTower·setTargeting 에서 겪은 함정). ' +
+        '⚠⚠ **재생 조각이 특히 그렇다**: 없으면 재생 코드가 통째로 죽어도 [18] 전부가 초록으로 남는다',
       [...branches, { key: 'sg', name: '최강+채집', rs: strongG }]
-        .map((b) => `${b.key} 배달 ${f(per(b.rs, (r) => r.gatherDeliveries), 2)}/판 골드 ${f(per(b.rs, (r) => r.gatherGold), 1)}`)
+        .map((b) => `${b.key} 배달 ${f(per(b.rs, (r) => r.gatherDeliveries), 2)}/판 골드 ${f(per(b.rs, (r) => r.gatherGold), 1)} 재생 ${f(per(b.rs, (r) => r.regrows), 2)}`)
         .join(' · ')),
-    precondition('18.taken', maxTaken <= cells,
-      `한 판이 텄음으로 만든 칸이 스테이지1 자원 칸 수(${cells})를 넘지 않는다 — 같은 칸이 두 번 텄으면 여기서 걸린다`,
-      `최대 ${maxTaken}/${cells} · 판당 ${f(per(gatherArms, (r) => r.takenCells), 2)}`),
+    precondition('18.harvests', maxHarvests <= s1Harvests,
+      `한 판의 **수확 횟수**가 스테이지1 밭의 수확 상한(${s1Harvests} = Σ (1 + 재생 횟수), 칸 ${cells}개)을 넘지 않는다 — ` +
+        '한 칸이 허용된 것보다 더 여러 번 텄으면 여기서 걸린다. ' +
+        '⚠ 옛 `18.taken`(판 끝에 텄음인 칸 수 ≤ 40)은 **폐기했다** — 재생 뒤로는 그 값이 ' +
+        '"지금 비어 있는 칸 수"라 자동으로 참이 되어 실패 불가능한 계약이 된다',
+      `최대 ${maxHarvests}/${s1Harvests} · 판당 ${f(per(gatherArms, (r) => r.harvests), 2)}`),
     precondition('18.idleZero', idleGold === 0 && idleEvents === 0,
       '방치 팔(타워 0 · callWave 말고 커맨드 없음)의 채집 수입이 **정확히 0**이다 — 계약 A(§8-6). ' +
         '아군이 0명이라 updateGather 의 순회가 0번 돈다 = 수입 경로의 부재',
       `${idle.length}판 · 채집골드 ${idleGold} · 채집이벤트 ${idleEvents}`),
     contract('18.rateCap', maxHaul <= s1Total,
       `판당 (배달 + 사망으로 잃은 액수) ≤ 스테이지1 총액 ${s1Total} — 총액 항등식이 안 깨졌다는 직접 증거. ` +
-        '⚠ 여유가 0인 것이 정상이다(이 팔들은 매 판 40칸을 다 턴다). 넘으면 그건 밸런스가 아니라 **엔진 버그**다',
+        '⚠ 재생이 들어오면서 총액 식이 `Σ v` → **`Σ v × (1 + 재생 횟수)`** 로 넓어졌지만, ' +
+        '그 수도 좌표만의 함수라 **항등식은 형태가 넓어질 뿐 죽지 않는다**(s1GatherField 주석). ' +
+        '넘으면 그건 밸런스가 아니라 **엔진 버그**다',
       `최대 ${maxHaul} / ${s1Total} · 판당 배달 ${f(per(gatherArms, (r) => r.gatherGold), 1)} + 손실 ${f(per(gatherArms, (r) => r.gatherLostGold), 1)}`),
   ];
 
@@ -1510,6 +1549,13 @@ export function judge18(patch: DataPatch = BASE, prof: Profile = FULL): Judged {
       '웨이브대별 배달 골드 [w1-10 w11-20 w21-30 w31-40 w41-50] — §8-3 소비 곡선의 실측판. ' +
         '⚠ 봉투는 모양을 못 본다(§1-5-A). 이건 게임 느낌의 자료이지 계약의 자료가 아니다',
       [0, 1, 2, 3, 4].map((i) => f(mean(branches[1]!.rs.map((r) => r.gatherGoldByBand[i] ?? 0)), 1)).join(' ')),
+    monitor('18.opened',
+      '채집이 연 칸 — 판당 수확/재생 횟수와 그 차(= 판이 끝날 때까지 열려 있는 칸 수). ' +
+        'R1이 여는 칸의 이득은 골드가 아니라 **타워 자리**로 오는데 계약이 그 크기를 따로 못 읽는다. ' +
+        '⚠ 감시일 뿐이다 — s1 건설 가능 124칸 중 84칸이 이미 비어 있고 봇은 판당 18.1기만 세운다 ' +
+        '(칸이 아니라 골드가 병목이다). 그 전제가 흔들리면 여기서 먼저 보인다',
+      `수확 ${f(per(gatherArms, (r) => r.harvests), 2)} · 재생 ${f(per(gatherArms, (r) => r.regrows), 2)} · ` +
+        `순열림 ${f(per(gatherArms, (r) => r.harvests - r.regrows), 2)}`),
     monitor('18.cost',
       '채집의 진짜 비용 — 판당 뽑은/죽은 채집꾼, 시체와 함께 사라진 골드, 전투에서 빠져 있던 인원×틱',
       `갈래 뽑음 ${f(per(branches[1]!.rs, (r) => r.alliesTrained), 2)} · 짐진채 사망 ${f(per(branches[1]!.rs, (r) => r.gatherDeaths), 2)} · ` +

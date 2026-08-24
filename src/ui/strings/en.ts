@@ -175,8 +175,10 @@ export const en: Record<string, string> = {
   // ko 와 같이 두 조각으로 가른다 — 아무도 안 캐는데 '0 gathering' 이 뜨면 거짓말이다.
   'battle.ally.gathering': '⛏ {n} gathering',
   'battle.ally.carrying': '{c} carried',
-  // 머리 위 말뚝(healthbars kind 8)과 같은 사실을 숫자로도 말한다
+  // 머리 위 말뚝(healthbars kind 8)과 같은 사실을 숫자로도 말한다. 일꾼만 센다(§D-3)
   'battle.ally.holding': '📍 {n} holding',
+  // 대기 중인 사람이 등에 지고 있는 골드 (§D-2) — 배달돼야 들어온다
+  'battle.ally.heldGold': '📦 {g} coins held',
   // 형제 문자열 battle.ally.sunder('Opens hide')와 같은 자리에 붙으므로 대문자로 시작한다.
   'battle.ally.rulesGather': 'Gathers the nearest resource on its own · point at a tile to take that one first',
 

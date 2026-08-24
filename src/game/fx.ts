@@ -374,6 +374,18 @@ export class FxRouter {
   /** 채집 연출 — 배치당 상한 (GATHER_FX_MAX). 배달은 여기 안 센다 */
   private gathers = 0;
   /**
+   * 재생 **불티** — 배치당 상한 (GATHER_FX_MAX).
+   * **한 틱에 여러 칸이 동시에 자란다**(같은 틱에 캔 칸들은 같은 틱에 돌아온다 — E-R12).
+   * 40칸이 한꺼번에 자라는 틱이 실제로 있고, 불티를 칸마다 뿌리면 그 프레임만 파티클
+   * 풀이 마른다. 상한을 넘으면 **불티만 버리고 소품은 그대로 자란다** — 이 둘을 같은
+   * 카운터에 두지 않는 것이 요점이다(gathered 케이스의 각주와 같은 논거).
+   *
+   * ⚠ **소리는 안 붙인다.** 이 파일의 규약대로다(gatherStarted:「잦은 사건에 소리를 붙이면
+   *   배경음이 된다」). 그리고 뜻이 반대다 — 배달은 보상이라 소리를 받지만, 재생은
+   *   플레이어의 건설 칸을 **도로 닫는** 사건이다. 보상음을 주면 화면이 거짓말을 한다.
+   */
+  private regrows = 0;
+  /**
    * 살아 있는 적의 종 — 데미지 숫자 표기 규약이 armor를 알아야 해서 스폰 때 기억한다.
    * **연출 전용 표다.** 시뮬레이션은 이 표를 모르고, 여기 값이 틀려도 판정은 안 바뀐다.
    * 스폰에서 넣고 사망/누수에서 지우므로 크기는 항상 '지금 살아 있는 마릿수'다.
@@ -424,6 +436,7 @@ export class FxRouter {
     this.raidShots = 0;
     this.bountyChunks = 0;
     this.gathers = 0;
+    this.regrows = 0;
     for (const ev of events) {
       switch (ev.type) {
         case 'waveStarted': {
@@ -842,7 +855,19 @@ export class FxRouter {
           break;
         }
         case 'gathered': {
-          // **짐을 졌다** — 여기서 코인을 띄우지 않는다. 지급은 배달뿐이고(D3),
+          /*
+           * **짐을 졌다 = 그 칸이 텄다.** 두 사실이 같은 이벤트라(types.ts) 소품을
+           * 없애는 자리도 여기다 — 사용자가 두 번 말한 요구가 이 한 줄이다.
+           *
+           * ⚠ **연출 상한(GATHER_FX_MAX) 위에 둔다.** 아래 불티는 배치가 뭉치면 솎여도
+           *   되지만 소품 제거는 **sim 상태를 화면에 옮기는 일**이라 한 건도 빠지면 안 된다.
+           *   빠지면 그 칸은 판이 끝날 때까지 "sim 에는 없는데 화면에는 서 있는" 나무가
+           *   되고, 거기에 타워가 서면 나무를 뚫고 선다. 4배속에서 배치가 뭉치는 것은
+           *   드문 일이 아니므로 이건 이론이 아니라 실제로 나는 버그다.
+           * ⚠ 재병합이 아니다(setSceneryTaken 헤더) — 판당 100회를 넘는 사건이다.
+           */
+          s3.setSceneryTaken(ev.cellX, ev.cellZ, true);
+          // 여기서 코인을 띄우지 않는다. 지급은 배달뿐이고(D3),
           // 여기서 그리면 지고 오다 죽었을 때 화면이 거짓말한 것이 된다.
           // 화면에서 실제로 늘어나는 것은 머리 위 짐 칩(healthbars kind 6)이고,
           // 이 불티는 그 칩이 **언제** 늘었는지를 알리는 짧은 강조다.
@@ -855,6 +880,31 @@ export class FxRouter {
             upBias: 1.0,
             sizeVar: 0.5,
             glow: true,
+          });
+          break;
+        }
+        case 'gatherRegrown': {
+          /*
+           * **다 캔 칸이 돌아왔다**(R2) — 소품이 밑동에서 솟아 0.85초에 걸쳐 제 크기가 된다
+           * (props.PROP_REGROW_SECONDS / 되튐). 사용자가 요구한 "다시 자라는 로직"이
+           * 화면에서 읽히는 자리가 여기다.
+           *
+           * ⚠ 이 칸은 **다시 건설 불가가 된다** — setSceneryTaken 이 배치 하이라이트도
+           *   같이 끈다. 그래서 이 연출은 축하가 아니라 **경고**에 가깝다: 여기 지으려면
+           *   지금 지어야 한다는 것을 0.85초 동안 눈에 보이게 말해 준다(R3).
+           * ⚠ 상한 위에 둔다 — gathered 와 같은 이유로 상태 반영은 한 건도 못 빠진다.
+           */
+          s3.setSceneryTaken(ev.cellX, ev.cellZ, false);
+          if (this.regrows >= GATHER_FX_MAX) break;
+          this.regrows++;
+          // 밑동에서 위로 솟는 연둣빛 티끌 — 채집 먼지(0xc9b48c, 아래로 가라앉음)와
+          // **방향과 색이 둘 다 반대**라 같은 칸에서 두 사건이 헷갈리지 않는다.
+          const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
+          s3.particles.burst(w.x, 0.12, w.z, 0x8fd45a, 7, 1.1, 0.05, 0.7, {
+            gravity: -1.6,
+            drag: 1.9,
+            upBias: 1.0,
+            sizeVar: 0.55,
           });
           break;
         }

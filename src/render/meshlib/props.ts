@@ -3103,13 +3103,76 @@ function bakedOf(biome: BiomeId, layer: string, idx: number, el: Element): Baked
   return { geo, r, rc, h, tri: geo.getAttribute('position').count / 3 };
 }
 
+/**
+ * 셀 하나가 **텄다**를 화면에 옮기는 데 걸리는 시간(초).
+ * 캐기는 빨라야 한다 — sim 에서는 짐이 확정된 그 틱에 칸이 사라지고 **건설까지 가능해진다**
+ * (gather-spec R1). 화면이 오래 붙들면 "아직 서 있는데 벌써 타워가 서는 칸"이 되고,
+ * 그건 D1을 뒤집은 이유(“안 보이는데 못 짓는 칸”)를 방향만 바꿔 되살리는 것이다.
+ * 0.16초를 고른 이유: 같은 칸을 두 번 캐는 사이는 최소 4초(gatherTicksFor 최솟값)라
+ * 4배속에서도 1초는 벌어지므로, 이 연출이 다음 사건과 겹칠 수 없는 여유가 크다.
+ * 그러면서 사람 눈에는 "사라졌다"가 아니라 "캐 갔다"로 읽히는 가장 짧은 축이다.
+ */
+export const PROP_TAKE_SECONDS = 0.16;
+/**
+ * **다시 자라는** 데 걸리는 시간(초). 캐기의 5배로 길게 잡는다.
+ * 사라지는 것은 사건의 *결과*라 빠를수록 정직하지만, 자라는 것은 **그 자체가 사건**이다 —
+ * 눈이 따라갈 시간이 없으면 "다시 자랐다"가 아니라 "소품이 순간이동으로 나타났다"로 읽힌다.
+ */
+export const PROP_REGROW_SECONDS = 0.85;
+/**
+ * 자라날 때 되튐(back-out) 세기. 1.2 면 최대 배율이 약 1.07 까지 올랐다 1.0 으로 내려온다 —
+ * "툭 솟는" 느낌을 만드는 값이고, 이것이 있어야 **작게 시작해 커지는 것**이 0.85초 안에서
+ * 읽힌다. 오버슈트가 없으면 같은 시간이 그냥 페이드처럼 보인다.
+ */
+const REGROW_BACK = 1.2;
+
+/** 되튐 감속 — t∈[0,1] → 1 을 살짝 넘겼다 돌아온다 */
+function easeBackOut(t: number): number {
+  const u = t - 1;
+  return u * u * ((REGROW_BACK + 1) * u + REGROW_BACK) + 1;
+}
+
 export interface PropsBuild {
   group: THREE.Group;
   /**
-   * 그 셀의 소품(3층 전부)을 없애고 남은 셀만 다시 병합한다 (드로우콜은 그대로 1).
-   * 제거된 게 있으면 true. 골드 제거는 드문 이벤트라 재병합 비용을 감수한다.
+   * 그 셀의 소품(3층 전부)을 **영구히** 없애고 남은 셀만 다시 병합한다 (드로우콜은 그대로 1).
+   * 제거된 게 있으면 true.
+   *
+   * ⚠ **이 함수는 골드 제거(cmdClearScenery) 전용이다.** 채집/재생에는 쓰지 마라 —
+   *   재병합은 셀 하나당 1~2.4ms(실측, 데스크톱 s1 9.5k 삼각형)이고 남은 지오메트리를
+   *   통째로 새로 할당한다. 골드 제거는 판당 0.09회라 그 값을 감수할 수 있지만,
+   *   채집+재생은 판당 100회를 넘어 13초에 한 번씩 프레임이 튄다.
+   *   그리고 이 함수는 **dispose 한다** — 되살릴 방법이 없으므로 재생과는 애초에 맞지 않는다.
+   *   되돌릴 수 있는 사라짐은 setCellTaken 이 맡는다.
    */
   removeCell(cellX: number, cellZ: number): boolean;
+  /**
+   * **채집으로 텄다 / 다시 자랐다** — 재병합도 dispose 도 없다.
+   *
+   * 전 셀을 언제나 병합해 둔 채 **셀별 정점 구간의 성장률**(정점 속성 `aGrow`)만 쓴다.
+   * 0 이면 그 셀의 정점이 전부 밑동 한 점으로 접혀 삼각형이 퇴화한다 = 화면에서 사라진다.
+   * 비용은 O(그 셀의 정점 수)이고 버퍼도 그 구간만 올린다(addUpdateRange).
+   * 실측(데스크톱 Node · s1 40셀 9,565삼각형): **removeCell 2.39ms → 이쪽 0.0004ms**,
+   * 1,100배. 판당 104회로 환산하면 47ms 대 0.04ms 다. **재병합 0회 · 새 할당 0바이트.**
+   *
+   * @param instant 연출 없이 즉시 반영 (판 복원·스킵용). 생략하면 taken 0.16초 / 재생 0.85초
+   * @returns 그 셀이 이 빌드에 있으면 true (이미 골드로 치운 칸이면 false)
+   */
+  setCellTaken(cellX: number, cellZ: number, taken: boolean, instant?: boolean): boolean;
+  /**
+   * 그 셀의 **논리 성장률** — 1 = 서 있다 · 0 = 텄다(또는 이 빌드에 없다).
+   * 연출 중간값이 아니라 sim 의 `taken` 을 비춘 값이다. 테스트·계약이 읽는다.
+   */
+  cellGrow(cellX: number, cellZ: number): number;
+  /** 지금 등장/퇴장 연출이 도는 셀 수 — 프레임 예산 테스트가 읽는다 */
+  animCount(): number;
+  /**
+   * 등장/퇴장 연출 진행 (stage3d.update 가 매 프레임 부른다).
+   * ⚠ dt 는 **판 시간**이다(battlecontroller 가 `ticks × TICK_DT` 를 넘긴다). 곧 아래 두
+   *   상수도 실시간 초가 아니라 판 초다 — 4배속이면 실시간으로는 4배 빨리 끝나고,
+   *   일시정지하면 멈춘다. 그래야 연출이 sim 사건과 같은 속도로 흐른다.
+   */
+  tick(dt: number): void;
   /**
    * 그 셀 1층 소품의 셀 중심 대비 산포 오프셋 (없으면 null).
    * 선택 링이 밑동을 정확히 감싸도록 데칼이 이 값을 쓴다.
@@ -3147,6 +3210,18 @@ export function buildProps(
   const parts = new Map<string, THREE.BufferGeometry>();
   /** 셀 좌표 → 1층 산포 오프셋 (선택 링이 밑동을 감싸도록 밖에 알려 준다) */
   const offsets = new Map<string, { dx: number; dz: number }>();
+  /**
+   * 셀 좌표 → **밑동 한 점**(셀 중심, y=0). 등장/퇴장이 이 점을 향해 접힌다.
+   * 셀 중심을 쓰지 1층 오프셋을 쓰지 않는 이유: 한 셀에는 1층 말고도 부 소품·2층·3층이
+   * 흩어져 있고, 그 전부가 **같은 점**으로 모여야 "그 칸이 통째로 자란다"로 읽힌다.
+   * 1층 밑동으로 모으면 지피가 나무 쪽으로 빨려드는 것처럼 보인다.
+   */
+  const centers = new Map<string, { x: number; z: number }>();
+  /**
+   * 셀 좌표 → **캐 가는 부분의 정점 수**(1·2층 + 접촉 그림자). 그 뒤는 3층 지피이고
+   * 채집으로 안 사라진다 — 이유는 아래 산포 코드의 "여기까지가 캐 가는 것" 주석에 있다.
+   */
+  const heads = new Map<string, number>();
 
   /** 원형을 클론해 자리에 앉히고 색을 흩는다 (rng 는 **그 셀의 것**을 받는다) */
   const place = (rng: Rng, b: Baked, x: number, z: number, scale: number, dh: number, lm: number): THREE.BufferGeometry => {
@@ -3300,6 +3375,19 @@ export function buildProps(
     // 3층 rMin 을 0.14 → 0.26 으로 밀었다: 개정 전에는 지피가 1층 밑동 그늘에 파묻혀
     // 게임 카메라 거리 캡처에서 **한 개도 식별되지 않았다**. 대신 rMax 를 0.42 로
     // 당겨 셀 밖으로 새는 양은 그대로 둔다.
+    /*
+     * ── 여기까지가 **캐 가는 것**, 여기부터가 **자리에 남는 것** ────────────────
+     * 3층(지피: 풀 다발·꽃·자갈·웅덩이)은 채집으로 사라지지 않는다. 이유 둘:
+     *  ① 그림 — 소품 셀이 통째로 비면 그 칸만 대머리 타일이 되고, 그건 "캐 갔다"가
+     *    아니라 렌더 버그로 보인다(stage3d.clearScenery 가 groundDetail.addCell 을
+     *    부르는 것과 정확히 같은 근거다). 지피가 남으면 갓 캔 자리가 **맨땅이 아니라
+     *    파헤쳐진 자리**로 읽히고, 재생은 그 자리에서 다시 솟는다.
+     *  ② 값 — 그 대안은 채집마다 groundDetail 에 셀을 넣었다 빼는 것이고, 그건 판당
+     *    104회의 재병합이다. 이 파일이 재병합을 피하려고 한 일을 옆 파일에서 도로 한다.
+     * 그래서 **머리(1·2층 + 접촉 그림자)만 접는다** — 아래 한 줄이 그 경계다.
+     */
+    let headVerts = 0;
+    for (const pc of pieces) headVerts += pc.getAttribute('position').count;
     scatter(kit.ground, berryCell ? groundIdx.noFlower : groundIdx.all, 'g', rng.int(kit.groundCount[0], kit.groundCount[1]), 0.26, 0.42, 0.75, 1.25, 0, true);
 
     const merged = mergeGeometries(pieces, false);
@@ -3307,12 +3395,47 @@ export function buildProps(
     if (!merged) continue;
     parts.set(`${cell.x},${cell.z}`, merged);
     offsets.set(`${cell.x},${cell.z}`, { dx, dz });
+    centers.set(`${cell.x},${cell.z}`, { x: cx, z: cz });
+    heads.set(`${cell.x},${cell.z}`, headVerts);
   }
 
   const group = new THREE.Group();
   group.name = 'props';
-  // flatMat()은 모듈 공유 싱글턴 — 여기서 dispose하면 안 된다
-  const mesh = new THREE.Mesh(new THREE.BufferGeometry(), flatMat());
+  /*
+   * ⚠ **flatMat() 싱글턴을 그대로 쓰지 않고 clone 한다.**
+   * 아래에서 onBeforeCompile 로 정점 셰이더에 성장률(aGrow)을 심는데, flatMat() 은
+   * 지형·물·마을·바닥결이 **같이 쓰는 모듈 공유 싱글턴**이다. 싱글턴에 패치를 걸면
+   * 저장소 전체의 평면 재질이 함께 바뀌고, 그 재질들의 지오메트리에는 aGrow 가 없어
+   * 판 전체가 원점으로 접힌다(정의되지 않은 attribute 는 0으로 읽힌다).
+   * clone 은 프로그램을 하나 더 만들지만 **드로우콜은 안 늘린다** — 소품 메시는
+   * 여전히 한 개이고 그 한 개만 이 재질을 쓴다.
+   */
+  const mat = flatMat().clone();
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nattribute float aGrow;\nattribute vec3 aBase;',
+      )
+      /*
+       * begin_vertex 를 **덮어쓰지 않고 뒤에 한 줄 붙인다.** 그 청크에는
+       * `vec3 transformed = vec3( position );` 말고도 USE_ALPHAHASH 분기가 들어 있어서,
+       * 통째로 갈아 끼우면 three 가 그 기능을 켠 날 조용히 깨진다. 우리가 하려는 일은
+       * 선언을 바꾸는 게 아니라 **선언된 값을 옮기는 것**이라 붙이는 편이 뜻에도 맞는다.
+       *
+       * 밑동 한 점(aBase)과 원래 자리 사이를 성장률로 섞는다: 0 이면 셀 전체가 한 점으로
+       * 접혀 삼각형이 퇴화하고(= 사라진다), 1 이면 원래 그대로다. 균등 배율이라 노멀은
+       * 손댈 필요가 없고, 접촉 그림자 판도 같이 줄어 밑동이 뜨지 않는다.
+       */
+      .replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\n\ttransformed = mix( aBase, transformed, aGrow );',
+      );
+  };
+  // onBeforeCompile 로 소스를 바꾼 재질은 캐시 키를 따로 줘야 한다 — 안 그러면 three 가
+  // 패치 안 된 같은 종류의 프로그램을 재사용해 성장률이 통째로 무시된다.
+  mat.customProgramCacheKey = () => 'props:grow';
+  const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
   mesh.name = 'propsMesh';
   /**
    * ⚠ 소품은 그림자를 굽지 않는다 — 대신 위 contactShadowSpec 이 지면에 판을 깐다.
@@ -3324,7 +3447,54 @@ export function buildProps(
   mesh.receiveShadow = true;
   group.add(mesh);
 
-  /** 남은 셀 전체를 하나로 병합 — 소품이 0개면 메시를 숨겨 드로우콜도 0으로 */
+  /**
+   * 셀 좌표 → 병합 버퍼 안의 **정점 구간**. 성장률을 쓸 때 이 구간만 만진다.
+   * 병합은 parts 의 삽입 순서를 그대로 이어 붙이므로 구간은 언제나 연속이다
+   * (mergeGeometries 는 인덱스 없는 지오메트리를 순서대로 concat 한다 — 이 파일의
+   *  모든 조각이 인덱스 없음이다. tri = position.count / 3 이 그 사실의 증거다).
+   */
+  const ranges = new Map<string, { start: number; count: number }>();
+  /**
+   * 셀 좌표 → **논리 상태** (0 = 텄음 · 1 = 다 자람). sim 의 `taken` 을 그대로 비춘다.
+   * ⚠ **이 Map 이 진실이다.** 정점 버퍼는 사본일 뿐이라, 골드 제거로 재병합이 일어나
+   *   버퍼가 통째로 새로 만들어져도 여기서 복원한다. 연출 중간값은 여기 안 들어온다.
+   */
+  const grow = new Map<string, number>();
+  /**
+   * 셀 좌표 → **지금 화면에 그려지고 있는 배율**(연출 중간값. 되튐 구간에서는 1을 넘는다).
+   *
+   * ⚠ grow 와 나눠 두는 것이 요점이다. 연출 도중에 반대 사건이 오면 **지금 보이는 값에서**
+   *   이어 가야 하는데, grow 는 그 시점에 이미 *목표값*을 들고 있어서 거기서 이으면
+   *   소품이 한 번 튀었다가 반대로 움직인다(4배속에서 캐고 바로 자라는 순서가 실제로 난다).
+   *   합쳐 두면 그 버그가 **되튐 덕에 대부분의 경우 우연히 안 보이므로** 더 위험하다.
+   */
+  const shown = new Map<string, number>();
+  /** 진행 중인 등장/퇴장 — 키 → {시작값, 목표값, 경과, 길이} */
+  const anim = new Map<string, { from: number; to: number; t: number; dur: number }>();
+  let growAttr: THREE.BufferAttribute | null = null;
+
+  /**
+   * 그 셀 **머리 구간**의 aGrow 를 채우고 그 구간만 GPU 로 올린다.
+   * 꼬리(3층 지피)는 안 만진다 — 언제나 1이다(heads 주석).
+   */
+  const writeGrow = (key: string, g: number): void => {
+    shown.set(key, g);
+    const r = ranges.get(key);
+    if (!r || !growAttr) return;
+    const n = Math.min(heads.get(key) ?? r.count, r.count);
+    if (n <= 0) return;
+    const arr = growAttr.array as Float32Array;
+    arr.fill(g, r.start, r.start + n);
+    growAttr.addUpdateRange(r.start, n);
+    growAttr.needsUpdate = true;
+  };
+
+  /**
+   * 남은 셀 전체를 하나로 병합 — 소품이 0개면 메시를 숨겨 드로우콜도 0으로.
+   * ⚠ **판당 0.09회짜리 함수다**(골드 제거 전용). 채집·재생은 여기로 오지 않는다.
+   * 병합 뒤 성장률 속성을 다시 만들고 grow Map 에서 값을 되돌려 놓는다 —
+   * 그래서 자라는 도중에 옆 칸을 골드로 치워도 이 칸의 연출이 안 끊긴다.
+   */
   const remerge = (): void => {
     const prev = mesh.geometry;
     const live = [...parts.values()];
@@ -3332,6 +3502,37 @@ export function buildProps(
     mesh.geometry = merged ?? new THREE.BufferGeometry();
     mesh.visible = merged !== null;
     prev.dispose();
+    ranges.clear();
+    growAttr = null;
+    if (!merged) return;
+    // 구간표 — parts 의 순회 순서와 병합 순서가 같다는 사실 위에 선다
+    let at = 0;
+    for (const [key, g] of parts) {
+      const n = g.getAttribute('position').count;
+      ranges.set(key, { start: at, count: n });
+      at += n;
+    }
+    const total = merged.getAttribute('position').count;
+    const gArr = new Float32Array(total);
+    const bArr = new Float32Array(total * 3);
+    gArr.fill(1);
+    for (const [key, r] of ranges) {
+      const c = centers.get(key);
+      // 연출 중이면 **지금 보이는 값**으로 되돌린다 — 논리값으로 되돌리면 재병합이
+      // 일어난 프레임에만 소품이 순간이동한다(옆 칸을 골드로 치운 그 프레임이다)
+      const g = shown.get(key) ?? grow.get(key) ?? 1;
+      const n = Math.min(heads.get(key) ?? r.count, r.count);
+      gArr.fill(g, r.start, r.start + n);   // 꼬리(3층 지피)는 1로 남는다
+      if (!c) continue;
+      for (let i = r.start; i < r.start + r.count; i++) {
+        bArr[i * 3] = c.x;
+        bArr[i * 3 + 2] = c.z;
+      }
+    }
+    growAttr = new THREE.BufferAttribute(gArr, 1);
+    growAttr.setUsage(THREE.DynamicDrawUsage);
+    merged.setAttribute('aGrow', growAttr);
+    merged.setAttribute('aBase', new THREE.BufferAttribute(bArr, 3));
   };
   remerge();
 
@@ -3343,18 +3544,72 @@ export function buildProps(
       if (!g) return false;
       parts.delete(key);
       offsets.delete(key);
+      centers.delete(key);
+      heads.delete(key);
+      grow.delete(key);
+      shown.delete(key);
+      anim.delete(key);
       g.dispose();
       remerge();
       return true;
+    },
+    setCellTaken(cellX: number, cellZ: number, taken: boolean, instant = false): boolean {
+      const key = `${cellX},${cellZ}`;
+      if (!ranges.has(key)) return false;
+      const to = taken ? 0 : 1;
+      // ⚠ **논리값(grow)이 아니라 지금 보이는 값(shown)에서 잇는다.** 연출 도중이면
+      //   grow 는 이미 목표값이라 거기서 이으면 소품이 한 번 튄다.
+      const from = shown.get(key) ?? grow.get(key) ?? 1;
+      grow.set(key, to);
+      if (instant || from === to) {
+        anim.delete(key);
+        writeGrow(key, to);
+        return true;
+      }
+      // 진행 중이던 연출은 **현재 값에서** 이어 간다 — 캐고 바로 자라는(또는 그 반대)
+      // 경우에 소품이 튀지 않는다
+      anim.set(key, { from, to, t: 0, dur: taken ? PROP_TAKE_SECONDS : PROP_REGROW_SECONDS });
+      return true;
+    },
+    cellGrow(cellX: number, cellZ: number): number {
+      const key = `${cellX},${cellZ}`;
+      if (!ranges.has(key)) return 0;
+      return grow.get(key) ?? 1;
+    },
+    animCount(): number {
+      return anim.size;
+    },
+    tick(dt: number): void {
+      if (anim.size === 0) return;
+      for (const [key, a] of anim) {
+        a.t += dt;
+        const u = a.dur > 0 ? Math.min(1, a.t / a.dur) : 1;
+        if (u >= 1) {
+          writeGrow(key, a.to);
+          anim.delete(key);
+          continue;
+        }
+        // 자라날 때만 되튐을 쓴다. 사라질 때는 선형이어야 한다 — 되튐이 들어가면
+        // 사라지기 직전에 한 번 **커졌다가** 없어져서 "캤다"가 아니라 "터졌다"로 보인다.
+        const e = a.to > a.from ? easeBackOut(u) : u;
+        writeGrow(key, a.from + (a.to - a.from) * e);
+      }
     },
     offsetOf(cellX: number, cellZ: number): { dx: number; dz: number } | null {
       return offsets.get(`${cellX},${cellZ}`) ?? null;
     },
     dispose(): void {
       mesh.geometry.dispose();
+      mat.dispose();
       for (const g of parts.values()) g.dispose();
       parts.clear();
       offsets.clear();
+      centers.clear();
+      heads.clear();
+      ranges.clear();
+      grow.clear();
+      shown.clear();
+      anim.clear();
     },
   };
 }

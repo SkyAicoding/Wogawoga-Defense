@@ -15,10 +15,10 @@
  * 뽑기만 해서는 절대 지급이 안 된다(계약 A의 둘째 방어선).
  */
 import { describe, expect, it } from 'vitest';
-import type { AllyState, BattleSim, ResourceCellState, SimEvent } from '@/data/types';
+import type { AllyState, BattleSim, ResourceCellState, SimEvent, StageDef } from '@/data/types';
 import { createBattle } from '@/sim/battle';
 import { GATHER_DELIVER_RANGE, gatherValueFor } from '@/data/balance';
-import { RESOURCE_DEFS, gatherTicksFor } from '@/data/resources';
+import { REGROWABLE_KINDS, RESOURCE_DEFS, gatherTicksFor } from '@/data/resources';
 import { allyDef, allyDefs, enemyDefs, eventsOf, options, stageDef, wave } from './fixtures';
 
 /** 이 파일 전체가 쓰는 짐값 기준 — 배포본 상수(0)를 **일부러** 안 쓴다 (위 전제 ①) */
@@ -52,6 +52,17 @@ interface MkOpts {
   allies?: Parameters<typeof allyDefs>[0];
   /** 무한 모드를 끈다 (승리 틱을 재는 항목 전용) */
   finite?: boolean;
+  /**
+   * 재생 손잡이 덮어쓰기 (재생 블록 전용).
+   * ⚠ 주기를 짧게 주입하는 것은 **모양**만 바꾼다 — 총액은 재생 횟수 상한이 닫는다.
+   */
+  tuning?: { gatherRegrowMax?: number; gatherRegrowTicks?: number };
+  /**
+   * 목 스테이지의 바이옴 (기본 grassland). 초원 가중치에는 **광물이 stone 18%뿐**이라
+   * 11칸짜리 목 스테이지에서 한 칸도 안 나오는 시드가 있다 — R4("광물은 안 자란다")를
+   * 재려면 광물과 재생종이 **같은 판에** 있어야 하므로 화산(광물 84%)을 쓴다.
+   */
+  biome?: StageDef['biome'];
 }
 
 /**
@@ -68,7 +79,12 @@ function mk(o: MkOpts = {}): BattleSim {
       seed: 7,
       endless: !o.finite,
       deck: ['spear'],
-      stage: stageDef({ waveCount: o.finite ? 1 : 3, baseHp: 9999, startGold: 100000 }),
+      stage: stageDef({
+        waveCount: o.finite ? 1 : 3,
+        baseHp: 9999,
+        startGold: 100000,
+        ...(o.biome ? { biome: o.biome } : {}),
+      }),
       enemyDefs: enemyDefs({
         // 난투 피해를 3으로 낮춘다 — 기본값(cost 40 → 13)이면 채집꾼이 첫 뭉치에 즉사해
         // "맞으면 진행분만 0"(E-11)이 죽는 판정에 가려 한 번도 안 밟힌다
@@ -93,7 +109,7 @@ function mk(o: MkOpts = {}): BattleSim {
           ]
         : [wave([{ count: 0 }], 0)],
     }),
-    { gatherBaseValue: B },
+    { gatherBaseValue: B, ...o.tuning },
   );
 }
 
@@ -766,29 +782,189 @@ describe('채집 — 전투 불능과 사망 (D5 · E-10 · E-11)', () => {
   });
 });
 
-describe('채집 — 칸은 열리지 않는다 (D1)', () => {
-  it('④⑤ 다 캔 칸은 여전히 건설 불가이고, 유료 제거 비용도 한 톨 안 오른다', () => {
+describe('채집 — ⚠ 다 캔 칸은 **사라지고 열린다** (D1 뒤집힘)', () => {
+  /**
+   * 사용자 재정의: *"채집을 하고 나면 그자리에 없어져야 하는데 그대로 남아 있어, 이걸 없애줘"*.
+   * 옛 규칙(다 캔 칸은 그루터기로 남고 건설 불가)이 여기서 **정반대로** 뒤집힌다.
+   * 그렇게 안 하면 화면에 아무것도 없는데 못 짓는 칸이 되고, 그건 설명할 방법이 없다.
+   */
+  it('④⑤ 다 캔 칸은 즉시 **건설 가능**해지고, 그래도 유료 제거 지수는 한 톨 안 오른다', () => {
     const sim = mk();
     const a = train(sim);
-    expect(sim.canPlaceAt(NEAR.x, NEAR.z), '캐기 전에도 소품이라 건설 불가다').toBe(false);
+    expect(sim.canPlaceAt(NEAR.x, NEAR.z), '캐기 전에는 소품이라 건설 불가다').toBe(false);
     const cost0 = sim.clearSceneryCost(NEAR.x, NEAR.z);
     expect(cost0).not.toBeNull();
     expect(send(sim, a.id, NEAR)).toBe(true);
     runUntil(sim, '짐', () => a.carryCount > 0);
     expect(cellAt(sim, NEAR).taken).toBe(true);
-    // ── D1의 직접 증거 셋 ────────────────────────────────────────────────────
-    expect(sim.hasScenery(NEAR.x, NEAR.z), '그루터기로 남는다').toBe(true);
-    expect(sim.canPlaceAt(NEAR.x, NEAR.z), '텄어도 건설 불가다').toBe(false);
-    expect(sim.clearSceneryCost(NEAR.x, NEAR.z), '제거 지수가 안 올랐다').toBe(cost0);
-    // 다른 칸의 제거 비용도 그대로다 — 채집은 clearedScenery에 키를 안 남긴다
+    // ── R1의 직접 증거 셋 ────────────────────────────────────────────────────
+    expect(sim.hasScenery(NEAR.x, NEAR.z), '소품이 사라졌다').toBe(false);
+    expect(sim.canPlaceAt(NEAR.x, NEAR.z), '그래서 지을 수 있다').toBe(true);
+    // R-e) 이미 비어 있고 이미 지을 수 있는 칸에 380골드를 받는 것은 사기다
+    expect(sim.clearSceneryCost(NEAR.x, NEAR.z), '텄음 칸에는 유료 제거를 못 판다').toBeNull();
+    expect(
+      sim.applyCommand({ type: 'clearScenery', cellX: NEAR.x, cellZ: NEAR.z }),
+      '커맨드도 같은 답을 쓴다',
+    ).toBe(false);
+    // ⚠ 그래도 **유료 제거 지수(clearedScenery)는 채집이 한 톨도 안 올린다.**
+    //   두 카운터가 서로를 안 보는 것이 유일하게 안전한 배치다 — 안 텄은 다른 칸의 값으로 잰다.
+    expect(sim.clearSceneryCost(FAR_A.x, FAR_A.z), '제거 지수가 안 올랐다').toBe(cost0);
+    // 실제 배치 커맨드도 통해야 한다 (조회와 커맨드가 같은 답을 쓴다)
+    expect(sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: NEAR.x, cellZ: NEAR.z })).toBe(true);
+    // 그리고 그 배치는 유료 제거 지수를 여전히 안 올린다
     expect(sim.clearSceneryCost(FAR_A.x, FAR_A.z)).toBe(cost0);
-    // 실제 배치 커맨드도 거부돼야 한다 (조회와 커맨드가 같은 답을 쓴다)
-    expect(sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: NEAR.x, cellZ: NEAR.z })).toBe(false);
-    // 그루터기는 여전히 **골드로는** 치울 수 있다 — 그때 비로소 열린다
+  });
+
+  it('유료 제거는 오늘과 똑같이 칸을 열고 지수를 올린다 (채집과 갈리는 자리)', () => {
+    const sim = mk();
+    const cost0 = sim.clearSceneryCost(NEAR.x, NEAR.z);
+    expect(cost0).not.toBeNull();
     expect(sim.applyCommand({ type: 'clearScenery', cellX: NEAR.x, cellZ: NEAR.z })).toBe(true);
     expect(sim.canPlaceAt(NEAR.x, NEAR.z)).toBe(true);
-    // 그리고 그 유료 제거는 지수를 올린다 (채집과 달리)
     expect(sim.clearSceneryCost(FAR_A.x, FAR_A.z)).toBeGreaterThan(cost0 as number);
+  });
+});
+
+/**
+ * ── 재생 (R1~R6) ────────────────────────────────────────────────────────────
+ * ⚠ 이 블록은 **재생 주기를 짧게 주입해서** 돈다(`BattleTuning.gatherRegrowTicks`).
+ *   배포본 9,000틱(300초)을 그대로 돌리면 항목 하나가 5분짜리가 되고, 그러면 아무도
+ *   안 돌려서 규칙이 조용히 죽는다. 주입되는 것은 **모양**뿐이고 총액은 안 움직인다.
+ * ⚠ **판별력**: `gatherRegrowMax: 0` 을 주면 아래 재생 항목들이 전부 빨개져야 한다 —
+ *   맨 아래 "재생을 끄면 안 자란다" 항목이 그 음성 대조를 **실행물로** 들고 있다.
+ */
+describe('채집 — 재생 (R1~R6)', () => {
+  /** 재생을 눈으로 볼 수 있는 판 — 주기 60틱(2초) */
+  const REGROW_T = 60;
+  const mkR = (over: { gatherRegrowMax?: number; gatherRegrowTicks?: number } = {}): BattleSim =>
+    mk({ tuning: { gatherRegrowTicks: REGROW_T, ...over } });
+
+  /** 그 칸을 한 짐 캐게 하고, 캔 아군을 돌려준다 */
+  const harvest = (sim: BattleSim, at: { x: number; z: number }): AllyState => {
+    const a = train(sim);
+    expect(send(sim, a.id, at)).toBe(true);
+    runUntil(sim, `${at.x},${at.z} 한 짐`, () => a.carryCount > 0, 4000);
+    return a;
+  };
+
+  it('R1·R2) 다 캔 칸이 T틱 뒤 **같은 종·같은 값**으로 돌아오고, 그 칸은 다시 건설 불가다', () => {
+    const sim = mkR();
+    const cell = cellAt(sim, NEAR);
+    const kind0 = cell.kind;
+    const value0 = cell.value;
+    harvest(sim, NEAR);
+    expect(cell.taken, '캔 순간 비었다').toBe(true);
+    expect(sim.canPlaceAt(NEAR.x, NEAR.z), '비었으니 지을 수 있다').toBe(true);
+    // R-a) 타이머는 **캔 순간**에 시작한다 — 배달 순간이 아니다
+    expect(cell.regrowAt, '캔 순간 재생 타이머가 걸렸다').toBeGreaterThan(0);
+    expect(cell.regrowsLeft, '재생권 하나를 썼다').toBe(0);
+    sim.drainEvents();
+    runUntil(sim, '다시 자란다', () => !cell.taken, REGROW_T * 4);
+    // R2) 종도 값도 다시 뽑지 않는다 — `resourceKindOf` 를 다시 부르면 rng 호출 횟수에 걸린다
+    expect(cell.kind, '같은 종으로 돌아온다').toBe(kind0);
+    expect(cell.value, '같은 값으로 돌아온다').toBe(value0);
+    expect(cell.regrowAt, '타이머가 꺼졌다').toBe(0);
+    expect(sim.canPlaceAt(NEAR.x, NEAR.z), '자랐으니 다시 건설 불가다').toBe(false);
+    expect(sim.hasScenery(NEAR.x, NEAR.z), '유료 제거를 다시 살 수 있다').toBe(true);
+  });
+
+  it('R2) 재생은 `gatherRegrown` 이벤트를 낸다 — 이름이 `gather` 로 시작한다 (18.idleZero)', () => {
+    const sim = mkR();
+    const cell = cellAt(sim, NEAR);
+    harvest(sim, NEAR);
+    sim.drainEvents();
+    // ⚠ `runUntil` 이 매 틱 이벤트를 걷어 돌려주므로 **그 반환값에서** 찾는다.
+    //   술어 안에서 다시 drainEvents 를 부르면 둘이 같은 큐를 놓고 경쟁해 영영 못 만난다.
+    const evs = runUntil(sim, '다시 자란다', () => !cell.taken, REGROW_T * 4);
+    const ev = evs.find((e) => e.type === 'gatherRegrown');
+    expect(ev, '재생 이벤트가 나왔다').toBeDefined();
+    const g = ev as { type: string; cellX: number; cellZ: number; kind: string; value: number };
+    expect(g.type.startsWith('gather'), '⚠ 이름이 gather 로 시작해야 18.idleZero 가 재생을 함께 잡는다').toBe(true);
+    expect([g.cellX, g.cellZ]).toEqual([NEAR.x, NEAR.z]);
+    expect(g.kind).toBe(cell.kind);
+    expect(g.value).toBe(cell.value);
+  });
+
+  it('R4) **광물은 안 자란다** — stone·flint·obsidian 은 캔 순간 영구히 열린다', () => {
+    // 화산 바이옴: 광물 84%(flint 20 · stone 30 · obsidian 34) + wood 16% — 한 판에 둘 다 있다
+    const sim = mk({ biome: 'volcano', tuning: { gatherRegrowTicks: REGROW_T } });
+    const rocks = sim.state.resources.filter((r) => !REGROWABLE_KINDS.has(r.kind));
+    const grow = sim.state.resources.filter((r) => REGROWABLE_KINDS.has(r.kind));
+    // 목 스테이지에 두 종류가 다 있어야 이 항목이 헛돌지 않는다
+    expect(rocks.length, '광물 칸이 있다').toBeGreaterThan(0);
+    expect(grow.length, '재생종 칸도 있다').toBeGreaterThan(0);
+    for (const r of rocks) expect(r.regrowsLeft, `${r.kind} 는 재생권이 0이다`).toBe(0);
+    for (const r of grow) expect(r.regrowsLeft, `${r.kind} 는 재생권이 있다`).toBeGreaterThan(0);
+    const rock = rocks[0] as ResourceCellState;
+    harvest(sim, { x: rock.cellX, z: rock.cellZ });
+    expect(rock.taken).toBe(true);
+    expect(rock.regrowAt, '광물에는 타이머가 안 걸린다').toBe(0);
+    run(sim, REGROW_T * 5);
+    expect(rock.taken, '광물은 영영 안 자란다').toBe(true);
+    expect(sim.canPlaceAt(rock.cellX, rock.cellZ), '영구 건설칸이 됐다').toBe(true);
+  });
+
+  it('R3) **타워를 세우면 안 자란다 — 팔아도 안 자란다**', () => {
+    const sim = mkR();
+    const cell = cellAt(sim, NEAR);
+    expect(REGROWABLE_KINDS.has(cell.kind), '이 칸은 원래 자라는 종이다').toBe(true);
+    harvest(sim, NEAR);
+    expect(cell.regrowAt, '캔 직후에는 타이머가 걸려 있다').toBeGreaterThan(0);
+    expect(sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: NEAR.x, cellZ: NEAR.z })).toBe(true);
+    expect(cell.regrowAt, '타워가 재생권을 태웠다').toBe(0);
+    expect(cell.regrowsLeft).toBe(0);
+    run(sim, REGROW_T * 5);
+    expect(cell.taken, '타워가 선 칸은 영영 안 자란다').toBe(true);
+    // 팔아도 안 돌아온다 — 소각은 영구다(단조성이 종료 증명과 해시를 단순하게 유지한다)
+    const t = sim.state.towers.find((x) => x.cellX === NEAR.x && x.cellZ === NEAR.z);
+    expect(t, '방금 세운 타워가 있다').toBeDefined();
+    expect(sim.applyCommand({ type: 'sellTower', towerId: (t as { id: number }).id })).toBe(true);
+    run(sim, REGROW_T * 5);
+    expect(cell.taken, '타워를 팔아도 숲은 안 돌아온다').toBe(true);
+    expect(sim.canPlaceAt(NEAR.x, NEAR.z), '맨땅으로 남는다').toBe(true);
+  });
+
+  it('R-f) **유료로 치운 칸은 절대 안 자란다** — 돈 내고 산 칸이 다시 막히면 사기다', () => {
+    const sim = mkR();
+    const cell = cellAt(sim, NEAR);
+    expect(REGROWABLE_KINDS.has(cell.kind), '이 칸은 원래 자라는 종이다').toBe(true);
+    expect(sim.applyCommand({ type: 'clearScenery', cellX: NEAR.x, cellZ: NEAR.z })).toBe(true);
+    expect(cell.taken).toBe(true);
+    expect(cell.regrowAt, '재생권이 그 자리에서 탔다').toBe(0);
+    expect(cell.regrowsLeft).toBe(0);
+    run(sim, REGROW_T * 5);
+    expect(cell.taken, '유료로 치운 칸은 T×5 틱 뒤에도 비어 있다').toBe(true);
+    expect(sim.canPlaceAt(NEAR.x, NEAR.z), '그리고 계속 지을 수 있다').toBe(true);
+  });
+
+  it('R2) 재생권은 **한 번**뿐이다 — 두 번째로 캐면 그 칸은 영구히 열린다', () => {
+    const sim = mkR();
+    const cell = cellAt(sim, NEAR);
+    expect(cell.regrowsLeft, '배포본 재생권은 1이다').toBe(1);
+    harvest(sim, NEAR);
+    runUntil(sim, '한 번 자란다', () => !cell.taken, REGROW_T * 4);
+    // 두 번째 수확 — 재생권이 이미 0이라 타이머가 안 걸린다
+    const b = train(sim);
+    expect(send(sim, b.id, NEAR)).toBe(true);
+    runUntil(sim, '두 번째 짐', () => cell.taken, 4000);
+    expect(cell.regrowAt, '재생권이 없으면 타이머도 없다').toBe(0);
+    run(sim, REGROW_T * 5);
+    expect(cell.taken, '두 번 캔 칸은 영영 안 자란다').toBe(true);
+  });
+
+  it('⚠ 판별력) **재생을 끄면**(regrowMax 0) 위 항목들이 재는 사실이 사라진다', () => {
+    const sim = mkR({ gatherRegrowMax: 0 });
+    const cell = cellAt(sim, NEAR);
+    expect(cell.regrowsLeft, '재생권이 0으로 태어난다').toBe(0);
+    harvest(sim, NEAR);
+    expect(cell.regrowAt, '타이머가 안 걸린다').toBe(0);
+    sim.drainEvents();
+    run(sim, REGROW_T * 6);
+    expect(cell.taken, '재생을 끄면 안 자란다').toBe(true);
+    expect(
+      sim.drainEvents().some((e) => e.type === 'gatherRegrown'),
+      '재생 이벤트가 한 건도 안 나온다',
+    ).toBe(false);
   });
 });
 
@@ -907,13 +1083,62 @@ describe('채집 — 자동 행동 (규칙 8)', () => {
     const cell = { x: Math.round(e.x), z: Math.round(e.z) };
     expect(sim.resourceAt(cell.x, cell.z), '적이 선 칸은 자원 칸이 아니다').toBeNull();
     expect(send(sim, a.id, cell)).toBe(true);
-    expect(a.autoHold, '적이 선 칸 = 일감이다 — 끝나면 스스로 다음 일을 찾는다').toBe(false);
-    // 같은 종류의 칸인데 적만 없으면 그것이 "여기 지켜"다 (판별력: 이 한 쌍이 규칙을 가른다)
+    expect(a.autoHold, '적이 선 칸도 "여기 지켜"다 — 예약이 안 붙었으므로').toBe(true);
+    // 적이 있든 없든 답이 같다 — 그것이 §D-1 개정의 요점이다(판정이 적을 아예 안 본다)
     const empty = { x: cell.x, z: cell.z };
     runUntil(sim, '그 칸에서 적이 사라진다', () =>
       !sim.state.enemies.some((x) => x.alive && Math.round(x.x) === empty.x && Math.round(x.z) === empty.z),
     );
     expect(send(sim, a.id, empty)).toBe(true);
-    expect(a.autoHold, '적이 없는 같은 칸 = 여기 지켜').toBe(true);
+    expect(a.autoHold, '적이 없는 같은 칸도 여기 지켜').toBe(true);
+  });
+
+  /**
+   * §D-1) **명령이 증발하지 않는다.** 사용자가 지적한 "시켰는데 안 한다"가 이것이다.
+   *
+   * 옛 규칙은 `autoHold` 를 명령의 **의도**("이 칸이 일감처럼 생겼나")로 정했다. 그래서
+   * 남이 이미 예약한 자원 칸을 찍으면 예약이 거부되는데도(E-9) `autoHold = false` 로 남고,
+   * 그 사람이 도착하는 순간 자동이 **다른 칸을 잡아 그 자리를 떠났다.** 화면에는
+   * `allyOrdered` 가 세운 목표 표식만 남는다 — 명령이 조용히 사라진 것이다.
+   * 개정된 규칙은 **결과**("이 사람에게 실제로 일이 붙었나")로 정한다.
+   */
+  it('§D-1) 남이 예약한 칸을 찍은 사람은 **그 자리에 선다** — 명령이 증발하지 않는다', () => {
+    const sim = mk();
+    const a = train(sim);
+    const b = train(sim);
+    // ① a 가 FAR_A 를 잡는다 (예약은 배타적이다)
+    expect(send(sim, a.id, FAR_A)).toBe(true);
+    expect(a.gatherKey, 'a 에게 예약이 붙었다').toBeGreaterThanOrEqual(0);
+    expect(a.autoHold, '예약이 붙었으므로 자동은 켜진 채다').toBe(false);
+    // ② b 를 **같은 칸**으로 보낸다 — 예약은 거부되지만 명령 자체는 유효하다
+    expect(send(sim, b.id, FAR_A), '"거기로 가라"는 언제나 유효한 명령이다').toBe(true);
+    expect(b.gatherKey, 'b 에게는 예약이 안 붙는다 (배타성)').toBe(-1);
+    expect(b.autoHold, '⚠ 그러므로 b 는 "여기 지켜"다 — 도착해서 선다').toBe(true);
+    expect({ x: b.tgtX, z: b.tgtZ }, '목표 표식은 찍은 칸 그대로다').toEqual({ x: FAR_A.x, z: FAR_A.z });
+    // ③ 도착하고 한참을 둬도 **그 자리를 안 떠난다** (옛 규칙이면 다른 칸을 캐러 갔다)
+    runUntil(sim, 'b 가 도착한다', () => b.x === FAR_A.x && b.z === FAR_A.z, 2000);
+    run(sim, 600);
+    expect({ x: b.x, z: b.z }, 'b 는 찍은 자리에 서 있다').toEqual({ x: FAR_A.x, z: FAR_A.z });
+    expect(b.gatherKey, 'b 는 다른 칸을 잡지 않았다').toBe(-1);
+    expect(b.carryCount, 'b 는 아무것도 안 캤다 — 시킨 것이 "여기 서 있어"였으므로').toBe(0);
+  });
+
+  it('§D-1) 짐이 차서만 못 잡은 자원 칸은 **자동을 켠 채로 둔다** — 배달하고 다시 나간다', () => {
+    const sim = mk();
+    const a = train(sim); // carryCap 2
+    // 두 칸을 연달아 캐서 손을 채운다
+    expect(send(sim, a.id, FAR_A)).toBe(true);
+    runUntil(sim, '첫 짐', () => a.carryCount > 0);
+    expect(send(sim, a.id, FAR_B)).toBe(true);
+    runUntil(sim, '손이 찬다', () => a.carryCount >= 2, 3000);
+    // 손이 찬 채로 **또 다른 자원 칸**을 찍는다 — 예약은 안 붙지만(E-5) 자동은 살아 있어야 한다
+    const third = sim.state.resources.find(
+      (r) => !r.taken && !(r.cellX === FAR_A.x && r.cellZ === FAR_A.z),
+    ) as ResourceCellState;
+    expect(send(sim, a.id, { x: third.cellX, z: third.cellZ })).toBe(true);
+    expect(a.gatherKey, '짐이 가득이라 예약은 안 붙는다').toBe(-1);
+    expect(a.autoHold, '⚠ 그래도 자동은 켜진 채다 — 자동 ⑤가 마을로 보낸다').toBe(false);
+    runUntil(sim, '배달', () => a.carryCount === 0, 4000);
+    expect(sim.state.gold).toBeGreaterThan(0);
   });
 });

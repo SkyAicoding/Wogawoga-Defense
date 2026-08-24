@@ -27,8 +27,22 @@ export class Decals {
   private rangeSoft: THREE.Mesh;
   private slots: THREE.Mesh | null = null;
   private slotMat: THREE.MeshBasicMaterial;
-  /** 슬롯 디스크 원본 셀 — 소품 제거로 셀이 추가되면 재병합한다 */
+  /**
+   * 슬롯 디스크 원본 셀 — **판이 시작될 때 한 번 굽고 그 뒤로 다시 굽지 않는다.**
+   * 여기에는 지금 지을 수 있는 칸뿐 아니라 **앞으로 지을 수 있게 될 칸**(소품 칸 전부)이
+   * 같이 들어간다. 켜고 끄기는 setSlotCell 이 정점을 접어서 한다.
+   *
+   * ⚠ 개정 전에는 셀이 늘 때마다 통째로 다시 구웠고(rebuildSlots), 그 근거는
+   *   "셀 추가는 드물다"(골드 제거 판당 0.09회)였다. 채집이 칸을 여닫기 시작하면서
+   *   그 전제가 깨졌다 — 수확 72 + 재생 32 = **판당 104회**다.
+   */
   private slotCells: Vec2[] = [];
+  /** 셀 좌표 → 슬롯 버퍼 안의 정점 구간 (setSlotCell 이 이 구간만 만진다) */
+  private slotRanges = new Map<string, { start: number; count: number }>();
+  /** 슬롯 정점 원본 — 껐다가 다시 켤 때 되돌릴 자리 (병합 직후 복사본) */
+  private slotHome: Float32Array | null = null;
+  /** 지금 켜져 있는 셀 */
+  private slotOn = new Set<string>();
   private chevrons: THREE.Mesh | null = null;
   private chevronMat: THREE.MeshBasicMaterial;
   private chevronPulse = 0;
@@ -120,10 +134,23 @@ export class Decals {
     );
   }
 
-  /** 스테이지 데이터 준비 — 슬롯 위치/경로에 종속된 정적 데칼 생성 */
-  init(slotCells: readonly Vec2[], paths: readonly Vec2[][]): void {
+  /**
+   * 스테이지 데이터 준비 — 슬롯 위치/경로에 종속된 정적 데칼 생성.
+   *
+   * @param slotCells 지금 지을 수 있는 칸 (맨 셀)
+   * @param togglableCells **앞으로** 지을 수 있게 될 칸 = 소품(자원) 칸 전부.
+   *   같은 버퍼에 꺼진 채로 구워 둔다. 채집이 칸을 열면 setSlotCell 이 정점만 펴므로
+   *   재병합이 한 번도 안 일어난다 — 이 인자가 판당 104회의 재병합을 0으로 만드는 값이다.
+   */
+  init(slotCells: readonly Vec2[], paths: readonly Vec2[][], togglableCells: readonly Vec2[] = []): void {
     // 슬롯 하이라이트: 병합된 디스크들 (배치 모드에서만 표시)
     this.slotCells = slotCells.map((c) => ({ x: c.x, z: c.z }));
+    this.slotOn = new Set(this.slotCells.map((c) => `${c.x},${c.z}`));
+    for (const c of togglableCells) {
+      const key = `${c.x},${c.z}`;
+      if (this.slotOn.has(key)) continue;
+      this.slotCells.push({ x: c.x, z: c.z });
+    }
     this.rebuildSlots();
 
     // 경로 셰브런: 1.1 간격으로 진행방향 삼각형
@@ -159,7 +186,10 @@ export class Decals {
     }
   }
 
-  /** slotCells → 병합 디스크 메시 1개 재생성 (셀 추가는 드물어 통째로 다시 만든다) */
+  /**
+   * slotCells → 병합 디스크 메시 1개. **init 에서 딱 한 번 부른다.**
+   * 셀 구간표와 정점 원본을 같이 만들어 두는 것이 이 함수의 진짜 일이다.
+   */
   private rebuildSlots(): void {
     const visible = this.slots?.visible ?? false;
     if (this.slots) {
@@ -167,6 +197,8 @@ export class Decals {
       this.slots.geometry.dispose();
       this.slots = null;
     }
+    this.slotRanges.clear();
+    this.slotHome = null;
     if (this.slotCells.length === 0) return;
     const geos: THREE.BufferGeometry[] = [];
     const v = new THREE.Vector3();
@@ -177,17 +209,78 @@ export class Decals {
       g.translate(v.x, DECAL_Y + 0.06, v.z);
       geos.push(g);
     }
-    this.slots = new THREE.Mesh(mergeGeos(geos), this.slotMat);
+    const merged = mergeGeos(geos);
+    /*
+     * 구간표 — 병합은 순서대로 이어 붙이므로 셀 i 의 정점은 언제나 연속이다.
+     * ⚠ **정점 수는 `index.count` 다.** mergeGeos 는 인덱스 지오메트리(CircleGeometry)를
+     *   풀어서 복사한다 — 원 하나가 22정점이 아니라 60정점(20 삼각형 × 3)으로 들어간다.
+     *   position.count 를 쓰면 구간이 어긋나 **엉뚱한 칸이 접힌다**(그리고 그 어긋남은
+     *   화면에서 "옆 칸이 대신 사라진다"로만 보인다).
+     */
+    let at = 0;
+    for (let i = 0; i < this.slotCells.length; i++) {
+      const cell = this.slotCells[i] as Vec2;
+      const g = geos[i] as THREE.BufferGeometry;
+      const n = g.index ? g.index.count : g.getAttribute('position').count;
+      this.slotRanges.set(`${cell.x},${cell.z}`, { start: at, count: n });
+      at += n;
+    }
+    const pos = merged.getAttribute('position') as THREE.BufferAttribute;
+    pos.setUsage(THREE.DynamicDrawUsage);
+    this.slotHome = new Float32Array(pos.array as Float32Array);
+    this.slots = new THREE.Mesh(merged, this.slotMat);
+    this.slots.name = 'slotHighlight';
     this.slots.renderOrder = 2;
     this.slots.visible = visible;
     this.group.add(this.slots);
+    // 꺼진 채로 구운 칸(소품 칸)을 접는다
+    for (const cell of this.slotCells) {
+      if (!this.slotOn.has(`${cell.x},${cell.z}`)) this.setSlotCell(cell.x, cell.z, false);
+    }
   }
 
-  /** 소품을 치워 새로 건설 가능해진 셀을 슬롯 하이라이트에 편입 */
-  addSlotCell(cellX: number, cellZ: number): void {
-    if (this.slotCells.some((c) => c.x === cellX && c.z === cellZ)) return;
-    this.slotCells.push({ x: cellX, z: cellZ });
-    this.rebuildSlots();
+  /**
+   * 그 칸의 배치 하이라이트를 켜고 끈다 — **재병합 없이** 정점만 접었다 편다.
+   *
+   * 끌 때는 그 셀의 디스크 정점 전부를 첫 정점(원 중심) 한 점으로 모아 삼각형을
+   * 퇴화시킨다. 켤 때는 구울 때 떠 둔 원본에서 되돌린다. 비용은 O(그 셀의 정점 수)(22)
+   * 이고 버퍼도 그 구간만 올린다 — 판당 104회가 와도 프레임에서 안 읽힌다.
+   * (개정 전 rebuildSlots 는 호출마다 CircleGeometry 124개를 새로 굽고 메시를 갈았다)
+   *
+   * 세 곳이 이것을 부른다: 골드 제거(영구 켜기) · 채집(켜기) · 재생(끄기).
+   * **끄는 길이 생긴 것이 이번 개정이다** — 개정 전에는 addSlotCell 하나뿐이었고,
+   * 그래서 자란 칸에 배치 하이라이트가 남아 "빛나는데 못 짓는 칸"이 될 뻔했다.
+   */
+  setSlotCell(cellX: number, cellZ: number, on: boolean): void {
+    const key = `${cellX},${cellZ}`;
+    const r = this.slotRanges.get(key);
+    const home = this.slotHome;
+    if (!r || !home || !this.slots) return;
+    if (on) this.slotOn.add(key);
+    else this.slotOn.delete(key);
+    const pos = this.slots.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const arr = pos.array as Float32Array;
+    const s = r.start * 3;
+    if (on) {
+      arr.set(home.subarray(s, s + r.count * 3), s);
+    } else {
+      // CircleGeometry 의 0번 정점이 원 중심이다 — 거기로 전부 모은다
+      const cx = home[s] as number;
+      const cy = home[s + 1] as number;
+      const cz = home[s + 2] as number;
+      for (let i = 0; i < r.count; i++) {
+        arr[s + i * 3] = cx;
+        arr[s + i * 3 + 1] = cy;
+        arr[s + i * 3 + 2] = cz;
+      }
+    }
+    pos.addUpdateRange(s, r.count * 3);
+    pos.needsUpdate = true;
+  }
+
+  /** 그 칸의 배치 하이라이트가 켜져 있는가 (테스트·계약이 읽는다) */
+  slotCellOn(cellX: number, cellZ: number): boolean {
+    return this.slotOn.has(`${cellX},${cellZ}`);
   }
 
   /**

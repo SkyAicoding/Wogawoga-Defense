@@ -24,7 +24,7 @@ import {
   counteredBy,
   favoredAgainst,
 } from '@/data';
-import { gatherTicksFor, isGathering } from '@/data/resources';
+import { gatherTicksFor, isGathering, isWorkerDef } from '@/data/resources';
 import type { Screen } from '@/core/fsm';
 import { isCoarsePointer } from '@/core/device';
 import { h, cls, fmt, mount, unmount, uiRoot, setText } from '../dom';
@@ -1047,15 +1047,31 @@ export function createBattleHud(): Screen<GameFacade> {
         let carrying = 0;
         // 대기 인원 — 자동이 꺼진 사람 수. 판 위의 말뚝(healthbars kind 8)과 같은 사실을
         // 숫자로도 말한다: 표식을 놓치면 "왜 다들 노나"의 답이 화면 어디에도 없다.
+        // ⚠ **일꾼만 센다**(§D-3). 자동이 없는 종에게 autoHold 는 상수라 그 숫자가
+        //    말하는 것이 없다. 판 위 말뚝(healthbars kind 8)과 **같은 술어**를 쓴다 —
+        //    둘이 갈리면 "말뚝은 셋인데 HUD는 다섯"이 된다.
         let holding = 0;
+        /**
+         * **대기 중인 사람이 등에 지고 있는 골드**(§D-2).
+         * 짐을 진 채 "여기 지켜"를 받으면 그 골드가 무기한 묶인다 — 규칙은 그게 맞지만
+         * (자동으로 배달을 보내면 목표 표식이 거짓말을 시작한다) 화면 어디에도 안내가
+         * 없어서 "왜 돈이 안 들어오지"의 답이 없었다. 여기가 그 답이다.
+         * ⚠ **이쪽은 일꾼으로 안 거른다.** 전투원이 짐을 진 채 서 있는 것도 진짜로
+         *   묶인 돈이고, 오히려 그쪽이 사용자가 못 알아채는 경우다(전투원은 스스로
+         *   배달하러 가지 않는다).
+         */
+        let heldGold = 0;
         for (const a of s.allies) {
           if (!a.alive) continue;
           if (a.gatherKey >= 0) gathering++;
-          if (a.autoHold) holding++;
+          if (a.autoHold) {
+            if (isWorkerDef(ALLY_DEFS[a.defId])) holding++;
+            heldGold += a.carryGold;
+          }
           carrying += a.carryCount;
         }
         const headCount = `${s.allies.length}/${s.allyCap}`;
-        const allySig = `${headCount}|${gathering}|${carrying}|${holding}`;
+        const allySig = `${headCount}|${gathering}|${carrying}|${holding}|${heldGold}`;
         if (allySig !== lastAllySig) {
           lastAllySig = allySig;
           setText(allyCountEl, headCount);
@@ -1070,6 +1086,8 @@ export function createBattleHud(): Screen<GameFacade> {
           if (gathering > 0) parts.push(t('battle.ally.gathering', { n: gathering }));
           if (carrying > 0) parts.push(t('battle.ally.carrying', { c: carrying }));
           if (holding > 0) parts.push(t('battle.ally.holding', { n: holding }));
+          // 0은 "없다"이지 "0이 묶여 있다"가 아니다 — 위 두 조각과 같은 규율로 따로 켠다
+          if (heldGold > 0) parts.push(t('battle.ally.heldGold', { g: fmt(heldGold) }));
           setText(allyGatherEl, parts.join(' · '));
           for (const btn of allyBtns) setText(btn.costLabel, fmt(b.sim.allyCost(btn.defId)));
         }

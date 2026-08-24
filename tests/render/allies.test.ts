@@ -364,7 +364,7 @@ describe('아군 체력바 — 오버레이 메시 공유', () => {
   });
 
   /**
-   * 대기(HOLD) 말뚝 — **자동이 꺼진 사람만** 뜬다 (kind 8).
+   * 대기(HOLD) 말뚝 — **자동이 꺼진 일꾼만** 뜬다 (kind 8).
    *
    * 이 표식이 없으면 "빈 칸을 찍어 그 자리를 지키는 중"이 화면 어디에도 안 나온다:
    * 서 있는 사람과 명령 없이 서 있는 사람은 좌표가 같아 눈으로 구별할 방법이 없다.
@@ -380,19 +380,50 @@ describe('아군 체력바 — 오버레이 메시 공유', () => {
     const mesh = meshesOf(scene)[0]!;
     const kinds = mesh.geometry.getAttribute('barKind');
 
-    // 자동이 켜진 만피 아군 → 아무것도 안 그린다 (체력바도 말뚝도 없다)
-    view.update([], [], 1, cellToWorld, [], [ally({ hp: 100, autoHold: false })]);
+    // 자동이 켜진 만피 일꾼 → 아무것도 안 그린다 (체력바도 말뚝도 없다)
+    view.update([], [], 1, cellToWorld, [], [ally({ defId: 'gatherer', hp: 100, autoHold: false })]);
     expect(mesh.count, '자동이 켜진 만피 부족원은 그릴 것이 없다').toBe(0);
 
     // 같은 사람이 "여기 지켜"를 받으면 말뚝 하나가 뜬다
-    view.update([], [], 1, cellToWorld, [], [ally({ hp: 100, autoHold: true })]);
+    view.update([], [], 1, cellToWorld, [], [ally({ defId: 'gatherer', hp: 100, autoHold: true })]);
     expect(mesh.count, '대기 말뚝이 안 떴다').toBe(1);
     expect(kinds.getX(0), '대기 말뚝의 kind').toBe(8);
     expect(meshesOf(scene), '새 메시를 만들면 드로우콜이 는다').toHaveLength(1);
 
     // 죽은 사람의 말뚝은 남지 않는다
-    view.update([], [], 1, cellToWorld, [], [ally({ hp: 0, autoHold: true, alive: false })]);
+    view.update([], [], 1, cellToWorld, [], [ally({ defId: 'gatherer', hp: 0, autoHold: true, alive: false })]);
     expect(mesh.count, '시체에 말뚝이 남았다').toBe(0);
+    view.dispose();
+  });
+
+  /**
+   * §D-3 — **자동이 없는 종에는 대기 말뚝을 안 켠다.**
+   *
+   * 전투 3종(clubber·slinger·guardian)에게 `autoHold` 는 상태가 아니라 **상수**다:
+   * 켜지든 꺼지든 그 사람의 행동이 한 틱도 안 달라진다(자동 행동 자체가 없다).
+   * 그런 값에 표식을 붙이면 화면이 아무것도 안 말하면서 자리만 먹는다.
+   *
+   * ⚠ 이 테스트가 지키는 진짜 것은 §D-1 개정과의 맞물림이다. 그 개정으로 "적이 선 칸"과
+   *   "남이 예약한 칸"을 찍으면 `autoHold = true` 가 되는데, 전투원은 그 두 칸으로
+   *   보내지는 것이 **일상**이다. 이 거름망이 없으면 전투원 전원의 머리 위에 말뚝이
+   *   상시로 뜬다 — 기능이 켜진 첫날 화면이 말뚝밭이 된다.
+   */
+  it('대기 말뚝은 자동이 있는 종(일꾼)에만 켜진다 — 전투 3종에는 안 뜬다 (§D-3)', () => {
+    const scene = new THREE.Scene();
+    const view = new HealthBarView(scene);
+    const mesh = meshesOf(scene)[0]!;
+
+    for (const defId of ['clubber', 'slinger', 'guardian'] as const) {
+      view.update([], [], 1, cellToWorld, [], [ally({ defId, hp: 100, autoHold: true })]);
+      expect(mesh.count, `${defId}: 자동이 없는 종에 대기 말뚝이 떴다`).toBe(0);
+    }
+    // 같은 조건의 일꾼은 뜬다 — 거름망이 종을 보고 있지 autoHold 를 죽인 게 아니다
+    view.update([], [], 1, cellToWorld, [], [ally({ defId: 'gatherer', hp: 100, autoHold: true })]);
+    expect(mesh.count, '일꾼의 말뚝까지 사라졌다').toBe(1);
+
+    // 전투원이라도 **체력바**는 그대로다 — 이 개정이 끈 것은 말뚝 하나뿐이다
+    view.update([], [], 1, cellToWorld, [], [ally({ defId: 'clubber', hp: 40, autoHold: true })]);
+    expect(mesh.count, '전투원의 체력바까지 사라졌다').toBe(1);
     view.dispose();
   });
 

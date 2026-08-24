@@ -70,7 +70,7 @@ import type { AllyState, EnemyState, ResourceCellState, TowerState } from '@/dat
 import { ALLY_DEFS } from '@/data/allies';
 // sim이 아니라 **data** 모듈이다 — 도착 판정과 캐기 틱을 sim과 같은 함수로 본다
 // (렌더가 @/sim을 임포트하지 않는다는 규약은 그대로다 — enemyview.ts 헤더 참조).
-import { gatherTicksFor, isGathering } from '@/data/resources';
+import { gatherTicksFor, isGathering, isWorkerDef } from '@/data/resources';
 import { lerp } from '@/core/mathx';
 import { BOSS_ENEMIES } from '../meshlib/enemies';
 import { towerTierScale } from '../meshlib/towers';
@@ -504,9 +504,19 @@ if (vKind > 4.5) {
      * 체력바 **바로 뒤**에 쌓는 이유는 이것도 '사람에 붙은 표시'이기 때문이다 —
      * CAPACITY를 넘겨 잘리는 것은 여전히 판에 깔리는 자원 배지 쪽이어야 한다(헤더).
      * 최대 여섯 개다(정원).
+     *
+     * ⚠ **일꾼에게만 켠다**(§D-3). 자동 행동이 없는 종(전투 3종)에게 `autoHold` 는
+     *   상태가 아니라 **상수**다 — 켜져 있든 꺼져 있든 그 사람의 행동이 한 틱도 안 달라진다.
+     *   그런 값에 표식을 붙이면 화면이 아무것도 안 말하면서 자리만 먹는다. 게다가 §D-1
+     *   개정으로 "적이 선 칸을 찍으면 autoHold=true" 가 되면서 **전투원 전원에게 상시로**
+     *   말뚝이 뜰 참이었다. 술어는 sim(규칙 8 ③)과 **같은 함수**를 쓴다 — 셋이 각자
+     *   판정하면 언젠가 한 곳만 어긋난다(isGathering 과 같은 논거).
+     * 부수 효과로 최악 프레임의 말뚝 인스턴스가 최대 6 → 최대 (일꾼 수)로 줄어
+     * CAPACITY(160) 여유가 는다.
      */
     for (const a of allies) {
       if (!a.alive || !a.autoHold || n >= CAPACITY) continue;
+      if (!isWorkerDef(ALLY_DEFS[a.defId])) continue;
       cellToWorld(lerp(a.prevX, a.x, alpha), lerp(a.prevZ, a.z, alpha), _pos);
       _pos.y = HOLD_PIN_Y;
       _mat.compose(_pos, _quat, _scl.set(HOLD_PIN, HOLD_PIN, 1));

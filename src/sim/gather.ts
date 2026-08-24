@@ -27,23 +27,57 @@
  *     0번 돌아 수입 경로가 **존재하지 않는다**(봉투 [5]·`18.idleZero`의 새 근거).
  *     `trainAlly`의 집결 이동은 `a.tgtX/tgtZ`를 직접 대입하므로 이 통로를 **안 탄다**.
  *  B) **자료구조의 순회 순서에 결정론을 걸지 않는다.** `ResourceField.list`는 생성 시
- *     셀 키 오름차순으로 굳고 그 뒤로 재정렬도 삭제도 추가도 없다(텄어도 taken=true로
- *     남는다). 아군 순회는 언제나 id 오름차순(`fillAllAllyIds`)이다.
+ *     셀 키 오름차순으로 굳고 그 뒤로 재정렬도 삭제도 추가도 없다 — **재생이 들어와도
+ *     그대로다**(칸은 사라지지 않고 `taken` 이 false 로 돌아올 뿐이다). 그래서
+ *     `updateRegrow` 의 이벤트 순서도 셀 키 오름차순으로 고정된다.
+ *     아군 순회는 언제나 id 오름차순(`fillAllAllyIds`)이다.
  *  C) **`combat.ts`를 한 줄도 안 고친다.** 맞았는지는 `AllySim.gatherHpMark` 비교로 안다 —
  *     `damageAlly`가 채집을 끊어 주게 만들면 `combat ↔ gather` 값 순환이 생긴다.
  *
- * ── 다 캐도 칸은 열리지 않는다 (D1) ─────────────────────────────────────────
- * 이 파일은 `battle.ts`의 `scenery` Set에 **한 글자도 안 닿는다.** 다 캔 칸은 그루터기로
- * 남아 계속 건설 불가이고, 유료 제거 지수(`clearedScenery`)도 채집이 한 톨도 안 올린다.
+ * ── ⚠ 다 캔 칸은 **사라지고 건설 가능해진다** (D1 뒤집힘) ────────────────────
+ * 옛 규칙은 "다 캔 칸은 그루터기로 남고 건설 불가를 유지한다"(D1)였다. **사용자가 그
+ * 판정을 뒤집었다** — *"채집을 하고 나면 그자리에 없어져야 하는데 그대로 남아 있어"*.
+ * 그러므로 짐이 확정되는 순간 그 칸은 비고, `battle.ts grown()` 이 그 사실을 읽어
+ * `canPlaceAt`/`hasScenery` 를 함께 연다. 안 그러면 **화면에 아무것도 없는데 못 짓는 칸**이
+ * 되고 그건 설명할 방법이 없다.
+ *
+ * 이 파일은 여전히 `battle.ts` 의 `scenery` Set 에 **한 글자도 안 닿는다** — 그 집합의 뜻은
+ * "유료로 치우지 않았다" 하나로 남고(유료 제거 지수 `clearedScenery` 도 채집이 한 톨도
+ * 안 올린다), 건설 가능은 그 집합과 `taken` 의 **곱**이 정한다. 카운터 둘이 서로를 안 보는
+ * 것이 유일하게 안전한 배치다.
+ *
+ * ── 재생 (R1~R6) ───────────────────────────────────────────────────────────
+ * 다 캔 칸은 영구가 아니다. `GATHER_REGROW_TICKS` 뒤 **같은 종·같은 값**으로 돌아온다
+ * (`updateRegrow`, 8-a). 그것이 D1을 뒤집은 대가의 완화 장치다 — 채집이 여는 칸은
+ * 공짜 영구 건설칸이 아니라 **T틱짜리 창**이다.
+ * 그 창을 영구로 바꾸는 유일한 수단이 **그 자리에 타워를 짓는 것**이고(`burnRegrow`),
+ * 그것이 이 기능이 만드는 진짜 선택이다: *지금 지을까(칸을 영구히 얻고 그 자원을 태운다),
+ * 두고 계속 캘까(수입은 계속되지만 T틱마다 그 칸이 다시 막힌다).*
+ * 예외 둘: **광물은 안 자란다**(R4, `REGROWABLE_KINDS`) · **유료로 치운 칸은 안 자란다**
+ * (R-f, `takeCell(burn = true)`) — 돈 내고 치운 칸이 다시 막히면 그건 사기다.
  */
-import { GATHER_BASE_VALUE, GATHER_DELIVER_RANGE, gatherValueFor } from '@/data/balance';
-import { RESOURCE_DEFS, gatherTicksFor, isGathering, resourceKindOf } from '@/data/resources';
+import {
+  GATHER_BASE_VALUE,
+  GATHER_DELIVER_RANGE,
+  GATHER_REGROW_MAX,
+  GATHER_REGROW_TICKS,
+  gatherValueFor,
+} from '@/data/balance';
+import {
+  REGROWABLE_KINDS,
+  RESOURCE_DEFS,
+  gatherTicksFor,
+  isGathering,
+  resourceKindOf,
+} from '@/data/resources';
 import type { ResourceCellState, StageDef } from '@/data/types';
 import { addGold } from './combat';
 import { fillAllAllyIds, type AllySim, type SimCtx } from './entities';
 
 /**
- * 자원 칸 밭 — 판이 시작될 때 목록이 굳고 **`taken`만 변한다**. `SimCtx`가 소유한다.
+ * 자원 칸 밭 — 판이 시작될 때 목록이 굳고 **상태 셋(`taken`·`regrowAt`·`regrowsLeft`)만
+ * 변한다.** `kind`·`value` 는 생성 시 굳어 절대 안 변한다(재생도 그 둘을 다시 뽑지 않는다).
+ * `SimCtx`가 소유한다.
  *
  * 목록과 색인을 함께 드는 이유: 조회는 키 하나로 끝나야 하고(`at`), 순회는 **언제나
  * 배열**이어야 한다(계약 B). Map을 순회하면 그날부터 결정론이 자료구조 구현에 의존한다.
@@ -55,20 +89,37 @@ export class ResourceField {
   private readonly index = new Map<number, ResourceCellState>();
 
   /**
+   * 재생 주기 틱 — `takeCell` 이 읽는다. 밭이 들고 있는 이유는 주입구가 여기 하나로
+   * 모여야 "되돌리는 손잡이는 하나"가 유지되기 때문이다. 기본값은 `GATHER_REGROW_TICKS`.
+   */
+  readonly regrowTicks: number;
+
+  /**
    * @param scenery `battle.ts`가 들고 있는 소품 셀 집합. **읽기만 한다** — 채집은
-   *   이 집합을 절대 안 바꾼다(D1).
+   *   이 집합을 절대 안 바꾼다(건설 가능은 그 집합과 `taken` 의 곱이 정한다).
    * @param baseValue 짐값의 기준 크기. 기본값이 `GATHER_BASE_VALUE` 하나라 "되돌리는
    *   손잡이는 하나"(D9)가 그대로 지켜진다.
    *   ⚠ **그래도 옵션이어야 한다**: 주입구가 없으면 봉투가 짐값 축을 A/B할 수 없어
    *   대조군 `gather-x4`를 못 만들고, 그러면 채집 다리들이 전부 UNPROVEN으로 태어난다
    *   (`tests/sim/controls.ts`가 `SCENERY_CLEAR_BASE_COST`에 대해 겪은 그대로다).
    *   게임 코드에서 이 인자를 넘기는 곳은 **한 군데도 없다.**
+   * @param regrowMax 칸당 재생 횟수 상한 (기본 `GATHER_REGROW_MAX`).
+   *   ⚠ **판당 총액을 닫는 값이 이것이다** — 곧 대조군 `gather-regrow-x3`(총액 폭주)와
+   *   `gather-regrow-off`(재생 없는 세계 복원)가 이 인자 하나로 성립한다. 주입구가
+   *   없으면 재생 축의 새 다리가 전부 UNPROVEN으로 태어난다.
+   * @param regrowTicks 재생 주기 (기본 `GATHER_REGROW_TICKS`). 총액이 아니라 **모양**만 바꾼다.
    */
   constructor(
     stage: StageDef,
     scenery: ReadonlySet<number>,
-    { baseValue = GATHER_BASE_VALUE }: { baseValue?: number } = {},
+    {
+      baseValue = GATHER_BASE_VALUE,
+      regrowMax = GATHER_REGROW_MAX,
+      regrowTicks = GATHER_REGROW_TICKS,
+    }: { baseValue?: number; regrowMax?: number; regrowTicks?: number } = {},
   ) {
+    this.regrowTicks = Math.max(1, Math.round(regrowTicks));
+    const rmax = Math.max(0, Math.round(regrowMax));
     // ⚠ Set 순회 순서에 안 기댄다 — 정렬해서 목록의 신원을 셀 키가 정하게 한다(계약 B)
     const keys = [...scenery].sort((p, q) => p - q);
     const out: ResourceCellState[] = [];
@@ -86,6 +137,11 @@ export class ResourceField {
         kind,
         value: gatherValueFor(baseValue, RESOURCE_DEFS[kind].kindMul, dist),
         taken: false,
+        regrowAt: 0,
+        // R4) 광물(stone·flint·obsidian)은 안 자란다. `resourceKindOf` 가 셀 단독 해시라
+        //     이 값도 **좌표만의 함수**이고, 그래서 판당 총액이 시드와 무관하게 닫힌다:
+        //     총액 = Σ value × (1 + regrowsLeft). 그 항등식이 `18.rateCap` 을 살린다.
+        regrowsLeft: REGROWABLE_KINDS.has(kind) ? rmax : 0,
       };
       out.push(cell);
       this.index.set(key, cell);
@@ -96,6 +152,92 @@ export class ResourceField {
   /** 조회 — 그 셀에 소품이 없으면 null. **순회하지 않는다** */
   at(key: number): ResourceCellState | null {
     return this.index.get(key) ?? null;
+  }
+}
+
+/**
+ * **칸을 턴다** — 소품이 사라지고(R1) 재생 타이머가 걸린다(R2).
+ *
+ * ⚠⚠ **`taken`/`regrowAt`/`regrowsLeft` 셋을 함께 쓰는 자리는 이 함수 하나뿐이다.**
+ *   저장소 전체에 `cell.taken = true` 직접 대입이 **0건**이어야 한다. 셋이 갈리는 실패는
+ *   조용하다 — 타입 오류 0건이고, 짧은 판에서는 T가 안 지나 아무 일도 안 일어난다.
+ *   그 실패가 드러나는 유일한 통로는 **원장 재기록**이다(§8 위험 3).
+ *
+ * 부르는 곳은 정확히 둘이고, 갈리는 것은 인자 하나뿐이다:
+ *  · `updateGather` ② 짐 확정          → `burn = false` (T틱 뒤 다시 자란다)
+ *  · `battle.cmdClearScenery` 유료 제거 → `burn = true`  (**영영 안 자란다**, R-f)
+ *
+ * @param burn 재생권을 태운다. **돈 내고 치운 칸이 T틱 뒤 다시 막히면 그건 사기다** —
+ *   그리고 그 회귀는 `dozer` 팔이 오늘과 다른 판을 밟게 해 봉투 [6]을 통째로 가른다.
+ */
+export function takeCell(ctx: SimCtx, cell: ResourceCellState, burn: boolean): void {
+  cell.taken = true;
+  if (burn || cell.regrowsLeft <= 0) {
+    // 광물(R4)·유료 제거(R-f)·재생권 소진 — 셋 다 **영구**다. 되돌리는 코드는 없다.
+    cell.regrowsLeft = 0;
+    cell.regrowAt = 0;
+    return;
+  }
+  cell.regrowsLeft--;
+  // ⚠ **절대 틱**이다(잔여 틱이 아니다). `view.tick` 하나에만 걸려 있어 어긋날 자리가 없다.
+  cell.regrowAt = ctx.view.tick + ctx.resources.regrowTicks;
+}
+
+/**
+ * **재생권 소각** — 그 칸에 타워가 섰다 (R3). `battle.cmdPlace` 가 배치 성공 직후 부른다.
+ *
+ * ⚠ **되돌리는 코드는 저장소 어디에도 없다 — 타워를 팔아도 다시 안 자란다.** 근거 셋:
+ *  ① R3의 문언이 그것이다("타워를 지으면 영영 안 자란다").
+ *  ② **`regrowsLeft` 의 단조 감소가 종료 증명의 뼈대다**(`updateAllyAuto` 헤더 참조).
+ *     재생이 들어오면서 `taken` 은 이미 단조가 아니게 됐고, "판 전체의 수확 횟수가 유한하다"를
+ *     떠받치는 값이 이것 하나로 남았다. 이 값을 **늘리는** 간선이 하나라도 생기면 그 증명을
+ *     통째로 다시 써야 하고, 해시도 그만큼 복잡해진다.
+ *  ③ 짓고-팔기로 재생권을 무한 재활용하는 경로가 **원리적으로** 사라진다.
+ * 대가는 정직하게: 판 자리는 영영 맨땅으로 남는다. AoE 에서 숲 위에 지은 건물을 지워도
+ * 숲이 안 돌아오는 것과 같은 관습이라 설명이 필요 없다.
+ */
+export function burnRegrow(cell: ResourceCellState): void {
+  cell.regrowsLeft = 0;
+  cell.regrowAt = 0;
+}
+
+/**
+ * 8-a) **재생** — 다 캔 칸이 T틱 뒤 **같은 종·같은 값**으로 돌아온다 (R2).
+ *
+ * ⚠ **rng를 한 톨도 안 쓴다**(R5). `resourceKindOf` 를 다시 부르지 **않는다** — 부르는 순간
+ *   재생이 셀 해시가 아니라 **호출 횟수**에 걸리고, 그러면 같은 칸이 판마다 다른 종으로
+ *   돌아온다. 종도 값도 생성 시 굳은 것을 그대로 되쓴다(그래서 이 함수는 `value` 와 `kind` 에
+ *   한 글자도 안 쓴다).
+ *
+ * **틱 안의 자리는 8-a — `updateGather`(8-b) 바로 앞이다.** 이유 셋:
+ *  · 8-c(`updateAllyAuto`) 앞 → 이 틱에 자란 칸을 **같은 틱에** 일꾼이 잡는다(지연 0).
+ *    뒤에 두면 자란 칸이 언제나 한 틱 늦게 후보에 들어온다.
+ *  · 8-b 앞 → 예약은 **안 텄은 칸에만** 붙으므로(E-6) 자라는 칸에는 애초에 예약이 없다.
+ *    곧 `updateGather` ②의 "칸이 사라졌다" 가지와 이 함수는 서로를 못 본다. 방어선이
+ *    아니라 **순서**로 그것을 보장한다.
+ *  · `applyCommand` 는 `tick()` **밖**에서 돈다 → "지으려는 순간 발밑에서 나무가 자라는"
+ *    경합이 구조적으로 존재하지 않는다.
+ *
+ * ⚠ 이 함수는 **방치 판에서도 매 틱 돈다**(40칸 전부 `continue` 할 뿐). 곧 [5]·`18.idleZero`
+ *   의 근거가 "코드 경로의 부재"에서 "돌지만 아무 일도 안 한다"로 한 겹 약해졌다 —
+ *   그래서 이벤트 이름을 **`gatherRegrown`** 으로 못 박아 `runIdle` 의
+ *   `startsWith('gather')` 카운터가 그 사실을 **실행으로** 확인하게 한다.
+ */
+export function updateRegrow(ctx: SimCtx): void {
+  const tick = ctx.view.tick;
+  // ⚠ `list` 순회다(계약 B) — 셀 키 오름차순 고정이라 이벤트 순서가 자료구조 구현과 무관하다.
+  for (const cell of ctx.resources.list) {
+    if (cell.regrowAt === 0) continue; // 안 텄거나 · 영영 안 자란다 (광물·유료 제거·타워)
+    if (tick < cell.regrowAt) continue;
+    cell.taken = false;
+    cell.regrowAt = 0;
+    ctx.events.push({
+      type: 'gatherRegrown',
+      cellX: cell.cellX,
+      cellZ: cell.cellZ,
+      kind: cell.kind,
+      value: cell.value,
+    });
   }
 }
 
@@ -277,7 +419,12 @@ export function updateGather(ctx: SimCtx): void {
         a.gatherTicks++;
         if (a.gatherTicks >= need) {
           // 짐 하나 완성 = **이 순간 칸이 텄다** (한 칸 한 짐, D2)
-          cell.taken = true;
+          // ⚠ R-a) **타이머는 캔 순간에 시작한다 — 배달 순간이 아니다.** 근거 둘:
+          //   ① 칸이 화면에서 비는 것도 이 틱이다. 두 사실이 같은 틱이 아니면
+          //      **"없는데 아직 못 짓는 칸"** 이 생기고, 그게 D1을 뒤집은 이유 그 자체다.
+          //   ② 배달 시점으로 미루면 **짐을 진 채 죽은 사람의 칸이 영영 안 자란다**
+          //      (E-10과 결합) — 총액이 사람의 사망률로 새는 자리가 생긴다.
+          takeCell(ctx, cell, false);
           a.carryGold += cell.value; // 값이 여기서 굳는다 — 칸을 다시 조회하지 않는다
           a.carryCount++;
           a.gatherKey = -1;

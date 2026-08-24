@@ -181,3 +181,115 @@ describe('Decals — 부족 공격 사거리 바운더리', () => {
     expect(checked).toBeGreaterThan(20);
   });
 });
+
+/**
+ * 배치 하이라이트(슬롯 디스크) — **여닫이가 재병합을 안 부른다** (§D / gather-spec R1·R2).
+ *
+ * 개정 전 `addSlotCell` 은 셀이 늘 때마다 CircleGeometry 124개를 새로 굽고 메시를 갈았다.
+ * 그 값은 "셀 추가는 드물다"(골드 제거 판당 0.09회) 위에 서 있었고, 채집이 칸을
+ * 여닫기 시작하면서 그 전제가 깨졌다 — 수확 72 + 재생 32 = **판당 104회**다.
+ * 그래서 지금은 소품 칸까지 **꺼진 채로 미리 구워** 두고 정점만 접었다 편다.
+ *
+ * 잠그는 것 셋:
+ *  ① 여닫아도 지오메트리 객체가 그대로다 (재병합이면 갈린다)
+ *  ② 껐다 켜면 **정점이 원본과 비트 단위로 같다** (되돌리기가 근사면 원이 찌그러진다)
+ *  ③ 끄는 길이 실제로 있다 — 개정 전에는 addSlotCell 하나뿐이라 자란 칸에 하이라이트가
+ *    남아 "빛나는데 못 짓는 칸"이 될 참이었다
+ */
+describe('Decals — 배치 하이라이트 여닫이', () => {
+  const bare = [
+    { x: 1, z: 1 },
+    { x: 2, z: 1 },
+  ];
+  const scenery = [
+    { x: 5, z: 5 },
+    { x: 6, z: 5 },
+  ];
+
+  function slotMesh(scene: THREE.Scene): THREE.Mesh {
+    const found = scene.getObjectByName('slotHighlight') as THREE.Mesh | undefined;
+    if (!found) throw new Error('슬롯 메시를 못 찾았다');
+    return found;
+  }
+  /** 셀 하나의 정점 수 — 네 칸을 같은 원으로 구웠으므로 균등하다 */
+  function per(mesh: THREE.Mesh): number {
+    return mesh.geometry.getAttribute('position').count / 4;
+  }
+
+  it('소품 칸은 꺼진 채로 미리 구워 둔다 — 열고 닫아도 재병합이 없다', () => {
+    const { scene, decals } = make();
+    decals.init(bare, [], scenery);
+    const mesh = slotMesh(scene);
+    const geo = mesh.geometry;
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+    const home = new Float32Array(pos.array as Float32Array);
+
+    // 맨 셀은 켜져 있고 소품 칸은 꺼져 있다
+    expect(decals.slotCellOn(1, 1), '맨 셀이 꺼져 있다').toBe(true);
+    expect(decals.slotCellOn(5, 5), '소품 칸이 처음부터 켜져 있다').toBe(false);
+
+    const p2 = per(mesh);
+    // 꺼진 칸은 판이 시작될 때 이미 한 점으로 접혀 있다
+    const s0 = 2 * p2 * 3;
+    for (let i = 0; i < p2; i++) expect(home[s0 + i * 3]).toBe(home[s0]);
+
+    // 채집으로 칸이 열린다 — 정점이 실제 원으로 펴진다
+    decals.setSlotCell(5, 5, true);
+    expect(decals.slotCellOn(5, 5)).toBe(true);
+    expect(mesh.geometry, '재병합이 일어났다').toBe(geo);
+    const opened = new Float32Array(geo.getAttribute('position').array as Float32Array);
+    expect(new Set(Array.from(opened.subarray(s0, s0 + p2 * 3))).size, '열었는데 안 펴졌다')
+      .toBeGreaterThan(3);
+
+    // 닫았다 다시 열면 **비트 단위로 같은 원**이어야 한다 (근사로 되돌리면 원이 찌그러진다)
+    decals.setSlotCell(5, 5, false);
+    decals.setSlotCell(5, 5, true);
+    const reopened = geo.getAttribute('position').array as Float32Array;
+    for (let i = s0; i < s0 + p2 * 3; i++) {
+      expect(reopened[i], `정점 ${i} 가 원본과 다르다`).toBe(opened[i]);
+    }
+
+    // 재생으로 다시 닫힌다 — **이 길이 이번 개정에서 생겼다**
+    decals.setSlotCell(5, 5, false);
+    expect(decals.slotCellOn(5, 5), '닫히지 않았다 = "빛나는데 못 짓는 칸"').toBe(false);
+    expect(mesh.geometry, '재병합이 일어났다').toBe(geo);
+    // 접힌 셀은 한 점이다 = 삼각형이 퇴화해 안 보인다
+    const off = geo.getAttribute('position').array as Float32Array;
+    const s = 2 * p2 * 3;
+    for (let i = 0; i < p2; i++) {
+      expect(off[s + i * 3]).toBe(off[s]);
+      expect(off[s + i * 3 + 2]).toBe(off[s + 2]);
+    }
+    // 이웃 칸(6,5)은 한 톨도 안 건드렸다
+    const t = 3 * p2 * 3;
+    for (let i = t; i < t + p2 * 3; i++) expect(off[i]).toBe(home[i]);
+    decals.dispose();
+  });
+
+  it('맨 셀은 여닫이의 영향을 안 받는다 — 원래 지을 수 있던 칸이 사라지면 안 된다', () => {
+    const { scene, decals } = make();
+    decals.init(bare, [], scenery);
+    const mesh = slotMesh(scene);
+    const home = new Float32Array(mesh.geometry.getAttribute('position').array as Float32Array);
+    decals.setSlotCell(5, 5, true);
+    decals.setSlotCell(6, 5, true);
+    decals.setSlotCell(5, 5, false);
+    const now = mesh.geometry.getAttribute('position').array as Float32Array;
+    for (let i = 0; i < 2 * per(mesh) * 3; i++) expect(now[i], '맨 셀 정점이 변했다').toBe(home[i]);
+    expect(decals.slotCellOn(1, 1)).toBe(true);
+    expect(decals.slotCellOn(2, 1)).toBe(true);
+    decals.dispose();
+  });
+
+  it('없는 칸을 여닫아도 아무 일도 안 일어난다', () => {
+    const { scene, decals } = make();
+    decals.init(bare, [], scenery);
+    const mesh = slotMesh(scene);
+    const home = new Float32Array(mesh.geometry.getAttribute('position').array as Float32Array);
+    decals.setSlotCell(99, 99, true);
+    expect(decals.slotCellOn(99, 99)).toBe(false);
+    const now = mesh.geometry.getAttribute('position').array as Float32Array;
+    for (let i = 0; i < home.length; i++) expect(now[i]).toBe(home[i]);
+    decals.dispose();
+  });
+});

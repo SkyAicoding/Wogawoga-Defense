@@ -527,13 +527,13 @@ function runHometown(seed: number): { hashes: number[]; shots: number; upgrades:
 //  ② 같은 칸에 둘 → 예약 배타성 (E-8·E-9)
 //  ③ 채집 중 다른 칸으로 moveAlly (E-3)
 //  ④ carryCap 2로 두 칸 → 자동 귀환 → 배달 (D6·D3)
-//  ⑤ 텄음 칸에 타워 배치 시도 → 실패 (D1)
+//  ⑤ 텄음 칸에 타워 배치 → **성공**한다 (D1 뒤집힘: 다 캔 칸은 사라지고 열린다)
 //  ⑥ 안 턴 칸을 골드로 치우기 (E-14)
 //  ⑦ 적이 붙어 진행분이 깨졌다 다시 캐기 (E-11)
 //  ⑧ 운반 중 사망 (E-10)
 // 잠그는 것: 아군 다섯 필드(gatherKey/gatherTicks/carryGold/carryCount/gatherHpMark)와
-// 자원 밭(taken)이 hash()에 들어가는가. 하나라도 빠지면 "언제 누가 무엇을 캐는가"의
-// 발산을 해시가 놓친다.
+// 자원 밭 **셋**(taken/regrowAt/regrowsLeft)이 hash()에 들어가는가. 하나라도 빠지면
+// "언제 누가 무엇을 캐는가"의 발산을 해시가 놓친다.
 //
 // ⚠ **짐값 기준을 6으로 주입해 돌린다**(createBattle의 BattleTuning). 배포본 상수는 아직
 //   0이라(T6이 켠다) 주입 없이는 carryGold·v.gold가 **영원히 0**이고, 그러면 이 시나리오가
@@ -577,10 +577,14 @@ interface GatherRun {
   lost: Record<'hit' | 'moved' | 'cleared' | 'died', number>;
   finalGold: number;
   takenCells: number;
-  /** ⑤ 텄음 칸이 여전히 건설 불가인가 (D1의 직접 증거) */
-  takenStillBlocked: boolean;
-  /** ⑤ 텄음 칸의 유료 제거 비용이 그대로인가 — 채집은 제거 지수를 한 톨도 안 건드린다 */
+  regrowAtSum: number;
+  regrowsLeft: number;
+  /** ⑤ 텄음 칸이 **건설 가능**해졌는가 (D1 뒤집힘의 직접 증거) */
+  takenOpensCell: boolean;
+  /** ⑤ **안 텄은 다른 칸**의 유료 제거 비용이 그대로인가 — 채집은 제거 지수를 안 건드린다 */
   clearCostUnchanged: boolean;
+  /** 판 시작 시점의 재생권 총합 — 아래 `regrowsLeft` 와 비교해 "재생이 실제로 돌았나"를 본다 */
+  regrowsLeft0: number;
 }
 
 function runGather(seed: number): GatherRun {
@@ -627,9 +631,23 @@ function runGather(seed: number): GatherRun {
   let delivered = 0;
   let deliveredGold = 0;
   // 초기값은 **기대와 반대**로 둔다 — 탐침이 아예 안 돌면 통과가 아니라 실패다
-  let takenStillBlocked = true;
+  let takenOpensCell = false;
   let clearCostUnchanged = false;
-  const clearCost0 = sim.clearSceneryCost(0, 4);
+  // ⚠ 지수(clearedScenery)를 재는 기준은 **다른 칸**이어야 한다. (0,4)는 곧 텄음이 되고
+  //   텄음 칸은 `hasScenery === false` 라 `clearSceneryCost` 가 null 이 된다(R-e) —
+  //   그 null 을 지수 변화로 오독하면 "채집이 지수를 올렸다"는 거짓 신호가 된다.
+  //   스크립트가 손대는 칸 여섯을 피해 고른다 — 목록을 손으로 베끼면 스크립트가 바뀌는 날
+  //   조용히 어긋나므로 **스크립트에서 직접 뽑는다.**
+  const touched = new Set(
+    GATHER_SCRIPT.map(([, c]) =>
+      'cellX' in c ? `${(c as { cellX: number }).cellX},${(c as { cellZ: number }).cellZ}` : '',
+    ),
+  );
+  const probeCell = sim.state.resources.find((r) => !touched.has(`${r.cellX},${r.cellZ}`));
+  expect(probeCell, '스크립트가 안 건드리는 자원 칸이 있어야 지수 탐침이 성립한다').toBeDefined();
+  const PROBE = probeCell as { cellX: number; cellZ: number };
+  const clearCost0 = sim.clearSceneryCost(PROBE.cellX, PROBE.cellZ);
+  const regrowsLeft0 = sim.state.resources.reduce((n, r) => n + r.regrowsLeft, 0);
   for (let t = 0; t < 1400; t++) {
     for (const [at, cmd] of GATHER_SCRIPT) if (at === t) sim.applyCommand(cmd);
     sim.tick();
@@ -642,10 +660,10 @@ function runGather(seed: number): GatherRun {
       } else if (ev.type === 'gatherLost') lost[ev.reason]++;
     }
     if (t === TAKEN_PROBE_TICK) {
-      // ⑤ 다 캔 칸은 **그루터기로 남는다** — 소품 Set에서 빠지지 않으므로 계속 건설 불가이고
-      //    유료 제거 비용도 그대로다(채집은 clearedScenery 지수를 안 올린다)
-      takenStillBlocked = !sim.canPlaceAt(0, 4);
-      clearCostUnchanged = sim.clearSceneryCost(0, 4) === clearCost0;
+      // ⑤ ⚠ 다 캔 칸은 **사라지고 건설 가능해진다**(D1 뒤집힘). 그리고 그렇게 열려도
+      //    유료 제거 지수(clearedScenery)는 한 톨도 안 오른다 — 두 카운터가 서로를 안 본다.
+      takenOpensCell = sim.canPlaceAt(0, 4);
+      clearCostUnchanged = sim.clearSceneryCost(PROBE.cellX, PROBE.cellZ) === clearCost0;
     }
     if (t % 50 === 49) hashes.push(sim.hash());
   }
@@ -658,7 +676,10 @@ function runGather(seed: number): GatherRun {
     lost,
     finalGold: sim.state.gold,
     takenCells: sim.state.resources.filter((r) => r.taken).length,
-    takenStillBlocked,
+    regrowAtSum: sim.state.resources.reduce((n, r) => n + r.regrowAt, 0),
+    regrowsLeft: sim.state.resources.reduce((n, r) => n + r.regrowsLeft, 0),
+    takenOpensCell,
+    regrowsLeft0,
     clearCostUnchanged,
   };
 }
@@ -795,14 +816,19 @@ describe('결정론', () => {
     expect(a.lost.cleared, 'E-14 캐던 칸이 골드로 치워졌다').toBeGreaterThan(0);
     expect(a.lost.hit, 'E-11 맞아서 진행분이 0으로').toBeGreaterThan(0);
     expect(a.lost.died, 'E-10 운반 중 사망').toBeGreaterThan(0);
-    // ⑤ D1 — 다 캔 칸은 그루터기로 남아 **여전히 건설 불가**이고 제거 비용도 그대로다
-    expect(a.takenStillBlocked, '텄음 칸은 여전히 건설 불가다(D1)').toBe(true);
+    // ⑤ ⚠ D1 뒤집힘 — 다 캔 칸은 **사라지고 건설 가능**해진다(사용자 재정의)
+    expect(a.takenOpensCell, '텄음 칸은 건설 가능하다(D1 뒤집힘)').toBe(true);
     expect(a.clearCostUnchanged, '채집은 유료 제거 지수를 한 톨도 안 올린다').toBe(true);
+    // 재생 상태가 실제로 움직였는지 — 안 움직였으면 아래 해시 비교가 재생에 대해 헛돈다
+    expect(a.regrowsLeft, '재생권이 실제로 소모됐다 — 안 그러면 해시 비교가 재생에 대해 헛돈다')
+      .toBeLessThan(a.regrowsLeft0);
     // ── 본론: 전 구간 해시 일치 ────────────────────────────────────────────────
     expect(a.hashes).toEqual(b.hashes);
     expect(a.hashes.length).toBe(28);
     expect(b.finalGold).toBe(a.finalGold);
     expect(b.takenCells).toBe(a.takenCells);
+    expect(b.regrowAtSum).toBe(a.regrowAtSum);
+    expect(b.regrowsLeft).toBe(a.regrowsLeft);
     expect(b.lost).toEqual(a.lost);
   });
 
@@ -909,6 +935,34 @@ describe('결정론', () => {
     expect(cell, '목 스테이지에 자원 칸이 있다').toBeDefined();
     (cell as { taken: boolean }).taken = true;
     expect(a.hash(), '자원 칸의 taken이 해시에 없다').not.toBe(b.hash());
+  });
+
+  /**
+   * 재생 상태 **둘**이 각각 hash()에 들어가는지 — 한꺼번에 흔들면 하나만 들어가 있어도
+   * 통과하므로 반드시 하나씩 흔든다. 둘은 다른 것을 잡는다:
+   *  · regrowAt    — **taken 에서 유도되지 않는다.** 같은 틱에 똑같이 "텄음"인 두 칸도
+   *                  자라는 틱이 다르면 일꾼이 다음에 어디로 가는가(pickAutoCell)와
+   *                  그 칸에 지을 수 있는 마지막 틱이 다르다. 1틱만 어긋나도 타워 한 기의
+   *                  자리가 갈리고, 그 발산은 몇 백 틱 뒤 gold 로만 보인다.
+   *  · regrowsLeft — **판당 총액의 상한 그 자체다.** R3(타워 소각)을 한 번 빠뜨리면
+   *                  이 값이 안 접힐 때 판이 끝날 때까지 아무 데서도 안 드러난다.
+   */
+  it('자원 칸의 regrowAt·regrowsLeft가 **각각** hash()에 들어간다', () => {
+    const mk = (): ReturnType<typeof createBattle> =>
+      createBattle(
+        options({ seed: 5, deck: ['spear'], stage: stageDef({ startGold: 100000 }), waves: [wave([{ count: 0 }])] }),
+        { gatherBaseValue: 6 },
+      );
+    for (const field of ['regrowAt', 'regrowsLeft'] as const) {
+      const a = mk();
+      const b = mk();
+      expect(a.hash()).toBe(b.hash());
+      const cell = b.state.resources[0];
+      expect(cell, '목 스테이지에 자원 칸이 있다').toBeDefined();
+      const rec = cell as unknown as Record<string, number>;
+      rec[field] = (rec[field] ?? 0) + 7;
+      expect(a.hash(), `자원 칸의 ${field}가 해시에 없다`).not.toBe(b.hash());
+    }
   });
 
   it('기지가 쏘고 레벨업하는 시나리오도 해시 전 구간 일치', () => {

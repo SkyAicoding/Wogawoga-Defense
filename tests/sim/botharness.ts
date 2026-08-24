@@ -672,11 +672,22 @@ export interface BotResult {
   /** 짐을 진 채 죽은 채집꾼 수 */
   gatherDeaths: number;
   /**
-   * 이 판에서 **텄음**이 된 칸 수 (스테이지1은 40칸이 상한).
-   * 규칙 8 뒤로는 `sim.state.resources`를 판 끝에 그대로 세어 온다 — `taken`이 단조라
-   * 최종 개수가 곧 누적 개수이고, 하네스가 장부를 따로 들 이유가 없다.
+   * 이 판에서 **실제로 캔 횟수** = `gathered` 이벤트 수.
+   *
+   * ⚠⚠ **옛 `takenCells`(판 끝 스냅샷)를 폐기하고 이것으로 바꿨다.** 재생이 들어오기 전에는
+   *   `taken`이 단조라 "판 끝에 텄음인 칸 수 = 누적 수확 횟수"였다. 재생이 그 등식을 깬다:
+   *   판 끝 스냅샷은 이제 **"지금 비어 있는 칸 수"** 라서 `≤ 40` 이 **자동으로 참**이 되고,
+   *   그러면 `18.taken` 이 이 저장소가 금지한 **실패 불가능한 계약**이 된다.
+   *   이벤트를 세면 상한이 다시 유한하다: `Σ (1 + regrowsLeft@생성)` (s1 · R=1 이면 72).
    */
-  takenCells: number;
+  harvests: number;
+  /**
+   * 이 판에서 칸이 **다시 자란 횟수** = `gatherRegrown` 이벤트 수.
+   *
+   * ⚠ 이 값이 없으면 **재생 코드가 통째로 죽어도 [18] 전부가 통과한다** —
+   *   `sellTower`·`setTargeting` 이 겪은 함정 그대로다. `18.gatherHappens` 가 이것을 읽는다.
+   */
+  regrows: number;
   /**
    * 웨이브대별 배달 골드 — `[w1-10, w11-20, w21-30, w31-40, w41-50]`.
    * §8-3의 소비 곡선을 확인할 **유일한** 통로다. ⚠ 다만 §1-5-A가 실측으로 못 박았듯이
@@ -690,7 +701,12 @@ export interface BotResult {
    * 비율로 읽으면 "아군 시간의 몇 %가 전투에서 빠졌나"가 된다.
    */
   allyGatherTicks: number;
-  /** sim이 낸 채집 이벤트 수 (`gatherStarted`/`gathered`/`gatherDelivered`/`gatherLost` 합) */
+  /**
+   * sim이 낸 채집 이벤트 수
+   * (`gatherStarted`/`gathered`/`gatherDelivered`/`gatherLost`/**`gatherRegrown`** 합).
+   * ⚠ 재생 이벤트 이름이 `gather` 로 시작하는 덕에 `18.idleZero` 가 **공짜로**
+   *   "방치 판은 재생도 0건"까지 함께 증명한다(types.ts `gatherRegrown` 주석의 유도).
+   */
   gatherEvents: number;
   /*
    * ⚠ `gatherCmds`(정책이 낸 커맨드 수)와 `gatherStub`(스텁이었는가)는 **지웠다**(규칙 8).
@@ -1247,6 +1263,9 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
   let gatherLostGold = 0;
   let gatherDeaths = 0;
   let gatherEvents = 0;
+  /** 판 끝 스냅샷이 아니라 **이벤트 누적**이다 — 재생이 그 등식을 깼다(BotResult.harvests) */
+  let harvests = 0;
+  let regrows = 0;
   let allyGatherTicks = 0;
   /** 웨이브대 5칸 — [w1-10, w11-20, w21-30, w31-40, w41-50] */
   const gatherGoldByBand = [0, 0, 0, 0, 0];
@@ -1609,8 +1628,14 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     if (ev.type === 'gathered') {
       gatherEvents++;
       gatherLoads++;
-      // ⚠ 텄음 칸은 여기서 안 센다 — 판 끝에 `sim.state.resources`를 세면 그만이다
-      //   (`taken`이 단조라 최종 개수 = 누적 개수. 하네스가 장부를 들면 그것이 또 샌다).
+      // ⚠ **여기서 센다.** 재생 전에는 판 끝 스냅샷으로 갈음했지만(`taken`이 단조였다),
+      //   재생이 그 등식을 깼다 — 스냅샷은 이제 "지금 비어 있는 칸 수"다(위 `harvests` 주석).
+      harvests++;
+      return;
+    }
+    if (ev.type === 'gatherRegrown') {
+      gatherEvents++;
+      regrows++;
       return;
     }
     if (ev.type === 'gatherStarted') {
@@ -1770,7 +1795,8 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     gatherDeliveries,
     gatherLostGold,
     gatherDeaths,
-    takenCells: sim.state.resources.filter((c) => c.taken).length,
+    harvests,
+    regrows,
     gatherGoldByBand,
     allyGatherTicks,
     gatherEvents,

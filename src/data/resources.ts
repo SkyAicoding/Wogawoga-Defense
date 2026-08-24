@@ -18,6 +18,8 @@
  * (`balance.ts gatherValueFor`) — 곧 이 파일은 총액에 대해 **배수만** 낸다.
  */
 import { Rng, hashSeed } from '@/core/rng';
+// ⚠ `balance.ts` 는 `./types` 만 (타입으로) 임포트한다 — 이 방향에 순환이 없다.
+import { ALLY_WORKER_GATHER_PCT } from './balance';
 import type { BiomeId, ResourceDef, ResourceId, StageDef } from './types';
 import type { AllyDef, AllyState } from './types';
 
@@ -165,6 +167,29 @@ export const RESOURCE_WEIGHTS: Readonly<
 export const LANDMARK_KINDS: ReadonlySet<ResourceId> = new Set<ResourceId>(['wood', 'stone']);
 
 /**
+ * **다시 자라는 종** (R4). 다 캔 칸이 `GATHER_REGROW_TICKS` 뒤 같은 종·같은 값으로 돌아온다.
+ *
+ * ⚠ 광물 셋(`stone`·`flint`·`obsidian`)은 **여기 없다.** 근거 둘:
+ *  ① 자연스럽다 — 딸기는 다시 열리고 나무는 다시 자라지만 캐낸 부싯돌은 안 돌아온다.
+ *  ② **재생 풀이 줄어 총액 상한이 낮아진다.** s1 40칸 중 8칸(총액의 24.2%)이 광물이라,
+ *     그 8칸은 "돈이 아니라 시간으로 사는 **영구** 건설칸"이 되고 나머지 32칸만 재생한다.
+ *     곧 이 집합이 `18.rateCap` 의 총액 식에 직접 들어간다(§4: Σ v × (1 + regrowsLeft)).
+ *
+ * `resourceKindOf` 가 셀 단독 해시라 이 집합을 태운 `regrowsLeft` 도 **좌표만의 함수**다 —
+ * 그래서 판당 총액이 시드와 무관하게 닫힌다.
+ *
+ * sim(`sim/gather.ts` ResourceField) 과 UI("여기 지으면 다시 안 자라요" 경고)가 **같은
+ * 집합**을 읽는다. 둘이 각자 목록을 들면 언젠가 한 곳만 어긋난다 — `isGathering` 과 같은 논거.
+ */
+export const REGROWABLE_KINDS: ReadonlySet<ResourceId> = new Set<ResourceId>([
+  'berry',
+  'honey',
+  'mushroom',
+  'fruit',
+  'wood',
+]);
+
+/**
  * 셀 → 자원 종류. **셀 하나만 보고 정한다** — 순회 순서·목록 길이·다른 셀의 값에
  * 전혀 의존하지 않는다. `sceneryCells`(grid.ts)의 스트림 방식과 다르게 만든 이유가 셋:
  *  ① sim은 Set을 정렬해 쓰고(ResourceField) 렌더는 `[...scenery].map(...)`으로 쓴다.
@@ -254,4 +279,19 @@ export function isGathering(a: AllyState): boolean {
 export function gatherTicksFor(def: AllyDef, kind: ResourceId): number {
   const pct = def.gatherPct ?? 100;
   return Math.max(1, Math.round((RESOURCE_DEFS[kind].ticks * 100) / pct));
+}
+
+/**
+ * **이 종은 일꾼인가** = 자동 행동이 있는 종인가 (규칙 8, 판정선의 유도는
+ * `balance.ALLY_WORKER_GATHER_PCT` 주석).
+ *
+ * ⚠ **왜 `sim/allies.ts` 가 아니라 여기 있는가**: 렌더와 UI 가 같은 답을 봐야 하기 때문이다.
+ *   대기 말뚝(`render/views/healthbars.ts`)과 "📍N명 대기"(`ui/screens/battlehud.ts`)는
+ *   자동이 **있는** 종에만 뜻이 있다 — 전투 3종에게 `autoHold` 는 상태가 아니라 상수라
+ *   그 표시가 아무것도 말하지 않는다(§D-3). 그런데 `src/render/**`·`src/ui/**` 는
+ *   `@/sim` 을 임포트할 수 없다. `isGathering` 이 이 파일에 있는 것과 **정확히 같은 이유**다.
+ *   `sim/allies.ts isWorker` 는 이것을 그대로 부른다 — 구현은 하나다.
+ */
+export function isWorkerDef(def: AllyDef): boolean {
+  return (def.gatherPct ?? 100) >= ALLY_WORKER_GATHER_PCT;
 }
