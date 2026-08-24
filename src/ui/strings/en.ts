@@ -120,7 +120,7 @@ export const en: Record<string, string> = {
   // ⚠ 조작이 기기마다 갈리므로 줄도 둘이다 (ko 주석 참조)
   'battle.ally.rulesMouse': 'Left-click one to select all of that kind → right-click to move, gather or attack · up to {m}',
   'battle.ally.rulesTouch': 'Tap one on the board to select all of that kind → tap a tile to move, gather or attack · up to {m}',
-  'battle.ally.rulesAuto': 'Left alone they gather the nearest resource · point at an empty tile and they hold it · point at the village and they go back to working on their own',
+  'battle.ally.rulesAuto': 'Gatherers work the nearest resource unasked · point at an empty tile and they hold it · point at the village and they go back to working on their own',
   'battle.ally.sunder': 'Opens hide',
   'battle.ally.sunderHint': 'Enemies this one pins lose their hide cap — a big hit lands in full',
   'ally.clubber.name': 'Clubber',

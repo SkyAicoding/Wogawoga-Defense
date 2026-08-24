@@ -253,6 +253,17 @@ export class PlacementController {
    * 나눠 놓고 다시 겹치면 고친 것이 없다.
    */
   private onCommand(px: number, py: number, oneBtn: boolean): void {
+    /*
+     * 카드를 든 채로는 **명령이 아니라 취소**다. 손에 카드가 있으면 지금 하려는 일은
+     * 짓는 것이고(onTap의 순서 규칙과 같은 판단), 그 상태에서 우클릭이 부대를 움직이면
+     * 조준하던 고스트는 그대로인 채 판 반대편에서 사람들이 출발한다 — 탭 하나가 두
+     * 가지를 뜻하는 바로 그 사고다. 우클릭 = 취소는 이 장르의 관습이기도 하다.
+     * (터치는 이 갈래에 안 들어온다 — onTap이 카드 모드를 먼저 가져간다)
+     */
+    if (this.selectedCardIndex !== null) {
+      this.selectCard(null);
+      return;
+    }
     if (this.selectedAllyDef === null) return;
     const defId = this.selectedAllyDef;
     const cell = this.cellAt(px, py);

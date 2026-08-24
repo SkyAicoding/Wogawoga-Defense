@@ -1136,3 +1136,76 @@ describe('급소 열기 — 파수꾼이 붙잡은 적은 가죽이 열린다 (A
     for (const a of late) expect(a).toBe(10); // 상한이 돌아왔다
   });
 });
+
+// ---------------------------------------------------------------------------
+/**
+ * 규칙 8) **자동 행동의 스위치 하나** — `AllyState.autoHold`.
+ *
+ * 자동 목표 선택 자체(어느 칸을 고르는가·언제 다시 나가는가)는 `tests/sim/gather.test.ts`가
+ * 잠근다. 여기서 재는 것은 **그 스위치를 누가 언제 뒤집는가**다: 명령이 곧 온오프이고
+ * (규칙 8-b), 그 비트가 **풀 재사용에서 새면 안 된다**(resetAlly).
+ */
+describe('자동 행동 스위치 (규칙 8-b)', () => {
+  /** 이 묶음 전용 — 진짜 채집꾼과 같은 축(일꾼 판정선 위)의 목 정의 */
+  const WORKER = { gatherer: { gatherPct: 300, blocks: false, speed: 1.3, carryCap: 1 } };
+  /** 자원이 없는 빈 칸 (목 스테이지의 소품 칸 11개에 안 들어간다) */
+  const EMPTY = { x: 5, z: 0 };
+  /** 자원 칸 */
+  const RES = { x: 7, z: 0 };
+  /** 기지 셀 */
+  const HOME = { x: 9, z: 2 };
+
+  it('찍은 칸의 뜻이 자동의 온오프다 — 빈 칸만 "여기 지켜"다', () => {
+    const sim = allySim({ ally: WORKER, delay: NO_ENEMIES });
+    expect(train(sim, 'gatherer')).toBe(true);
+    const a = sim.state.allies[0] as AllyState;
+    expect(a.autoHold, '태어날 때는 자동이 켜져 있다').toBe(false);
+    expect(sim.hasScenery(RES.x, RES.z), '전제: 그 칸에 자원이 있다').toBe(true);
+
+    expect(order(sim, EMPTY.x, EMPTY.z, a.id)).toBe(true);
+    expect(a.autoHold, '빈 칸 = 여기 지켜').toBe(true);
+    expect(order(sim, RES.x, RES.z, a.id)).toBe(true);
+    expect(a.autoHold, '자원 칸 = 일감이라 자동이 다시 켜진다').toBe(false);
+    expect(order(sim, EMPTY.x, EMPTY.z, a.id)).toBe(true);
+    expect(a.autoHold).toBe(true);
+    expect(order(sim, HOME.x, HOME.z, a.id)).toBe(true);
+    expect(a.autoHold, '기지 셀 = 돌아와서 내려놓고 다시 일해').toBe(false);
+  });
+
+  it('명령을 안 받은 사람의 스위치는 안 건드린다 (자원 칸은 한 사람만 간다 — E-9)', () => {
+    const sim = allySim({ ally: WORKER, delay: NO_ENEMIES });
+    expect(train(sim, 'gatherer')).toBe(true);
+    expect(train(sim, 'gatherer')).toBe(true);
+    const [a, b] = sim.state.allies as [AllyState, AllyState];
+    // 둘 다 대기로 만들어 놓고 → 자원 칸 종족 명령 → 한 사람만 자동이 켜져야 한다
+    expect(order(sim, EMPTY.x, EMPTY.z)).toBe(true);
+    expect([a.autoHold, b.autoHold]).toEqual([true, true]);
+    expect(sim.applyCommand({ type: 'moveAlly', allyId: -1, defId: 'gatherer', cellX: RES.x, cellZ: RES.z })).toBe(true);
+    expect(a.autoHold, '그 칸을 맡은 사람만 자동이 켜진다').toBe(false);
+    expect(b.autoHold, '루프에 안 들어온 사람은 대기 그대로다').toBe(true);
+  });
+
+  /**
+   * ⚠ **resetAlly 전용 회귀** — 이 항목이 빨개지는 유일한 원인은 `entities.resetAlly`가
+   * `autoHold`를 안 지우는 것이다. 안 지우면 새 부족원이 앞사람의 대기 상태를 물려받아
+   * **명령을 한 번도 안 받았는데 자동이 꺼진 채** 태어나고, 그 갈림이 풀 재사용 순서
+   * (= 시드)를 타므로 판마다 다른 게임이 된다. 화면에서는 "왜 얘만 안 움직이지"다.
+   */
+  it('풀 재사용) "여기 지켜"를 받은 채 죽어도 다음 부족원은 자동으로 일하러 나간다', () => {
+    const sim = allySim({ ally: WORKER, delay: NO_ENEMIES });
+    expect(train(sim, 'gatherer')).toBe(true);
+    const first = sim.state.allies[0] as AllyState;
+    expect(order(sim, EMPTY.x, EMPTY.z, first.id)).toBe(true);
+    expect(first.autoHold).toBe(true);
+    kill(first);
+    runTicks(sim, 1);
+    expect(sim.state.allies).toHaveLength(0);
+
+    // 같은 슬롯을 물려받는 새 부족원
+    expect(train(sim, 'gatherer')).toBe(true);
+    const next = sim.state.allies[0] as AllyState;
+    expect(next.autoHold, '앞사람의 대기 상태가 새면 안 된다').toBe(false);
+    runTicks(sim, 2);
+    expect(next.gatherKey, '명령 없이도 스스로 일감을 잡는다').toBeGreaterThanOrEqual(0);
+  });
+});

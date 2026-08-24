@@ -1015,10 +1015,52 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
 
   const target = await pickBoardCell(page, before[0] as { x: number; z: number });
   expect(target.d, '집결 지점과 너무 가까운 칸을 골랐다 (이동을 관찰할 수 없다)').toBeGreaterThan(3);
+
+  /*
+   * ②-a **음성 케이스: 좌클릭은 이동시키지 않는다** (10단계 입력 모델).
+   * 사용자 지시 ①("좌 선택 · 우 명령")의 절반은 '좌클릭이 더 이상 명령이 아니다'이고,
+   * 그쪽은 어서션이 없으면 회귀해도 아무도 모른다 — 옛 코드도 이 클릭 뒤에는 유닛이
+   * 움직이므로 아래 ③이 그대로 초록이기 때문이다. 그래서 여기서 먼저 못을 박는다.
+   * 겸해서 **좌클릭 = 선택 해제**도 확인한다(찍는 칸은 pickBoardCell이 고른 건설 가능
+   * 칸이라 타워·소품·기지가 없다 = 다른 선택이 대신 켜지지 않는다).
+   */
+  const beforeTargets = await page.evaluate(() =>
+    window.__wgd!.sim.state.allies.map((a) => ({ id: a.id, tgtX: a.tgtX, tgtZ: a.tgtZ })),
+  );
   await page.mouse.click(target.px, target.py);
   await page.waitForTimeout(250);
-  const cleared = await page.evaluate(() => window.__wgd!.selectedAlly());
-  expect(cleared, '명령을 내렸으면 선택이 풀려야 한다').toBeNull();
+  const afterLeft = await page.evaluate(() => ({
+    sel: window.__wgd!.selectedAlly(),
+    tgts: window.__wgd!.sim.state.allies.map((a) => ({ id: a.id, tgtX: a.tgtX, tgtZ: a.tgtZ })),
+  }));
+  expect(afterLeft.sel, '좌클릭은 선택 전용이므로 빈 칸을 찍으면 선택이 풀린다').toBeNull();
+  expect(afterLeft.tgts, '좌클릭이 이동 명령으로 샜다 (우클릭 모델이 깨졌다)').toEqual(beforeTargets);
+
+  // ②-b 다시 고르고, 이번엔 **우클릭**으로 명령한다
+  await page.mouse.click(pick.x, pick.y);
+  await page.waitForTimeout(200);
+  expect(await page.evaluate(() => window.__wgd!.selectedAlly())).toBe('clubber');
+  await page.mouse.click(target.px, target.py, { button: 'right' });
+  await page.waitForTimeout(250);
+  /*
+   * **데스크톱은 명령 뒤에도 선택이 남는다** — 골라 놓고 여러 번 시키는 것이 우클릭
+   * 모델의 전부다(placement.ts onCommand). 9단계까지는 여기서 null이었다.
+   * (터치는 여전히 풀린다 — 아래 '터치 조작' 계약이 그쪽을 잠근다)
+   */
+  const kept = await page.evaluate(() => window.__wgd!.selectedAlly());
+  expect(kept, '우클릭 명령 뒤에 선택이 사라졌다 (연속 지시가 불가능해진다)').toBe('clubber');
+
+  /*
+   * ②-c 선택을 내려놓는다 — **아래 ④의 표본 조건을 표본 A와 같게 맞추기 위해서다.**
+   * 선택이 켜져 있으면 사거리 바운더리 메시(decals.showAllyRanges)가 목표 표식과
+   * **동시에** 살아 델타가 하나 더 붙는다. 그건 이동의 값이 아니라 '고르고 있음'의 값이라
+   * 이 계약이 청구할 항목이 아니다(그 +1은 placement.onCommand 주석이 이름 대서 받는다).
+   * 지금 찍어도 안전한 이유: 위 우클릭 뒤 250ms만 흘러 부족원은 아직 집결 지점 근처이고,
+   * 목표 칸과는 3타일 넘게 떨어져 있다 = 이 좌클릭이 사람을 집지 않는다.
+   */
+  await page.mouse.click(target.px, target.py);
+  await page.waitForTimeout(150);
+  expect(await page.evaluate(() => window.__wgd!.selectedAlly()), '선택이 안 풀렸다').toBeNull();
 
   const ordered = await page.evaluate(() =>
     window.__wgd!.sim.state.allies.map((a) => ({ id: a.id, tgtX: a.tgtX, tgtZ: a.tgtZ })),
@@ -1181,6 +1223,95 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
   expect(scattered.calls - clustered.calls, msg).toBeLessThanOrEqual(1);
   expect(scattered.tris - clustered.tris, msg).toBeLessThanOrEqual(2_000);
   await page.evaluate(() => window.__wgd!.pause(false));
+
+  expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
+});
+
+/*
+ * ── 터치 조작 (P1의 나머지 절반) ────────────────────────────────────────────
+ * 데스크톱은 좌 선택·우 명령으로 갈렸지만 **폰은 흐름을 그대로 둔다**: 버튼이 하나뿐이라
+ * 좌탭이 선택과 명령을 겸하고, 명령이 나가면 선택이 풀린다(placement.ts 헤더).
+ *
+ * 이 계약이 없으면 그 절반이 **아무 데서도 검증되지 않는다** — 나머지 e2e는 전부
+ * `page.mouse.click`이라 `pointerType`이 언제나 'mouse'이고, 판정이 어긋나 폰에서
+ * 부족원을 못 움직이게 돼도 CI는 초록이다. `touchscreen.tap`은 CDP로 진짜 터치
+ * 포인터를 만든다 = `pointerType 'touch'`가 실제로 흐르는 유일한 경로다.
+ * (tests/ui/input.test.ts가 이벤트 층을 잠그고, 여기가 게임 층을 잠근다)
+ */
+test('터치 조작: 탭으로 고르고 탭으로 보낸다 · 명령 뒤 선택이 풀린다', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'mobile-portrait', '터치 포인터가 있는 프로젝트에서만 뜻이 있다');
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/?test=1', { waitUntil: 'networkidle' });
+  await page.mouse.click(100, 300);
+  await page.getByRole('button', { name: /전투/ }).first().click();
+  await page.waitForFunction(() => window.__wgd !== undefined);
+
+  // 적 없는 준비 단계로 얼린다 — 교전이 끼면 "안 갔다"와 "붙잡혔다"가 구분되지 않는다
+  const holdPrep = (): Promise<void> =>
+    page.evaluate(() => {
+      window.__wgd!.sim.state.prepTicksLeft = 1e9;
+    });
+  await holdPrep();
+
+  /*
+   * 부족원을 **판이 보이는 칸에 미리 세운다.** 집결 지점은 마을 앞이라 390×844에서는
+   * 하단 HUD에 덮일 수 있고, 그러면 탭이 패널에 먹혀 "터치가 안 먹는다"고 잘못 말한다.
+   * 세우는 것은 sim 커맨드로 한다 — 이 테스트가 재려는 것은 **탭의 해석**이지 이동이 아니다.
+   */
+  const staged = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.setGold(999_999);
+    let n = 0;
+    while (n < 2 && g.trainAlly('clubber')) n++;
+    return n;
+  });
+  expect(staged, '몽둥이꾼을 못 뽑았다 (이 계약이 성립하지 않는다)').toBeGreaterThan(0);
+
+  const from = await page.evaluate(() => {
+    const a = window.__wgd!.allies()[0]!;
+    return { x: a.x, z: a.z };
+  });
+  const stand = await pickBoardCell(page, from);
+  await page.evaluate((c) => {
+    const g = window.__wgd!;
+    for (const a of g.sim.state.allies) {
+      g.sim.applyCommand({ type: 'moveAlly', allyId: a.id, cellX: c.x, cellZ: c.z });
+    }
+    g.ff(900);
+    g.sim.state.prepTicksLeft = 1e9;
+  }, { x: stand.x, z: stand.z });
+  await page.waitForTimeout(200);
+
+  // ① 탭 = 선택 (그 종족 전체)
+  await page.touchscreen.tap(stand.px, stand.py);
+  await page.waitForTimeout(250);
+  expect(
+    await page.evaluate(() => window.__wgd!.selectedAlly()),
+    '터치로 부족원을 탭했는데 선택되지 않았다 (폰에서 조작 불능이다)',
+  ).toBe('clubber');
+
+  // ② 선택 중의 탭 = 명령. 그리고 **선택이 풀린다** — 안 풀리면 폰에서는 빈 곳 탭이
+  //    전부 명령이라 선택을 풀 방법이 사라진다(placement.ts onCommand).
+  const target = await pickBoardCell(page, { x: stand.x, z: stand.z });
+  expect(target.d, '지금 서 있는 칸과 너무 가깝다 (명령을 관찰할 수 없다)').toBeGreaterThan(3);
+  await page.touchscreen.tap(target.px, target.py);
+  await page.waitForTimeout(250);
+  const after = await page.evaluate(() => ({
+    sel: window.__wgd!.selectedAlly(),
+    tgts: window.__wgd!.sim.state.allies.map((a) => ({ tgtX: a.tgtX, tgtZ: a.tgtZ })),
+  }));
+  expect(after.sel, '터치는 명령 뒤에 선택이 풀려야 한다').toBeNull();
+  for (const g of after.tgts) {
+    expect(g.tgtX, '터치 탭이 명령으로 해석되지 않았다').toBeCloseTo(target.x, 5);
+    expect(g.tgtZ, '터치 탭이 명령으로 해석되지 않았다').toBeCloseTo(target.z, 5);
+  }
 
   expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
 });

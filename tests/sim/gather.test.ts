@@ -37,6 +37,13 @@ const FAR_A = { x: 0, z: 4 };
 const FAR_B = { x: 1, z: 4 }; // FAR_A의 옆칸 — carryCap 2의 "두 칸 연달아"에 쓴다
 /** 전선 옆 칸 (z=3 줄 — 경로에서 1.0타일이라 스치는 타격이 닿는다) */
 const FRONT = { x: 7, z: 3 };
+/**
+ * **자원이 없는 빈 칸** — 규칙 8-b의 "여기 지켜"(autoHold = true)를 거는 유일한 수단이다.
+ * 자동 행동이 들어온 뒤로는 "가만히 서 있는 채집꾼"을 만들려면 반드시 이 칸을 찍어야 한다:
+ * 안 찍으면 그 사람은 **스스로 다음 칸을 캐러 간다**(그것이 사용자 항목 2·4다).
+ * 마을거리 4.47이라 배달 반경(0.7) 밖이고, 자원 칸도 기지 셀도 아니다.
+ */
+const HOLD = { x: 5, z: 0 };
 
 interface MkOpts {
   /** 적을 실제로 내보낸다 (기본: 빈 웨이브라 아무도 안 나온다) */
@@ -262,6 +269,11 @@ describe('채집 — 밭과 명령', () => {
     const sim = mk();
     const first = train(sim); // id 낮음
     const second = train(sim); // id 높음
+    // ⚠ 규칙 8) **2번을 빈 칸에 세워 자동을 끈다.** 안 그러면 2번은 뽑히자마자 스스로
+    //   가까운 칸을 캐러 나가 "놀고 있는 사람"이라는 이 항목의 전제가 사라진다
+    //   (그때는 둘 다 3단이 되고, 이 판정이 재려던 2단이 한 번도 안 밟힌다).
+    expect(send(sim, second.id, HOLD)).toBe(true);
+    expect(second.autoHold, '빈 칸 명령 = 여기 지켜').toBe(true);
     // 1번을 FAR_A로 보내 실제로 캐게 만든다
     expect(sim.applyCommand({ type: 'moveAlly', allyId: -1, cellX: FAR_A.x, cellZ: FAR_A.z })).toBe(true);
     expect(first.gatherKey).toBeGreaterThanOrEqual(0);
@@ -279,12 +291,14 @@ describe('채집 — 밭과 명령', () => {
     expect(second.gatherKey).not.toBe(first.gatherKey);
 
     // 그리고 둘 다 실제로 자기 칸을 캐낸다 = 가동이 정말 2명이다.
-    // (배달까지 안 보는 이유: 채집꾼은 carryCap 2라 한 짐으로는 자동 귀환을 안 한다.
-    //  여기서 재려는 것은 "둘이 동시에 일한다"이지 귀환 규칙이 아니다 — 그건 ⑩이 잠근다.)
+    // ⚠ 텄음 칸 **수**는 이제 못 센다: 2번이 명령을 받는 순간 자동이 다시 켜지므로
+    //   (일감 = 자동 온, 규칙 8-b) 둘 다 그 뒤로 계속 일한다. 세는 대신 **맡은 두 칸이
+    //   각각 텄는가**를 본다 — 이 항목이 재려는 것은 "둘이 동시에 일한다"이지 총량이 아니다.
     const got = run(sim, 3000).filter((e) => e.type === 'gathered');
     const byAlly = new Set(got.map((e) => (e as { allyId: number }).allyId));
-    expect(byAlly.size, '두 사람이 각각 한 짐씩 캤다 = 실질 가동 2명').toBe(2);
-    expect(sim.state.resources.filter((r) => r.taken).length, '두 칸이 텄다').toBe(2);
+    expect(byAlly.size, '두 사람이 각각 캤다 = 실질 가동 2명').toBe(2);
+    expect(cellAt(sim, FAR_A).taken, '1번이 맡은 칸이 텄다').toBe(true);
+    expect(cellAt(sim, FAR_B).taken, '2번이 맡은 칸이 텄다').toBe(true);
   });
 
   it('E-9 전부 캐는 중이면 **진행분이 가장 적은 사람**이 옮겨 간다 (버리는 값이 최소)', () => {
@@ -358,8 +372,11 @@ describe('채집 — 캐기와 배달', () => {
     expect(sim.state.gold, '⚠ 캤다고 골드가 나가면 안 된다 — 지급은 배달뿐이다').toBe(gold0);
     expect(eventsOf(evs1, 'gatherDelivered').length).toBe(0);
 
-    // carryCap 2인데 짐이 하나뿐이라 **자동 귀환은 안 걸린다**(E-18) — 그 자리에 선다
-    expect(a.tgtX).toBe(NEAR.x);
+    // carryCap 2인데 짐이 하나뿐이라 **자동 귀환은 안 걸린다**(E-18).
+    // ⚠ 규칙 8) 그 자리에 서 있지는 않는다 — 자동이 같은 틱에 다음 칸을 잡는다.
+    //   이 항목이 재는 것은 "배달해야 돈이 된다"이므로 **빈 칸을 찍어 자동을 끈다**.
+    expect(send(sim, a.id, HOLD)).toBe(true);
+    expect(a.autoHold).toBe(true);
     run(sim, 300);
     expect(sim.state.gold, '짐 하나 들고 서 있으면 영원히 0이다').toBe(gold0);
 
@@ -436,7 +453,11 @@ describe('채집 — 캐기와 배달', () => {
     expect(sim.state.gold).toBe(gold0 + c1.value + c2.value);
   });
 
-  it('⑪ 자동 반복이 없다 — 배달 뒤 1,000틱을 굴려도 골드가 안 는다 (D4·계약 A)', () => {
+  it('⑪ 규칙 8) 배달 뒤 손을 떼도 **다시 나간다** — 자동 반복이 있다 (사용자 항목 4)', () => {
+    // ⚠ 이 항목은 T2의 "⑪ 자동 반복이 없다(D4)"를 **뒤집은 것**이다. 사용자가 정한
+    //   방향이 "채집이 끝나면 다음 채집 및 홈타운에 들어와 놓고, 다시 나간다"이고,
+    //   그 규칙은 sim에 있다(규칙 8). 바로 아래 항목이 **반대 방향**을 잠근다 —
+    //   자동을 끄면(빈 칸 명령) 정말로 서 있는지. 둘이 한 쌍이라야 판별력이 있다.
     const sim = mk();
     const a = train(sim);
     expect(send(sim, a.id, NEAR)).toBe(true);
@@ -444,28 +465,74 @@ describe('채집 — 캐기와 배달', () => {
     expect(send(sim, a.id, BASE)).toBe(true);
     runUntil(sim, '배달', () => a.carryCount === 0);
     const gold1 = sim.state.gold;
+    // ⚠ 배달한 **그 틱**에 이미 다음 칸이 붙어 있다 — 8-c가 8-b 바로 뒤이기 때문이다.
+    //   한 틱이라도 늦으면 "들어와 놓고 다시 나간다"가 왕복마다 지연을 쌓는다.
+    expect(a.gatherKey, '배달과 같은 틱에 다음 칸을 잡는다').toBeGreaterThanOrEqual(0);
     const evs = run(sim, 1000);
-    expect(eventsOf(evs, 'gathered').length, '스스로 다음 칸을 캐지 않는다').toBe(0);
-    expect(eventsOf(evs, 'gatherDelivered').length).toBe(0);
-    expect(sim.state.gold, '손을 떼면 수입이 선다').toBe(gold1);
+    expect(eventsOf(evs, 'gathered').length, '스스로 다음 칸을 캔다').toBeGreaterThan(0);
+    expect(eventsOf(evs, 'gatherDelivered').length, '스스로 마을에 들어와 놓는다').toBeGreaterThan(0);
+    expect(sim.state.gold, '손을 떼도 수입이 흐른다').toBeGreaterThan(gold1);
   });
 
-  it('계약 A) **명령이 없으면 코인도 없다** — 뽑아 놓고 2,000틱을 방치해도 골드 불변', () => {
+  it('⑪-b 규칙 8-b) **빈 칸을 찍으면 자동이 꺼진다** — 1,000틱을 굴려도 한 톨도 안 캔다', () => {
+    // ⚠ 위 항목의 짝이다. 이것이 빨개지지 않으면 위 항목은 "자동이 켜져 있다"가 아니라
+    //   "무엇을 해도 캔다"를 재는 자가 된다(= 실패 불가능한 계약).
     const sim = mk();
-    for (let i = 0; i < 4; i++) train(sim);
+    const a = train(sim);
+    expect(send(sim, a.id, HOLD)).toBe(true);
+    expect(a.autoHold, '자원도 적도 기지도 아닌 칸 = 여기 지켜').toBe(true);
     const gold0 = sim.state.gold;
+    const evs = run(sim, 1000);
+    expect(eventsOf(evs, 'gatherStarted').length, '캐기 시작조차 안 한다').toBe(0);
+    expect(eventsOf(evs, 'gathered').length).toBe(0);
+    expect(sim.state.gold, '대기 중인 사람은 한 푼도 안 번다').toBe(gold0);
+    expect(a.gatherKey).toBe(-1);
+    expect({ x: a.tgtX, z: a.tgtZ }, '찍어 준 자리에 서 있는다').toEqual(HOLD);
+    expect(sim.state.resources.some((r) => r.taken), '칸이 하나도 안 텄다').toBe(false);
+
+    // 규칙 8-b) **기지 셀을 찍으면 자동이 다시 켜진다** — 그 문장이 사용자 항목 4다
+    expect(send(sim, a.id, BASE)).toBe(true);
+    expect(a.autoHold, '기지 셀 = 돌아와서 내려놓고 다시 일해').toBe(false);
+    runUntil(sim, '자동이 다시 일을 잡는다', () => a.gatherKey >= 0);
+    runUntil(sim, '다시 나가 캔다', () => sim.state.resources.some((r) => r.taken), 1500);
+  });
+
+  it('계약 A′) **사람이 없으면 코인도 없다** — 아군 0명인 판은 2,000틱을 굴려도 채집 0건', () => {
+    // ⚠ T2의 계약 A("탭이 없으면 코인도 없다")는 규칙 8과 함께 **철회됐다.**
+    //   근거가 "탭이 없으면"에서 **"사람이 없으면"**으로 옮겨간 것뿐이고, 봉투 [5]와
+    //   `18.idleZero`의 결과는 안 바뀐다: `gatherKey`를 0 이상으로 만드는 두 통로
+    //   (`moveAlly` · `updateAllyAuto`)가 **둘 다 살아 있는 아군을 순회**하므로,
+    //   `trainAlly`를 한 번도 안 낸 판은 그 순회가 0번 돈다.
+    const sim = mk();
+    const gold0 = sim.state.gold;
+    expect(sim.state.allies.length, '이 판에는 사람이 없다').toBe(0);
     const evs = run(sim, 2000);
     expect(eventsOf(evs, 'gatherStarted').length).toBe(0);
     expect(eventsOf(evs, 'gathered').length).toBe(0);
     expect(eventsOf(evs, 'gatherDelivered').length).toBe(0);
-    expect(sim.state.gold, '집결 지점은 배달 반경 밖이다 (둘째 방어선)').toBe(gold0);
+    expect(sim.state.gold).toBe(gold0);
+    expect(sim.state.resources.some((r) => r.taken)).toBe(false);
+  });
+
+  it('뽑기만 해서는 지급이 안 된다 — 집결 자리는 배달 반경 밖이다 (둘째 방어선)', () => {
+    // 자동이 켜져 있어도 **태어난 그 틱**에는 아직 예약도 짐도 없다. 그리고 집결 자리가
+    // 배달 반경 안이면 resetAlly가 carryGold를 놓치는 순간 trainAlly가 곧 addGold가 된다.
+    const sim = mk();
+    for (let i = 0; i < 4; i++) train(sim);
     for (const a of sim.state.allies) {
       expect(a.gatherKey).toBe(-1);
       expect(a.gatherTicks).toBe(0);
-      // 집결 자리가 배달 반경 **밖**임을 직접 못 박는다 — 안이면 trainAlly가 곧 addGold다
+      expect(a.carryCount).toBe(0);
+      expect(a.autoHold, '기본값은 자동 켜짐이다').toBe(false);
       const d = Math.hypot(a.x - BASE.x, a.z - BASE.z);
       expect(d, '집결 자리는 배달 반경 밖이다').toBeGreaterThan(GATHER_DELIVER_RANGE);
     }
+    // 전원을 빈 칸에 세우면(자동 끔) 2,000틱을 방치해도 골드가 한 푼도 안 는다
+    const gold0 = sim.state.gold;
+    expect(sim.applyCommand({ type: 'moveAlly', allyId: -1, cellX: HOLD.x, cellZ: HOLD.z })).toBe(true);
+    const evs = run(sim, 2000);
+    expect(eventsOf(evs, 'gathered').length).toBe(0);
+    expect(sim.state.gold).toBe(gold0);
   });
 
   it('풀 재사용) 죽은 사람의 채집 상태가 새 부족원에게 새지 않는다 (resetAlly 다섯 줄)', () => {
@@ -557,9 +624,15 @@ describe('채집 — 어긋나는 길 (E-1 ~ E-14)', () => {
     expect(send(sim, a.id, FAR_A), '⚠ 여기서 false를 돌려주면 moveAlly의 계약이 갈라진다').toBe(true);
     expect(a.gatherKey).toBe(-1);
     expect(a.tgtX).toBe(FAR_A.x);
-    const evs = run(sim, 900);
-    expect(eventsOf(evs, 'gatherStarted').length, '도착해도 안 캔다').toBe(0);
+    // 걸어가는 동안에도 예약은 안 붙는다 — 찍힌 칸은 그대로 남아 있다
+    const evs = run(sim, 60);
+    expect(eventsOf(evs, 'gatherStarted').length, '가는 중에는 아무것도 안 캔다').toBe(0);
     expect(cellAt(sim, FAR_A).taken).toBe(false);
+    // 규칙 8 ⑤) 짐이 가득 찬 채로 도착해 서면 **자동이 마을로 돌려보낸다.**
+    // (T2에는 여기서 영영 서 있었다 — E-18 "짐 하나 들고 서 있기"를 자동이 끝낸다)
+    runUntil(sim, '자동이 집으로 보낸다', () => a.tgtX === BASE.x && a.tgtZ === BASE.z);
+    expect(cellAt(sim, FAR_A).taken, '짐이 가득 찼으므로 그 칸은 못 캔다').toBe(false);
+    runUntil(sim, '배달', () => a.carryCount === 0);
   });
 
   it('E-6) 자원 없는 칸·이미 텄음 칸은 지금까지와 똑같이 그냥 가서 선다', () => {
@@ -601,13 +674,18 @@ describe('채집 — 어긋나는 길 (E-1 ~ E-14)', () => {
     runUntil(sim, '캐기 시작', () => a.gatherTicks > 5);
     // cmdClearScenery는 cancelGatherersOf를 먼저 부르므로 이 경로는 방어선이다.
     // 그래도 **골드를 흘리지 않고 조용히 닫히는지**는 확인해야 한다.
+    const keyA = a.gatherKey;
     (cellAt(sim, FAR_A) as { taken: boolean }).taken = true;
     const gold0 = sim.state.gold;
-    run(sim, 5);
-    expect(a.gatherKey).toBe(-1);
-    expect(a.gatherTicks).toBe(0);
+    run(sim, 1);
+    // 예약은 그 틱에 조용히 닫힌다 — 골드도 짐도 한 톨 안 샌다
+    expect(a.gatherKey, '텄음이 된 칸의 예약은 유지되지 않는다').not.toBe(keyA);
     expect(a.carryCount).toBe(0);
     expect(sim.state.gold).toBe(gold0);
+    // ⚠ 규칙 8) 그 자리에 **서 있지는 않는다** — 8-b가 예약을 푼 뒤 같은 틱의 8-c가
+    //   도착해 있는 빈손 일꾼에게 다음 칸을 준다. T2에는 여기서 영원히 서 있었다.
+    expect(a.gatherKey, '자동이 같은 틱에 다음 칸을 준다').toBeGreaterThanOrEqual(0);
+    expect(a.gatherTicks, '새 칸의 진행분은 0에서 시작한다').toBe(0);
   });
 });
 
@@ -749,5 +827,93 @@ describe('채집 — 판이 끝나는 틱 (E-12)', () => {
     const evs = run(sim, 500);
     expect(eventsOf(evs, 'gatherDelivered').length).toBe(0);
     expect(sim.state.gold).toBe(gold1);
+  });
+});
+
+describe('채집 — 자동 행동 (규칙 8)', () => {
+  /** 목 스테이지는 10칸 폭이라 셀 키가 z*10+x 다 (sim/allies.ts와 같은 식) */
+  const keyOf = (c: { x: number; z: number }): number => c.z * 10 + c.x;
+
+  it('명령이 없으면 **가장 가까운** 칸을 스스로 잡는다 — 전순서라 시드와 무관하다', () => {
+    const sim = mk();
+    const a = train(sim);
+    // 집결 자리는 (7.6, 2.6) = 반올림하면 셀 (8,3)이고 그 칸이 곧 자원 칸이다(거리 0).
+    // 곧 "가장 가까운 칸"의 답이 유일하게 정해진다 — 동점 규칙에 기대지 않는 형태다.
+    expect(sim.resourceAt(8, 3), '집결 자리의 셀은 자원 칸이다').not.toBeNull();
+    run(sim, 1);
+    expect(a.gatherKey, '한 틱 만에 가장 가까운 칸을 잡는다').toBe(keyOf({ x: 8, z: 3 }));
+    expect({ x: a.tgtX, z: a.tgtZ }, '목표도 그 칸으로 간다').toEqual({ x: 8, z: 3 });
+    // ⚠ 자동은 **이벤트를 한 건도 안 낸다** — allyOrdered는 커맨드의 이벤트지 자동의 것이 아니다
+    //   (내면 초당 수십 건이 fx와 e2e로 쏟아진다). 캐기 시작 이벤트는 도착 뒤의 일이다.
+    const evs = sim.drainEvents();
+    expect(eventsOf(evs, 'allyOrdered').length).toBe(0);
+    expect(eventsOf(evs, 'gatherLost').length).toBe(0);
+  });
+
+  it('여럿이어도 같은 칸을 두 번 잡지 않는다 — 예약이 배타적이라 헛걸음이 0이다', () => {
+    const sim = mk();
+    for (let i = 0; i < 4; i++) train(sim);
+    run(sim, 400);
+    const keys = sim.state.allies.map((a) => a.gatherKey).filter((k) => k >= 0);
+    expect(keys.length, '넷 다 일감을 잡았다').toBe(4);
+    expect(new Set(keys).size, '네 사람이 네 칸을 나눠 가진다').toBe(4);
+  });
+
+  it('일꾼이 아니면 자동으로 안 나간다 — 판정선은 gatherPct 하나다 (전투 3종의 보장)', () => {
+    // ⚠ 이 항목이 봉투 [12]의 전제를 코드 수준에서 잠근다: 자동 이동이 일꾼에게만 붙으므로
+    //   전투 3종은 명령 없이는 한 걸음도 안 걷는다 = 스스로 적 스폰까지 걸어가지 않는다.
+    const sim = mk({ allies: { clubber: { gatherPct: 100, blocks: false, speed: 1.3, carryCap: 1 } } });
+    const c = train(sim, 'clubber'); // gatherPct 100 < 200 = 일꾼이 아니다
+    const spot = { x: c.tgtX, z: c.tgtZ };
+    const evs = run(sim, 600);
+    expect(c.gatherKey, '스스로 칸을 잡지 않는다').toBe(-1);
+    expect({ x: c.tgtX, z: c.tgtZ }, '한 걸음도 안 움직인다').toEqual(spot);
+    expect(eventsOf(evs, 'gathered').length).toBe(0);
+    // 그래도 **시키면 캔다** — 판정선이 막는 것은 자동뿐이고 능력이 아니다
+    expect(send(sim, c.id, NEAR)).toBe(true);
+    expect(c.gatherKey).toBeGreaterThanOrEqual(0);
+    runUntil(sim, '시키면 캔다', () => c.carryCount > 0);
+  });
+
+  it('캘 칸이 하나도 없으면 **정지**한다 — 무한 배회가 없다', () => {
+    const sim = mk();
+    // 밭을 통째로 텄음으로 굳힌다 (판 끝물의 상태다)
+    for (const r of sim.state.resources) (r as { taken: boolean }).taken = true;
+    const a = train(sim);
+    const spot = { x: a.tgtX, z: a.tgtZ };
+    run(sim, 300);
+    expect(a.gatherKey).toBe(-1);
+    expect({ x: a.tgtX, z: a.tgtZ }, '걸어다닐 이유가 없으면 안 걷는다').toEqual(spot);
+    expect(a.walked, '한 걸음도 안 걸었다').toBe(0);
+  });
+
+  it('짐을 진 채 캘 칸이 없어지면 마을로 간다 — 마지막 한 짐이 좌초하지 않는다 (E-18)', () => {
+    const sim = mk();
+    const a = train(sim, 'clubber'); // carryCap 1 … 짐 하나로 가득 찬다
+    expect(send(sim, a.id, FAR_A)).toBe(true);
+    runUntil(sim, '짐', () => a.carryCount > 0);
+    runUntil(sim, '자동이 집으로 보낸다', () => a.tgtX === BASE.x && a.tgtZ === BASE.z);
+    runUntil(sim, '배달', () => a.carryCount === 0);
+    expect(sim.state.gold).toBeGreaterThan(0);
+  });
+
+  it('규칙 8-b) 적이 선 칸을 찍으면 자동이 **안 꺼진다** — 빈 칸일 때만 "여기 지켜"다', () => {
+    const sim = mk({ enemies: true });
+    const a = train(sim);
+    // 적이 서 있는 셀을 찾는다. 적은 경로(z=2) 위를 걸으므로 그 칸에는 자원이 없다 —
+    // 곧 이 판정이 재는 것은 오로지 "적이 있느냐"다(자원 칸이면 어차피 자동이 켜진다).
+    runUntil(sim, '적이 나온다', () => sim.state.enemies.some((e) => e.alive));
+    const e = sim.state.enemies.find((x) => x.alive) as { x: number; z: number };
+    const cell = { x: Math.round(e.x), z: Math.round(e.z) };
+    expect(sim.resourceAt(cell.x, cell.z), '적이 선 칸은 자원 칸이 아니다').toBeNull();
+    expect(send(sim, a.id, cell)).toBe(true);
+    expect(a.autoHold, '적이 선 칸 = 일감이다 — 끝나면 스스로 다음 일을 찾는다').toBe(false);
+    // 같은 종류의 칸인데 적만 없으면 그것이 "여기 지켜"다 (판별력: 이 한 쌍이 규칙을 가른다)
+    const empty = { x: cell.x, z: cell.z };
+    runUntil(sim, '그 칸에서 적이 사라진다', () =>
+      !sim.state.enemies.some((x) => x.alive && Math.round(x.x) === empty.x && Math.round(x.z) === empty.z),
+    );
+    expect(send(sim, a.id, empty)).toBe(true);
+    expect(a.autoHold, '적이 없는 같은 칸 = 여기 지켜').toBe(true);
   });
 });

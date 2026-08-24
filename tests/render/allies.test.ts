@@ -108,7 +108,7 @@ function ally(o: Partial<AllyState> = {}): AllyState {
     gatherTicks: 0,
     carryGold: 0,
     carryCount: 0,
-    // 규칙 8) 자동 행동 — false = 자동 켜짐(기본). 렌더는 이 값을 읽지 않는다
+    // 규칙 8) 자동 행동 — false = 자동 켜짐(기본). 참이면 머리 위에 대기 말뚝이 뜬다(kind 8)
     autoHold: false,
     alive: true,
     ...o,
@@ -360,6 +360,39 @@ describe('아군 체력바 — 오버레이 메시 공유', () => {
     view.update([enemy({ hp: 5 })], [tower({ hp: 130 })], 1, cellToWorld, [], [ally({ hp: 60 })]);
     expect(meshesOf(scene)).toHaveLength(1); // 메시는 여전히 하나
     expect(mesh.count).toBe(3); // 적 1 + 타워 1 + 아군 1
+    view.dispose();
+  });
+
+  /**
+   * 대기(HOLD) 말뚝 — **자동이 꺼진 사람만** 뜬다 (kind 8).
+   *
+   * 이 표식이 없으면 "빈 칸을 찍어 그 자리를 지키는 중"이 화면 어디에도 안 나온다:
+   * 서 있는 사람과 명령 없이 서 있는 사람은 좌표가 같아 눈으로 구별할 방법이 없다.
+   * 그리고 **만피여도 뜬다** — 이 파일의 대원칙("바가 보인다 = 뭔가 깎이고 있다")은
+   * 손상 표시의 규칙이고, 이건 손상이 아니라 상태이기 때문이다.
+   *
+   * 메시가 안 느는 것까지 함께 잠근다: 드로우콜 여유가 15뿐이라 새 메시로 그렸다면
+   * 이 기능 하나가 예산의 1/15를 먹는다.
+   */
+  it('대기(autoHold) 말뚝은 kind 8로 같은 메시에 얹힌다 — 자동이 켜져 있으면 안 뜬다', () => {
+    const scene = new THREE.Scene();
+    const view = new HealthBarView(scene);
+    const mesh = meshesOf(scene)[0]!;
+    const kinds = mesh.geometry.getAttribute('barKind');
+
+    // 자동이 켜진 만피 아군 → 아무것도 안 그린다 (체력바도 말뚝도 없다)
+    view.update([], [], 1, cellToWorld, [], [ally({ hp: 100, autoHold: false })]);
+    expect(mesh.count, '자동이 켜진 만피 부족원은 그릴 것이 없다').toBe(0);
+
+    // 같은 사람이 "여기 지켜"를 받으면 말뚝 하나가 뜬다
+    view.update([], [], 1, cellToWorld, [], [ally({ hp: 100, autoHold: true })]);
+    expect(mesh.count, '대기 말뚝이 안 떴다').toBe(1);
+    expect(kinds.getX(0), '대기 말뚝의 kind').toBe(8);
+    expect(meshesOf(scene), '새 메시를 만들면 드로우콜이 는다').toHaveLength(1);
+
+    // 죽은 사람의 말뚝은 남지 않는다
+    view.update([], [], 1, cellToWorld, [], [ally({ hp: 0, autoHold: true, alive: false })]);
+    expect(mesh.count, '시체에 말뚝이 남았다').toBe(0);
     view.dispose();
   });
 
