@@ -1558,39 +1558,82 @@ test('채집: 한 사이클이 실제로 돈다 · 탭 없으면 0 · 텄어도 
    * 한 칸이 텄다는 것은 누군가 거기서 한 짐을 캤다는 것과 정확히 같고(gather.ts 의 유일한
    * `taken = true` 자리), 명령이 없으면 그 자리에 절대 도달할 수 없다.
    */
-  const idle = await page.evaluate(() => {
+  /*
+   * ⚠⚠ **이 계약은 자동 채집 도입으로 한 번 다시 쓰였다. 무엇이 바뀌었는지 정확히 적는다.**
+   *
+   * 예전 문장: "부족원을 **뽑아만 두고** 방치하면 한 칸도 안 텄다" (= 탭이 없으면 코인도 없다).
+   * 그 문장은 이제 **거짓이고, 거짓인 것이 사양이다** — 사용자가 AoE 식 자동 일꾼을 요구했고
+   * 일꾼은 명령 없이 스스로 캐러 나간다. 실제로 이 어서션이 자동을 정확히 잡아 빨개졌다.
+   *
+   * ⚠ 그래서 이 자리에서 어서션을 **지우거나 느슨하게 하면 안 된다.** 방치 안전성은 여전히
+   * 게임의 뿌리 계약이고, 바뀐 것은 그 근거다:
+   *      예전 근거: **탭이 없으면** 코인도 없다   (자동이 생겨 철회됐다)
+   *      지금 근거: **사람이 없으면** 코인도 없다 (자동은 존재하는 아군에게만 붙는다)
+   * 봉투 [5]("방치하면 웨이브 5 안에 진다")가 여전히 통과하는 이유가 정확히 이것이고,
+   * `runIdle` 은 `callWave` 말고 어떤 커맨드도 안 내므로 아군이 판 내내 0명이다.
+   * 아래 ⓐ 가 그 새 근거를 **e2e 에서 직접** 잠근다 — 더 약한 문장이 아니라 참인 문장이다.
+   *
+   * 그리고 ⓑ 로 **자동이 실제로 돈다**는 것도 같이 잠근다. ⓐ 만 두면 "자동을 통째로 지워도
+   * 초록"인 실패 불가능한 계약이 되기 때문이다(이 저장소가 금지하는 형태다).
+   */
+
+  // ── ⓐ 사람을 한 명도 안 뽑으면 채집 수입은 정확히 0 (봉투 [5]의 e2e 거울) ──────
+  const noAlly = await page.evaluate(() => {
     const g = window.__wgd!;
     g.setGold(5_000);
-    g.trainAlly('gatherer');
-    g.trainAlly('gatherer');
-    // ⚠ **prep 을 얼려 웨이브를 안 돌린다.** 적이 없으면 처치·웨이브 클리어 수입이 0이라
-    // 골드 변화가 **오직 채집에서만** 온다 = 아래 ①의 어서션이 판별력을 갖는다.
-    // (같은 수법을 '아군 이동 명령' 계약이 이미 쓴다)
-    g.sim.state.prepTicksLeft = 1e9;
-    // 기준점은 **뽑은 직후**다 — setGold 값이 아니다. 채집꾼 둘의 실비용(70 + 70×1.05)이
-    // 이미 빠져 있고, 그건 채집 수입이 아니라 지출이라 이 어서션이 재는 것이 아니다.
+    // ⚠ trainAlly 를 **한 번도 부르지 않는다.** 이것이 이 표본의 전부다.
+    g.sim.state.prepTicksLeft = 1e9; // 웨이브를 얼려 전투 수입을 차단한다
     const start = g.sim.state.gold;
-    g.ff(1_800); // 60초 — 왕복(22초)이 두 번 넘게 들어가는 시간
+    g.ff(1_800); // 60초
+    return {
+      start,
+      gold: g.sim.state.gold,
+      allies: g.sim.state.allies.length,
+      taken: g.sim.state.resources.filter((r) => r.taken).length,
+    };
+  });
+  expect(noAlly.allies, '아무도 안 뽑았는데 아군이 생겼다').toBe(0);
+  expect(noAlly.taken, `사람이 없는데 ${noAlly.taken}칸이 텄다`).toBe(0);
+  expect(noAlly.gold, `사람이 없는데 골드가 움직였다: ${noAlly.start} → ${noAlly.gold}`).toBe(noAlly.start);
+
+  // ── ⓑ 사람을 뽑으면 **명령 없이도** 스스로 캔다 (사용자 항목 2·4) ──────────────
+  const idle = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.trainAlly('gatherer');
+    g.trainAlly('gatherer');
+    const start = g.sim.state.gold;
+    g.ff(1_800); // 60초 — 왕복이 두 번 넘게 들어가는 시간
     return {
       start,
       gold: g.sim.state.gold,
       allies: g.sim.state.allies.length,
       taken: g.sim.state.resources.filter((r) => r.taken).length,
       claimed: g.sim.state.allies.filter((a) => a.gatherKey >= 0).length,
-      carried: g.sim.state.allies.reduce((n, a) => n + a.carryCount, 0),
     };
   });
   expect(idle.allies, '채집꾼이 안 뽑혔다').toBeGreaterThan(0);
-  expect(idle.taken, `탭 없이 ${idle.taken}칸이 텄다 — 자동 채집 경로가 있다`).toBe(0);
-  expect(idle.claimed, `탭 없이 ${idle.claimed}명이 칸을 예약했다`).toBe(0);
-  expect(idle.carried, `탭 없이 짐 ${idle.carried}개가 생겼다`).toBe(0);
-  expect(idle.gold, `웨이브를 얼렸는데 골드가 움직였다: ${idle.start} → ${idle.gold}` + ' — 채집 말고 다른 수입원이 샌다').toBe(idle.start);
+  expect(idle.taken, '명령 없이 60초를 뒀는데 한 칸도 안 텄다 — 자동이 안 돈다').toBeGreaterThan(0);
+  expect(idle.claimed + idle.taken, '아무도 칸을 잡지 않았다').toBeGreaterThan(0);
+  expect(
+    idle.gold,
+    `자동으로 캤는데 배달이 없다: ${idle.start} → ${idle.gold} · 텄음 ${idle.taken}칸`,
+  ).toBeGreaterThan(idle.start);
 
   // ── ① 보내면 한 사이클이 돈다 ──────────────────────────────────────────────
   const cycle = await page.evaluate(() => {
     const g = window.__wgd!;
     const cells = g.sim.state.resources.filter((r) => !r.taken);
     const before = g.sim.state.gold;
+    // ⚠ **이미 텄던 칸의 값을 기준선으로 뺀다.** 위 ⓑ 에서 자동이 이미 여러 칸을 캐고
+    //   지급까지 끝냈으므로, 마지막에 `taken` 전체를 세면 그 몫이 이 구간의 지급액과
+    //   비교되어 언제나 어긋난다(실측: 텄음 24칸 값 285 대 지급 217 — 차 68이 ⓑ 몫이었다).
+    //   재려는 것은 **이 구간에서 새로 턴 칸**이다.
+    const beforeTakenValue = g.sim.state.resources
+      .filter((r) => r.taken)
+      .reduce((n, r) => n + r.value, 0);
+    // 그리고 **지금 등에 지고 있는 짐**도 기준선이다 — ⓑ 에서 캐 놓고 아직 안 낸 몫이
+    //   이 구간에 배달되면 그것도 지급액에 들어온다.
+    const carriedBefore = g.sim.state.allies.reduce((n, a) => n + a.carryGold, 0);
     // 채집꾼 전원을 서로 다른 칸으로. carryCap 2 라 각자 두 칸을 채워야 귀환한다.
     const sent: { x: number; z: number }[] = [];
     g.sim.state.allies.forEach((a, i) => {
@@ -1613,21 +1656,35 @@ test('채집: 한 사이클이 실제로 돈다 · 탭 없으면 0 · 텄어도 
       before,
       after: g.sim.state.gold,
       taken: taken.map((r) => ({ x: r.cellX, z: r.cellZ })),
-      takenValue: taken.reduce((n, r) => n + r.value, 0),
+      takenValue: taken.reduce((n, r) => n + r.value, 0) - beforeTakenValue,
+      carriedBefore,
+      carriedAfter: g.sim.state.allies.reduce((n, a) => n + a.carryGold, 0),
       carriedLeft: g.sim.state.allies.reduce((n, a) => n + a.carryCount, 0),
       sent,
     };
   });
   expect(cycle.taken.length, `아무 칸도 안 텄다 (보낸 칸 ${JSON.stringify(cycle.sent)})`).toBeGreaterThan(0);
-  // 웨이브가 얼어 있으므로 골드 변화는 **전액 채집**이다 — 값까지 맞는지 본다.
+  /*
+   * 웨이브가 얼어 있으므로 골드 변화는 **전액 채집**이다. 그러면 이 구간에는 보존식이 선다:
+   *
+   *      지급액 = (이 구간에 새로 턴 칸의 값) + (시작 시 지고 있던 짐) − (끝에 지고 있는 짐)
+   *
+   * 등호로 잠그는 이유: 부등호(`> before`)로 두면 "조금이라도 늘었다"만 재고, 캔 값과
+   * 지급액이 어긋나는 사고(중복 지급·누락·짐 증발)를 하나도 못 잡는다.
+   * ⚠ 이 식을 두 번 틀렸다가 실측으로 고쳤다 — 처음엔 ⓑ 에서 이미 **지급까지 끝난** 칸을
+   *   같이 세서 285 대 217 로 어긋났고(왼쪽이 큼), 그것만 빼자 이번엔 ⓑ 에서 **등에 지고
+   *   있던** 짐이 이 구간에 배달되어 182 대 217 로 어긋났다(오른쪽이 큼). 두 기준선을
+   *   모두 빼야 식이 닫힌다.
+   */
   const paid = cycle.after - cycle.before;
-  expect(cycle.takenValue, '짐값이 0이다 — GATHER_BASE_VALUE 가 안 켜졌다').toBeGreaterThan(0);
-  expect(cycle.carriedLeft, `아직 ${cycle.carriedLeft}개를 지고 있다 (배달이 안 끝났다)`).toBe(0);
+  const expected = cycle.takenValue + cycle.carriedBefore - cycle.carriedAfter;
+  expect(cycle.takenValue, '이 구간에 새로 턴 칸이 없다').toBeGreaterThan(0);
   expect(
     paid,
-    `텄음 ${cycle.taken.length}칸 값 ${cycle.takenValue} 인데 지급은 ${paid}` +
-      ` (${cycle.before} → ${cycle.after}) — 캔 만큼 정확히 지급돼야 한다`,
-  ).toBe(cycle.takenValue);
+    `새로 턴 ${cycle.taken.length}칸 값 ${cycle.takenValue}` +
+      ` + 시작 짐 ${cycle.carriedBefore} − 끝 짐 ${cycle.carriedAfter} = ${expected}` +
+      ` 인데 지급은 ${paid} (${cycle.before} → ${cycle.after})`,
+  ).toBe(expected);
 
   // ── ③④ 텄어도 건설 불가이고 제거 비용도 그대로 ─────────────────────────────
   const after = await page.evaluate((taken) => {

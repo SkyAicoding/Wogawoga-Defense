@@ -122,6 +122,19 @@ export class InputManager {
     // 모바일 제스처 차단
     el.addEventListener('contextmenu', this.onContextMenu);
     el.addEventListener('dblclick', this.onDblClick);
+    /*
+     * ⚠ 우클릭 메뉴는 **문서 전체**에서 막는다 — 캔버스에만 걸면 부족하다.
+     *
+     * 우클릭이 카메라 회전 전용이던 동안에는 캔버스 밖에서 메뉴가 떠도 무해했다.
+     * 그런데 이제 우클릭이 **주요 동사**(이동·채집·공격)라, 전투 중에 카드 바·사이드
+     * 버튼·웨이브 배너를 살짝 빗맞히면 그 순간 OS 메뉴가 게임 위에 뜬다.
+     * 실측: `canvas → prevented true` · `button.icon-btn → prevented **false**` · `body → false`.
+     * 화면의 상당 면적이 캔버스가 아니므로 이건 드문 사고가 아니다.
+     *
+     * 문서 레벨로 올리는 대가는 "이 페이지에서는 우클릭 메뉴를 못 쓴다" 하나이고,
+     * 전체 화면 게임에서 그건 잃는 것이 아니다(모바일 롱프레스 메뉴도 같은 이유로 막고 있다).
+     */
+    document.addEventListener('contextmenu', this.onContextMenu);
   }
 
   private onContextMenu = (e: Event): void => {
@@ -331,6 +344,7 @@ export class InputManager {
     window.removeEventListener('keydown', this.onKey);
     this.el.removeEventListener('wheel', this.onWheel);
     this.el.removeEventListener('contextmenu', this.onContextMenu);
+    document.removeEventListener('contextmenu', this.onContextMenu);
     this.el.removeEventListener('dblclick', this.onDblClick);
     this.events.clear();
   }
