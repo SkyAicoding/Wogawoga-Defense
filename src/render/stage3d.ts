@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import type { StageDef } from '@/data/types';
 import { cellKey, sceneryCells } from '@/data/grid';
+import { isLandmarkCell, resourceKindOf } from '@/data/resources';
 import { BASE_LEVEL_MAX } from '@/data/hometown';
 import { BIOMES, flatMat } from './palette';
 import {
@@ -82,7 +83,17 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
   root.add(terrain.group);
   const scenery = sceneryCells(stage, terrain.pathCells);
   const sceneryList = [...scenery].map((k) => ({ x: k % stage.gridW, z: Math.floor(k / stage.gridW) }));
-  const props = buildProps(stage.biome, sceneryList, terrain.cellToWorld, stage.id);
+  /*
+   * 소품 셀의 **자원 종류**는 렌더가 정하지 않는다 — sim(`sim/gather.ts`)과 **같은 함수**를
+   * 부른다(gather-spec §5-2). 자원 종류가 곧 1층 실루엣이라(§6-1) 이 한 줄이 갈리면
+   * "딸기밭이라고 표시된 칸에 통나무가 서 있다"가 된다. 랜드마크 여부도 같은 이유로
+   * 여기서 오지, 소품 rng 에서 뽑지 않는다.
+   */
+  const props = buildProps(stage.biome, sceneryList, terrain.cellToWorld, stage.id, (cellX, cellZ) => {
+    const key = cellKey(stage, cellX, cellZ);
+    const kind = resourceKindOf(stage, key);
+    return { kind, landmark: isLandmarkCell(stage, key, kind) };
+  });
   root.add(props.group);
   /*
    * 소품이 없는 건설 가능 셀 = **맨 셀**. 건설 가능 셀의 70%가 여기이고, 개편 전에는

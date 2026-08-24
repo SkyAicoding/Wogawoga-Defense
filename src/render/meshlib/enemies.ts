@@ -1306,10 +1306,27 @@ const ALLY_SKY = C.allySky;
 const ALLY_SKY_D = C.allySkyDark;
 
 /**
- * 아군 3종 공통 제복 — 흰 털 두건 + 어깨 목도리 + 하늘빛 옷 + 등에 세운 부족기.
- * 세 kit 이 똑같이 부르므로 지오메트리에 3벌이 구워진다(변형 태그가 정점 단위라
- * "5·6·7 공통"을 표현할 수단이 없다). 파트 11개 × 3벌 ≈ 400삼각형 — 공유 지오메트리가
- * 그만큼 무거워지지만 인스턴스당 1,860→1,960 수준이라 삼각형 예산(150k)에 여유가 있다.
+ * 아군 4종 공통 제복 — 흰 털 두건 + 어깨 목도리 + 하늘빛 옷. (부족기는 allyBanner 로
+ * 떼어 **전투 3종의 kit** 이 든다 — 채집꾼의 광주리와 자리가 겹치기 때문이다.)
+ *
+ * ── 11단계) **변형 태그 0(공통)으로 내렸다** — 지오메트리에 1벌만 구워진다 ──────
+ * 3단계에는 kit 세 개가 각자 이 함수를 불러 **3벌이 구워졌다**(166삼각형 × 3 = 498).
+ * 근거로 적힌 이유는 "변형 태그가 정점 단위라 5·6·7 공통을 표현할 수단이 없다"였는데,
+ * 그것은 아군이 **습격대와 한 지오메트리를 쓰던 시절**의 제약이다: 그때는 변형 0이
+ * "적에게도 그려지는 몸통"이었으므로 제복을 거기 둘 수 없었다.
+ * 5단계에 아군이 자기 지오메트리로 갈리면서(ALLY_GEO_KEY) 그 전제가 사라졌다 —
+ * 이 지오메트리를 쓰는 인스턴스는 **전부 아군**이라 변형 0이 곧 "아군 공통"이다.
+ * 주석만 남고 제약은 없어졌던 자리다.
+ *
+ * 실측 효과(부족기 분리까지 합쳐): 아군 공유본 1,080 → **948**. 화면은 한 픽셀도
+ * 안 바뀐다 — 셰이더는 변형 0 정점을 언제나 그리고(gait.ts wgdHidden) 이 지오메트리의
+ * 인스턴스는 전부 아군이다. 단품(갤러리)도 578/610/588 그대로다.
+ * 이 여유가 없으면 채집꾼 4벌째는 애초에 못 들어간다 — §6-6 의 K 계산이 **제복 4벌째를
+ * 빼먹었다**: 제복을 그대로 복제하면 1,080 + 166 = 1,246 이라 상한 1,250 앞에
+ * 삼각형 4개만 남아, 광주리를 한 파트도 못 얹는다.
+ *
+ * ⚠ 그래서 **kit 은 이 함수를 부르지 않는다.** 공유본은 allyShared 가, 갤러리 단품은
+ *   buildAllySolo 가 `common` 인자로 한 번씩만 얹는다.
  */
 function allyLivery(ids: RaiderIds): PartSpec[] {
   return [
@@ -1325,23 +1342,6 @@ function allyLivery(ids: RaiderIds): PartSpec[] {
      */
     { kind: 'cyl', pos: [-0.006, 0.428, 0], scale: [0.3, 0.072, 0.44], color: ALLY_FUR, seg: 6, hueJitter: 0.02 },
     { kind: 'cyl', pos: [-0.012, 0.378, 0], scale: [0.255, 0.055, 0.365], color: ALLY_FUR_D, seg: 6, hueJitter: 0.02 },
-    /**
-     * 등에 멘 부족기 (몸통 고정 — 팔과 따로 논다). 적에게 없는 유일한 '위로 솟은 등짐'.
-     *
-     * 두 번 옮겼다. 처음엔 머리 바로 뒤(x −0.19, z 0)에 세웠더니 정면에서 **머리에 얹힌
-     * 파란 슬래브**로 보였다. 뒤로 눕혀(x −0.30) 머리 위를 벗어나게 했더니 이번엔
-     * 깃대가 머리에 완전히 가려 **막대 없이 뜬 간판**이 됐다.
-     * 그래서 z를 0.155로 밀어 **한쪽 어깨 너머로 멘** 자세로 만들었다 — 머리 반폭이
-     * 0.1225이므로 깃대가 머리 옆으로 빠져나와 "장대에 달린 천"이 성립한다.
-     * 좌우 비대칭이라 유닛이 어느 쪽을 보는지도 함께 읽힌다.
-     *
-     * 기울기는 0.30 → 0.16으로 되돌렸다. 실전투 프레임(55° 부감)에서 아군은 카메라를
-     * **등지고** 걸어가므로 뒤로 많이 눕힌 깃발은 화면상 몸통과 겹쳐 사라진다.
-     * 세워 두면 머리 위 빈 하늘로 삐져나와 흰 두건 위의 파란 조각으로 남는다.
-     */
-    link([-0.085, 0.4, 0.1], [-0.196, 0.93, 0.155], 0.028, 0.028, C.woodDark, { kind: 'cyl', seg: 4 }),
-    { kind: 'box', pos: [-0.243, 0.9, 0.155], rot: [0, 0, 0.16], scale: [0.042, 0.2, 0.19], color: ALLY_SKY, hueJitter: 0.02 },
-    { kind: 'cone', pos: [-0.223, 0.776, 0.155], rot: [Math.PI, 0, 0.16], scale: [0.17, 0.105, 0.042], color: ALLY_SKY_D, seg: 3 },
     ...tag(ids.head, [
       // 털 두건 크라운 — 머리 윗면을 통째로 덮는다(머리보다 사방 0.014 크게).
       // **이 한 파트가 진영 구분의 8할**이다: 부감 카메라에 가장 크게 잡히는 면이 여기다.
@@ -1365,10 +1365,38 @@ function allyLivery(ids: RaiderIds): PartSpec[] {
   ];
 }
 
+/**
+ * 등에 멘 부족기 — **전투 3종만 든다.** 제복(변형 0)에서 떼어 kit 으로 내렸다.
+ *
+ * 왜 공통에서 뺐나: 깃대가 x −0.196~−0.243 · z 0.155 · y 0.78~0.93 을 지나는데
+ * 채집꾼의 광주리가 **바로 그 자리**다(kitGatherer). 둘을 겹치면 등이 파란 천과
+ * 마른 풀색으로 뒤엉켜 어느 쪽도 안 읽힌다. 짐을 진 사람이 깃발까지 들지 않는다는
+ * 그림이 규칙과도 맞으므로, 깃발을 **전투 카드의 표식**으로 좁혔다.
+ * 대가는 3벌(34 × 3 = 102삼각형)이고, 제복 본체 132가 1벌로 내려온 이득이 그보다 크다.
+ *
+ * 두 번 옮겼다. 처음엔 머리 바로 뒤(x −0.19, z 0)에 세웠더니 정면에서 **머리에 얹힌
+ * 파란 슬래브**로 보였다. 뒤로 눕혀(x −0.30) 머리 위를 벗어나게 했더니 이번엔
+ * 깃대가 머리에 완전히 가려 **막대 없이 뜬 간판**이 됐다.
+ * 그래서 z를 0.155로 밀어 **한쪽 어깨 너머로 멘** 자세로 만들었다 — 머리 반폭이
+ * 0.1225이므로 깃대가 머리 옆으로 빠져나와 "장대에 달린 천"이 성립한다.
+ * 좌우 비대칭이라 유닛이 어느 쪽을 보는지도 함께 읽힌다.
+ *
+ * 기울기는 0.30 → 0.16으로 되돌렸다. 실전투 프레임(55° 부감)에서 아군은 카메라를
+ * **등지고** 걸어가므로 뒤로 많이 눕힌 깃발은 화면상 몸통과 겹쳐 사라진다.
+ * 세워 두면 머리 위 빈 하늘로 삐져나와 흰 두건 위의 파란 조각으로 남는다.
+ */
+function allyBanner(): PartSpec[] {
+  return [
+    link([-0.085, 0.4, 0.1], [-0.196, 0.93, 0.155], 0.028, 0.028, C.woodDark, { kind: 'cyl', seg: 4 }),
+    { kind: 'box', pos: [-0.243, 0.9, 0.155], rot: [0, 0, 0.16], scale: [0.042, 0.2, 0.19], color: ALLY_SKY, hueJitter: 0.02 },
+    { kind: 'cone', pos: [-0.223, 0.776, 0.155], rot: [Math.PI, 0, 0.16], scale: [0.17, 0.105, 0.042], color: ALLY_SKY_D, seg: 3 },
+  ];
+}
+
 /** 몽둥이꾼 — 굵고 짧은 나무 몽둥이 (돌 박은 혹). blade 의 가늘고 긴 투창과 실루엣이 갈린다 */
 function kitClubber(ids: RaiderIds): PartSpec[] {
   return [
-    ...allyLivery(ids),
+    ...allyBanner(),
     ...tag(ids.armR, [
       link([0.1, 0.235, -0.132], [0.148, 0.47, -0.132], 0.05, 0.05, C.wood, { kind: 'cyl', seg: 5 }),
       { kind: 'ico', pos: [0.166, 0.556, -0.132], rot: [0.3, 0.5, 0.2], scale: [0.19, 0.2, 0.175], color: C.woodDark },
@@ -1385,7 +1413,7 @@ function kitClubber(ids: RaiderIds): PartSpec[] {
  */
 function kitSlinger(ids: RaiderIds): PartSpec[] {
   return [
-    ...allyLivery(ids),
+    ...allyBanner(),
     ...tag(ids.armR, [
       ...tube(arc([0.12, 0.28, -0.13], [0.36, 0.66, -0.1], [0.07, 0.84, 0.03], 3), 0.024, 0.019, C.rope, { flat: 1 }),
     ]),
@@ -1412,7 +1440,7 @@ function kitSlinger(ids: RaiderIds): PartSpec[] {
  */
 function kitGuardian(ids: RaiderIds): PartSpec[] {
   return [
-    ...allyLivery(ids),
+    ...allyBanner(),
     ...tag(ids.armL, [
       { kind: 'box', pos: [0.15, 0.36, 0.168], rot: [0, 0, 0.05], scale: [0.05, 0.5, 0.38], color: C.woodDark },
       { kind: 'box', pos: [0.178, 0.36, 0.168], rot: [0, 0, 0.05], scale: [0.035, 0.42, 0.3], color: ALLY_FUR_D, hueJitter: 0.02 },
@@ -1427,7 +1455,80 @@ function kitGuardian(ids: RaiderIds): PartSpec[] {
 }
 
 /**
- * 아군 3종의 **공격 포즈** (변형 번호 1~3 = ALLY_KITS 순서).
+ * 채집꾼 — **무기가 없는 사람.** 등에 큰 광주리를 지고 손에는 짧은 뒤지개만 있다.
+ *
+ * ── 실루엣이 어디서 갈리는가 ────────────────────────────────────────────────
+ * 전투 3종은 부피가 전부 **손·머리 위**에 있다 (몽둥이는 어깨 위, 무릿매는 머리를
+ * 가로지르는 고리, 방패는 몸 앞의 세로 슬래브). 55° 부감 카메라에서 위에서 본 덩어리가
+ * 셋 중 어느 것과도 안 겹치는 자리는 **등** 하나뿐이고, 거기에 광주리를 얹으면
+ * "손이 비어 있다 = 싸우지 않는 사람"이 같은 그림에서 한 번에 읽힌다.
+ * 몸도 넷 중 가장 작다(radius 0.24 — allies.ts).
+ *
+ * ⚠ **부족기를 안 든다** — 이 kit 만 allyBanner() 를 부르지 않는다. 깃대가
+ * x −0.196~−0.243 · z 0.155 · y 0.78~0.93 을 지나는데 광주리가 **같은 자리**라
+ * 둘을 겹치면 등이 파란 천과 마른 풀색으로 뒤엉켜 어느 쪽도 안 읽힌다.
+ * 짐을 진 사람이 깃발까지 들지 않는다는 그림이 규칙과도 맞는다.
+ *
+ * 색: 광주리만 마른 풀색(C.straw)이다. 아군 색조(ALLY_TINT 0.86/0.98/1.16)가 온몸을
+ * 서늘하게 미는 위에서 **한 점만 따뜻하게** 남아 등짐이 먼저 눈에 들어온다.
+ *
+ * 삼각형 **132** (§6-6 예산 K ≤ 140):
+ *   아가리 링 cyl seg6 24 · 몸통 cone seg6 12 · 짐 2알 ico 40 · 멜빵 2줄 24 ·
+ *   이마 짐끈 12 · 뒤지개 자루 12 · 돌촉 cone seg4 8
+ * ⚠ 원주 분할을 §6-6 의 8각이 아니라 **6각**으로 굽는다 — 이 파일의 스타일 규약이
+ *   "원주 분할 4~7, 8+는 매끈해져 스타일 이탈"(헤더)이고, 6각이면 예산도 8각(148)에서
+ *   132로 내려와 §6-6 이 적은 "약 132"에 정확히 앉는다.
+ */
+function kitGatherer(ids: RaiderIds): PartSpec[] {
+  return [
+    /**
+     * 깃발을 지운 자리 = 등에 진 광주리. 위를 향해 벌어진 6각 테이퍼 + 아가리 링.
+     * 아가리를 몸통보다 넓게 얹어 부감에서 **어두운 속**이 보이게 한다 — 위에서 본
+     * 열린 통은 그 자체로 "담는 물건"이고, 그게 등짐의 판독 근거다.
+     *
+     * 단면이 **앞뒤로 얇고(0.25) 좌우로 넓다(0.42).** 두 이유가 같은 값을 가리켰다:
+     *  ① 55° 부감에서 화면 면적을 버는 축은 z(좌우)다. 어깨 목도리가 이미 같은 처방을
+     *     쓰고 있고(x 0.30 / z 0.44) 광주리가 그 바로 뒤에 겹쳐 앉아 한 덩어리로 읽힌다.
+     *  ② 앞뒤로 두꺼우면 x −0.15 앞의 **뒤통수 털**(x −0.151~−0.075)을 파고들어
+     *     흰 두건의 뒤가 마른 풀색 링에 잘린다. 지금 앞 끝이 −0.16이라 닿지 않는다.
+     */
+    { kind: 'cyl', pos: [-0.285, 0.578, 0], scale: [0.25, 0.072, 0.42], color: C.rope, seg: 6, hueJitter: 0.02 },
+    link([-0.285, 0.565, 0], [-0.3, 0.285, 0], 0.225, 0.375, C.straw, { kind: 'cone', seg: 6, hueJitter: 0.025 }),
+    // 광주리에 담긴 짐 — 아가리 위로 살짝 넘치게 둔다. 빈 광주리는 부감에서
+    // 그냥 구멍이라 "일하고 있다"가 안 읽힌다.
+    { kind: 'ico', pos: [-0.278, 0.622, 0.088], scale: [0.115, 0.1, 0.115], color: C.leafDark, hueJitter: 0.03 },
+    { kind: 'ico', pos: [-0.302, 0.612, -0.082], scale: [0.1, 0.088, 0.1], color: C.hide, hueJitter: 0.03 },
+    // 멜빵 2줄 — 광주리 위쪽에서 양 어깨를 넘어 가슴으로. 어깨 목도리(흰 털) 위를
+    // 지나는 어두운 가죽 두 줄이라 부감에서 등짐과 몸이 실제로 이어져 보인다.
+    ...mirZ([
+      link([-0.242, 0.556, 0.108], [0.052, 0.342, 0.126], 0.032, 0.048, RAIDER_HIDE_D, { hueJitter: 0.02 }),
+    ]),
+    // 이마 짐끈(멜빵끈) — 하늘빛 이마띠보다 뒤·위에 한 줄 더. 큰 짐을 이마로 받치는
+    // 자세는 이 한 줄로 성립하고, 머리 그룹이라 걸음마다 같이 까딱인다.
+    ...tag(ids.head, [
+      { kind: 'box', pos: [-0.006, 0.716, 0], scale: [0.078, 0.036, 0.276], color: RAIDER_HIDE_D, hueJitter: 0.02 },
+    ]),
+    /**
+     * 뒤지개 — 유일하게 손에 있는 물건이고, **공격 배역 MAIN 의 지렛대**다.
+     *
+     * ⚠ 길이가 아트가 아니라 **계약**이다(§6-6). 채집 포즈는 back 0.70 / fwd −1.60 인데,
+     * `allies.test.ts ④` 가 전 종에 `ready − hit > 0.2`(모델 키 0.77 의 1/4)를 요구한다.
+     * 각도가 파수꾼(back 1.25)보다 얕으므로 낙차는 **지렛대 길이**로만 벌 수 있다 —
+     * 파수꾼 돌도끼의 어깨 기준 거리(0.166)가 하한이고, 여기 돌촉 끝은 **0.352**다.
+     * 짧고 굵은 뒤지개를 굽지 마라. 실측은 아래 ALLY_ATTACKS 4)번 주석에 있다.
+     *
+     * 손잡이 **뒤쪽(자루 끝)을 길게 빼지 않는 것**도 같은 이유다: 어깨 뒤로 넘어간
+     * 정점은 내려칠 때 오히려 **올라와** 낙차를 그만큼 깎아 먹는다(시소).
+     */
+    ...tag(ids.armR, [
+      link([0.086, 0.252, -0.146], [0.3, 0.376, -0.146], 0.042, 0.042, C.wood, { hueJitter: 0.02 }),
+      link([0.292, 0.371, -0.146], [0.352, 0.406, -0.146], 0.072, 0.062, C.stoneDark, { kind: 'cone', seg: 4 }),
+    ]),
+  ];
+}
+
+/**
+ * 아군 4종의 **공격 포즈** (변형 번호 1~4 = ALLY_KITS 순서).
  *
  * 11단계까지 아군의 "공격"은 보행 위상을 9rad/s로 굴리는 것 하나뿐이었다 —
  * 사지가 전부 같은 aGait 를 보므로 팔이 빨라지면 **다리도 같이 빨라져** 제자리
@@ -1453,6 +1554,11 @@ function kitGuardian(ids: RaiderIds): PartSpec[] {
  *  · 무릿매 = 던지기. 머리 위 무릿매를 앞으로 후려 돌을 놓는다(놓는 순간 돌이 사라진다).
  *    사거리 2.8칸이라 화면에서 적과 뚝 떨어져 서 있고, 그 거리에서 근접과 같은 모션이면
  *    "허공을 때리는 사람"이 된다.
+ *  · 채집꾼 = **캐기**. 내려치기도 던지기도 아니다 — 얕게 젖혔다 앞아래로 길게 훑는다.
+ *
+ * ⚠ 순서가 계약이다: allyShared 가 `ALLY_ATTACKS.forEach((p, i) => rig.attack(i + 1, p))`
+ * 로 **인덱스+1 = 변형 번호**를 못 박는다. ALL_ALLY_IDS(싼 순: gatherer 가 첫째)와는
+ * 순서가 다르므로, 새 종은 언제나 이 배열과 ALLY_KITS 의 **맨 뒤에** 붙인다.
  */
 const ALLY_ATTACKS: readonly (readonly AttackPose[])[] = [
   // 1) 몽둥이꾼 — 가장 크고 느린 호. 돌 박은 혹이 무거워 보이도록 몸통 기울임도 최대(1.0).
@@ -1476,6 +1582,26 @@ const ALLY_ATTACKS: readonly (readonly AttackPose[])[] = [
     { role: ATK_ROLE_MAIN, back: 1.25, fwd: -1.2 },
     { role: ATK_ROLE_OFF, back: 0.35, fwd: 0.5 },
     { role: ATK_ROLE_HEAD, back: 0.1, fwd: -0.2 },
+  ],
+  /**
+   * 4) 채집꾼 — 캐기. 뒤지개를 얕게 세웠다 **앞아래로 길게** 훑어 내린다.
+   *
+   * ⚠ `back` 이 0.70인 것은 아트가 아니라 테스트다(§6-6). `allies.test.ts ④` 가
+   * 전 종에 `ready − hit > 0.2`(모델 키 0.77의 1/4)를 요구하는데, 뒤지개는 파수꾼
+   * 돌도끼급의 짧은 지렛대라 **0.35에서는 낙차가 0.190으로 모자란다**. 0.70이면
+   * 실측 낙차가 0.2를 넘는다(kitGatherer 의 뒤지개 길이가 나머지 절반의 근거다).
+   * 아트 의도인 "얕고 낮게"는 각도가 아니라 **몸통과 머리**가 낸다 — lean 0.6(파수꾼
+   * 0.75보다 낮다)에 HEAD fwd −0.4로 크게 숙여 "쭈그려 훑는" 인상을 만든다.
+   * 빈 손(OFF)은 무릎을 짚듯 같이 내려간다 — 무기를 안 든 팔이라 take 를 낮춰 호를 줄인다.
+   *
+   * ⚠⚠ **채집 자세는 이 포즈를 쿨다운으로 재생하지 않는다.** 캐는 동안에는
+   * attackCdLeft 가 안 돌아 진행도가 얼어붙으므로, 뷰가 gatherTicks 로 위상을 직접
+   * 만들어 attack(4, …) 를 구동한다(§6-6 · views/enemyview.ts — T5 소관).
+   */
+  [
+    { role: ATK_ROLE_MAIN, back: 0.7, fwd: -1.6 },
+    { role: ATK_ROLE_OFF, back: 0.2, fwd: -0.75, take: 0.7 },
+    { role: ATK_ROLE_HEAD, back: 0.06, fwd: -0.4 },
   ],
 ];
 
@@ -1533,6 +1659,9 @@ const ALLY_ATTACK_ANIMS: Readonly<Record<AllyId, AllyAttackAnim>> = {
   clubber: allyAnim('clubber', ATK_RELEASE, 1),
   slinger: allyAnim('slinger', ATK_LAUNCH, 0.9),
   guardian: allyAnim('guardian', ATK_RELEASE, 0.75),
+  // 채집꾼은 넷 중 몸통 기울임이 가장 작다(0.6). "얕고 낮게"를 팔 각도가 아니라
+  // 여기서 낸다 — 팔의 호는 오히려 커야 낙차 계약(§6-6)이 선다.
+  gatherer: allyAnim('gatherer', ATK_RELEASE, 0.6),
 };
 
 /** 그 아군의 공격 동작 파라미터 (뷰가 쿨다운 잔여 틱과 함께 읽는다) */
@@ -1569,20 +1698,31 @@ const RAIDER_KITS: readonly ((ids: RaiderIds) => PartSpec[])[] = [
   kitHexer,
 ];
 
-/** 아군 마을 부족원 장비 3벌 — 같은 몸통, 다른 지오메트리 (변형 1~3) */
+/**
+ * 아군 마을 부족원 장비 4벌 — 같은 몸통, 다른 지오메트리 (변형 1~4).
+ * ⚠ **맨 뒤에만 붙인다.** 이 배열의 인덱스+1이 곧 ALLY_VARIANTS 의 번호이고
+ * ALLY_ATTACKS 의 짝이다(allyShared). ALL_ALLY_IDS 는 값이 싼 순서라 여기와 다르다.
+ */
 const ALLY_KITS: readonly ((ids: RaiderIds) => PartSpec[])[] = [
   kitClubber,
   kitSlinger,
   kitGuardian,
+  kitGatherer,
 ];
 
-/** 장비 배열 하나를 몸통에 얹어 굽는 공통 경로 (변형 태그 1-base) */
+/**
+ * 장비 배열 하나를 몸통에 얹어 굽는 공통 경로 (변형 태그 1-base).
+ * `common` 은 **변형 태그 없이**(=0) 얹는 벌이라 그 지오메트리의 모든 인스턴스가
+ * 그린다 — 아군 제복처럼 "종이 달라도 똑같이 입는 것"의 자리다. 종마다 복제하면
+ * 벌 수만큼 삼각형이 곱해지므로, 공통으로 내릴 수 있는 것은 반드시 여기로 내린다.
+ */
 function sharedWithKits(
   rig: RigBuilder,
   kits: readonly ((ids: RaiderIds) => PartSpec[])[],
+  common?: (ids: RaiderIds) => PartSpec[],
 ): PartSpec[] {
   const { parts, ids } = raiderBody(rig);
-  const out = [...parts];
+  const out = [...parts, ...(common ? common(ids) : [])];
   kits.forEach((kit, i) => out.push(...tagVariant(i + 1, kit(ids))));
   return out;
 }
@@ -1594,11 +1734,11 @@ function raiderShared(rig: RigBuilder): PartSpec[] {
   return sharedWithKits(rig, RAIDER_KITS);
 }
 
-/** 전투용 아군 공유 지오메트리 — 같은 몸통 + 장비 3벌 */
+/** 전투용 아군 공유 지오메트리 — 같은 몸통 + 제복 1벌(변형 0) + 장비 4벌 */
 function allyShared(rig: RigBuilder): PartSpec[] {
   // 공격 포즈는 변형 번호와 **같은 순서**로 등록한다 (ALLY_KITS ↔ ALLY_ATTACKS)
   ALLY_ATTACKS.forEach((poses, i) => rig.attack(i + 1, poses));
-  return sharedWithKits(rig, ALLY_KITS);
+  return sharedWithKits(rig, ALLY_KITS, allyLivery);
 }
 
 /** 갤러리/단품용 — 그 종의 장비만 굽는다 (variant 태그 없음) */
@@ -1606,10 +1746,11 @@ function raiderSolo(
   rig: RigBuilder,
   variant: number,
   kits: readonly ((ids: RaiderIds) => PartSpec[])[] = RAIDER_KITS,
+  common?: (ids: RaiderIds) => PartSpec[],
 ): PartSpec[] {
   const { parts, ids } = raiderBody(rig);
   const kit = kits[variant - 1];
-  return kit ? [...parts, ...kit(ids)] : parts;
+  return kit ? [...parts, ...(common ? common(ids) : []), ...kit(ids)] : parts;
 }
 
 function mammoth(rig: RigBuilder): PartSpec[] {
@@ -2006,11 +2147,16 @@ export function enemyVariant(id: EnemyId): number {
  *
  * 3단계까지는 습격대와 한 지오메트리를 써서 5~7이었다. 5단계에서 갈라 1~3이 됐다 —
  * 근거는 RAIDER_KITS 주석(삼각형 3만을 드로우콜 1개로 산다). 몸통·리그는 그대로 공유한다.
+ *
+ * ⚠ **ALL_ALLY_IDS 순서와 다르다.** 채집꾼이 넷 중 가장 싸서 ALL_ALLY_IDS 에서는
+ * 맨 앞이지만(data/allies.ts), 여기 번호는 ALLY_KITS/ALLY_ATTACKS 배열의 인덱스+1이라
+ * **맨 뒤인 4**다. 앞에 끼워 넣으면 기존 셋의 장비와 공격 포즈가 통째로 한 칸씩 밀린다.
  */
 const ALLY_VARIANTS: Readonly<Record<AllyId, number>> = {
   clubber: 1,
   slinger: 2,
   guardian: 3,
+  gatherer: 4,
 };
 
 /** 아군 공유 지오메트리 키 (EnemyId 와도 RAIDER_GEO_KEY 와도 겹치지 않는 이름) */
@@ -2055,7 +2201,9 @@ export function allyVariant(id: AllyId): number {
  * 공유본을 그대로 주면 장비 7벌이 한 몸에 다 붙어 나온다.
  */
 export function buildAllySolo(id: AllyId): THREE.BufferGeometry {
-  return asset(`solo:ally:${id}`, (rig) => raiderSolo(rig, ALLY_VARIANTS[id], ALLY_KITS)).geo;
+  return asset(`solo:ally:${id}`, (rig) =>
+    raiderSolo(rig, ALLY_VARIANTS[id], ALLY_KITS, allyLivery),
+  ).geo;
 }
 
 /**

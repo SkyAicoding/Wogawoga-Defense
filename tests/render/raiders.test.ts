@@ -1,5 +1,5 @@
 /**
- * 한 지오메트리에 올라탄 **부족 7종**(적 습격대 4 + 아군 마을 부족원 3)의
+ * 두 지오메트리에 나눠 탄 **부족 8종**(적 습격대 4 + 아군 마을 부족원 4)의
  * 드로우콜 묶음과 삼각형 예산 회귀 테스트.
  *
  * 종마다 InstancedMesh 를 두면 컬러+그림자로 드로우콜이 종당 +2 씩 붙어
@@ -106,8 +106,12 @@ describe('부족 습격대 렌더', () => {
    * 원점으로 접을 뿐이라 한 인스턴스가 장비 7벌의 정점 비용을 매 프레임 냈고,
    * 습격대 56마리가 동시에 사는 편성에서 그게 프레임을 지배했다(최악 170,341 삼각형).
    * 여기서 잠그는 것은 "**갈렸지만 몸통은 여전히 같다**"이다.
+   *
+   * 11단계) 채집꾼이 붙어 **4벌**이 됐다. 번호가 1~4인 것은 kit 배열 순서(ALLY_KITS)
+   * 이지 ALL_ALLY_IDS 순서가 아니다 — 채집꾼은 값이 싸서 목록에서는 맨 앞이지만
+   * 변형은 **맨 뒤인 4**다(공격 포즈 표와 짝이 밀리지 않게).
    */
-  it('아군 3종은 별도 지오메트리를 쓰되 몸통(보행 리그)은 습격대와 같다', () => {
+  it('아군 4종은 별도 지오메트리를 쓰되 몸통(보행 리그)은 습격대와 같다', () => {
     const geo = buildEnemy('blade');
     expect(allyGeoKey()).not.toBe(RAIDER_GEO_KEY);
     expect(buildAlly()).not.toBe(geo);
@@ -117,13 +121,13 @@ describe('부족 습격대 렌더', () => {
     expect(ar.limbs.length).toBe(er.limbs.length);
     expect(ar.gaitPerDist).toBeCloseTo(er.gaitPerDist, 6);
     const allyVars = ALL_ALLY_IDS.map(allyVariant);
-    expect(new Set(allyVars)).toEqual(new Set([1, 2, 3])); // 서로 다르다
-    // 아군 공유본에 아군 장비 3벌이 전부 구워져 있다
+    expect(new Set(allyVars)).toEqual(new Set([1, 2, 3, 4])); // 서로 다르다
+    // 아군 공유본에 아군 장비 4벌이 전부 구워져 있다 (0 = 몸통 + 공통 제복)
     const attr = buildAlly().getAttribute(VARIANT_ATTR);
     const seen = new Set<number>();
     for (let i = 0; i < attr!.count; i++) seen.add(Math.round(attr!.getX(i)));
-    expect(seen).toEqual(new Set([0, 1, 2, 3]));
-    // 아군 단품은 갤러리 전용이라 공유본과 **다른** 객체여야 한다(장비가 3벌 다 붙지 않게)
+    expect(seen).toEqual(new Set([0, 1, 2, 3, 4]));
+    // 아군 단품은 갤러리 전용이라 공유본과 **다른** 객체여야 한다(장비가 4벌 다 붙지 않게)
     for (const id of ALL_ALLY_IDS) expect(buildAllySolo(id), id).not.toBe(buildAlly());
   });
 
@@ -153,7 +157,10 @@ describe('부족 습격대 렌더', () => {
     /**
      * 공유본이 단품 합의 몇 배 이내여야 하는가 — **변형 수가 많을수록 이득이 커진다**
      * (몸통 1벌만 굽고 장비만 더하므로). 그래서 상한도 종 수에 따라 다르다.
-     * 실측: 습격대 4벌 1,146 / 단품 합 2,368 = 0.48 · 아군 3벌 1,080 / 1,776 = 0.61.
+     * 실측(11단계): 습격대 4벌 1,146 / 단품 합 2,368 = 0.48 ·
+     *               아군 4벌 **948** / 2,388 = **0.40**.
+     * 아군 비율이 3벌(0.61)보다 **내려간** 것은 채집꾼을 얹으면서 공통 제복(166삼각형)을
+     * 변형 0으로 내렸기 때문이다 — 종마다 복제하던 것이 1벌이 됐다(enemies.ts allyLivery).
      */
     const budget = (
       label: string,
@@ -177,6 +184,9 @@ describe('부족 습격대 렌더', () => {
     };
     const raider = budget('습격대', RAIDERS, buildEnemySolo, buildEnemy('blade'), 0.55);
     const ally = budget('아군', ALL_ALLY_IDS, buildAllySolo, buildAlly(), 0.7);
+    // 실측(11단계) — 단품 clubber 578 / slinger 610 / guardian 588 / gatherer 612,
+    // 공유본 948. 아래 주석의 "제복을 변형 0으로 내렸다"가 되돌려지면 1,246으로 튄다.
+    expect(ally, '아군 공유본이 제복 복제 시절(1,080+)로 되돌아갔다').toBeLessThan(1000);
 
     /**
      * 절대 상한 1700 → **1250** (5단계). 값이 내려간 것은 장비를 줄여서가 아니라
@@ -190,8 +200,13 @@ describe('부족 습격대 렌더', () => {
      *   4벌/3벌   → 약 14만, 드로우콜 +1 (아군과 습격대가 동시에 있을 때만)
      *
      * 상한을 유지하는 이유는 그대로다: "장비를 계속 얹다 보면 공유본이 소리 없이 부푼다"를
-     * 막는 것. 1250은 지금 값(1,146)에 파트 여덟 개 남짓의 여유만 준다 — 또 넘긴다면
+     * 막는 것. 1250은 지금 값(습격대 1,146)에 파트 여덟 개 남짓의 여유만 준다 — 또 넘긴다면
      * 그때도 최악 프레임을 실제로 만들어 재고 그 근거를 여기 남겨라.
+     *
+     * ⚠ 11단계) 아군에 채집꾼(넷째)이 붙었는데 공유본은 오히려 **1,080 → 948**로 줄었다.
+     * 장비를 깎아서가 아니라 **공통 제복을 변형 0으로 내려** 3벌 복제를 1벌로 만든
+     * 덕이다(−332). 부족기만 전투 3종의 kit 으로 내려가 3벌 남았고(+102), 채집꾼 장비가
+     * +132다. 단품 셋(578/610/588)은 한 삼각형도 안 움직였다 — 화면은 그대로다.
      */
     expect(raider, '습격대 공유 지오메트리 삼각형').toBeLessThan(1250);
     expect(ally, '아군 공유 지오메트리 삼각형').toBeLessThan(1250);

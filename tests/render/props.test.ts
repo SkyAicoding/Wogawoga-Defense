@@ -27,9 +27,10 @@ import {
   elementTriCount,
 } from '@/render/meshlib/props';
 import type { Element } from '@/render/meshlib/props';
-import { rasterizePathCells, sceneryCells } from '@/data/grid';
+import { cellKey, rasterizePathCells, sceneryCells } from '@/data/grid';
+import { RESOURCE_WEIGHTS, isLandmarkCell, resourceKindOf } from '@/data/resources';
 import { STAGES } from '@/data/stages';
-import type { StageDef, Vec2 } from '@/data/types';
+import type { BiomeId, ResourceId, StageDef, Vec2 } from '@/data/types';
 
 /**
  * 스테이지별 소품 삼각형 상한 (실측 + 여유 ~6%).
@@ -56,9 +57,28 @@ import type { StageDef, Vec2 } from '@/data/types';
  * e2e 최악 프레임 실측(1280×800, 타워 10+·적 40+·아군 6+):
  *   s1 75콜/129,717 · s2 72/120,672 · s3 74/137,157 · s4 75/134,184 ·
  *   s5 75/135,112 · s6 72/131,275   ← 상한 90콜 / 150,000 대비 8~19% 여유
+ *
+ * ── 채집 개정(자원 종류 = 1층 실루엣 · 셀 단위 rng) 후 재실측 ────────────────
+ *   s1 9,565(239/셀) · s2 8,643(196) · s3 11,056(217) · s4 8,616(180) ·
+ *   s5 9,828(234) · s6 7,610(190)
+ * 여섯 판 합계는 **줄었다**(56,447 → 55,318, −1,129). 신규 자원 원형 여섯이
+ * 기존 1층보다 싸기 때문이다(48~104 vs 84~116) — 그래서 낮은 종(berry/honey/
+ * mushroom/flint)이 많은 판일수록 값이 내려간다: s6 −456 · s3 −177 · s2 −82.
+ *
+ * ⚠ **s1 만 +572 로 늘었고, 그 전액이 랜드마크다.** 랜드마크 판정이 소품 rng
+ * (0.11)에서 자원 모듈(`isLandmarkCell`: wood/stone 셀의 24%)로 옮겨 가면서
+ * s1 의 랜드마크가 3그루 → 7그루가 됐고, elderTree 가 136 tri 다(4 × 136 = 544).
+ * 곧 이 증가는 소품 편성이 아니라 **자원 배정표가 정한 값**이라 여기서 깎을 수
+ * 없다. s1 상한만 실측 + 6.6% 로 올린다(9,200 → 10,200). 나머지 다섯은 실측이
+ * 내려갔으므로 **상한을 한 자리도 안 건드린다** — 내리는 것도 규약이 아니다.
+ *
+ * 프레임 예산(계약 C: 90콜 / 150,000)에 미치는 영향:
+ *   s1 129,717 + 572 = 130,289 (여유 19,711) · s3 137,157 − 177 = 136,980 (여유 13,020)
+ *   e2e 집결지 6명(s1) 138,031 + 572 = 138,603 (여유 11,397)
+ * 드로우콜은 **한 개도 안 늘었다** — 신규 원형 여섯이 전부 같은 병합 메시에 들어간다.
  */
 const STAGE_CAP: Record<number, number> = {
-  1: 9_200,
+  1: 10_200,
   2: 9_200,
   3: 11_700,
   4: 9_300,
@@ -85,6 +105,7 @@ const BEFORE: Record<number, number> = {
 function sceneryOf(stage: StageDef): {
   list: Vec2[];
   cellToWorld: (x: number, z: number, out?: THREE.Vector3) => THREE.Vector3;
+  kindOf: (cellX: number, cellZ: number) => { kind: ResourceId; landmark: boolean };
 } {
   const pathCells = rasterizePathCells(stage);
   const list = [...sceneryCells(stage, pathCells)].map((k) => ({
@@ -96,6 +117,16 @@ function sceneryOf(stage: StageDef): {
   return {
     list,
     cellToWorld: (x, z, out) => (out ?? new THREE.Vector3()).set(x - halfW, 0, z - halfH),
+    /*
+     * ⚠ 여기서 종류를 **다시 굴리지 않는다** — stage3d.ts:92 와 같은 두 함수를 그대로
+     * 부른다. 소품 실루엣은 이제 자원 종류가 정하므로, 테스트가 자기 배정표를 쓰면
+     * 이 파일이 재는 삼각형 수는 게임이 실제로 그리는 것이 아니게 된다.
+     */
+    kindOf: (cellX, cellZ) => {
+      const key = cellKey(stage, cellX, cellZ);
+      const kind = resourceKindOf(stage, key);
+      return { kind, landmark: isLandmarkCell(stage, key, kind) };
+    },
   };
 }
 
@@ -437,8 +468,8 @@ describe('크기 계층', () => {
     };
     const rows: string[] = [];
     for (const stage of STAGES) {
-      const { list, cellToWorld } = sceneryOf(stage);
-      const props = buildProps(stage.biome, list, cellToWorld, stage.id);
+      const { list, cellToWorld, kindOf } = sceneryOf(stage);
+      const props = buildProps(stage.biome, list, cellToWorld, stage.id, kindOf);
       const mesh = propsMeshOf(props.group);
       const T = [0.9, 1.4, 2.5];
       let prev = T.map((t) => countAbove(mesh, t));
@@ -465,12 +496,80 @@ describe('크기 계층', () => {
   });
 });
 
+/**
+ * 채집 개정의 새 계약 — **자원 종류가 곧 1층 실루엣이다**(gather-spec §6-1).
+ *
+ * 이 판정은 화면에서 눈으로 확인할 수밖에 없어 보이지만, 깨지는 방식 셋은 전부
+ * 값으로 잡힌다: ① 어떤 종에 원형이 아예 없다(그 칸이 빈다) ② 어떤 hero 원형이
+ * 어느 종에도 안 속한다(판에 한 번도 안 서는데 heroPoolsOf 의 절반 가르기만 밀린다)
+ * ③ 낮은 종이 큰 계층으로 뽑힌다(2.0급 딸기덤불).
+ */
+describe('자원 종류 = 1층 실루엣', () => {
+  it('바이옴의 모든 자원 종류에 원형이 있고, 모든 hero 인덱스가 어느 종엔가 속한다', () => {
+    const rows: string[] = [];
+    for (const [biome, kit] of Object.entries(PROP_KITS)) {
+      const used = new Set<number>();
+      for (const [kind] of RESOURCE_WEIGHTS[biome as BiomeId]) {
+        const idx = kit.heroByKind[kind];
+        expect(idx?.length ?? 0, `${biome}.${kind} 에 1층 실루엣이 없다 — 그 칸이 통째로 빈다`).toBeGreaterThan(0);
+        for (const i of idx ?? []) {
+          expect(kit.hero[i], `${biome}.${kind} 가 없는 hero 인덱스 ${i} 를 가리킨다`).toBeTruthy();
+          used.add(i);
+        }
+        rows.push(`${biome}.${kind} → ${(idx ?? []).map((i) => elementHeight(kit.hero[i] as Element).toFixed(2)).join('/')}`);
+      }
+      kit.hero.forEach((_, i) => {
+        expect(
+          used.has(i),
+          `${biome} hero[${i}] 가 어느 종에도 안 속한다 — 판에 한 번도 안 서면서 heroPoolsOf 의 절반 가르기만 민다`,
+        ).toBe(true);
+      });
+    }
+    // eslint-disable-next-line no-console
+    console.log('종류별 1층 높이:\n  ' + rows.join('\n  '));
+  });
+
+  /**
+   * 셀 단위 rng (gather-spec §5-3) — **이게 없으면 자원표 한 줄이 6판을 흔든다.**
+   * 판 하나가 스트림 하나였을 때는 앞 셀에서 rng 를 한 번만 더 당겨도 그 뒤 모든 셀의
+   * 소품이 밀렸다. 여기서 재는 것은 정확히 그 성질이다: **한 칸의 종류를 바꾸고
+   * 그 칸을 지우면, 남은 판이 정점 하나까지 같아야 한다.**
+   */
+  it('셀 단위 rng — 한 칸의 자원 종류를 바꿔도 나머지 판은 정점 하나 안 움직인다', () => {
+    const stage = STAGES[0] as StageDef;
+    const a = sceneryOf(stage);
+    const b = sceneryOf(stage);
+    const target = a.list[3] as Vec2;
+    // 그 한 칸만 stone 랜드마크로 바꾼다 (실루엣도 원가도 확실히 달라지는 조합)
+    const swapped = (x: number, z: number): { kind: ResourceId; landmark: boolean } =>
+      x === target.x && z === target.z ? { kind: 'stone', landmark: true } : b.kindOf(x, z);
+
+    const pa = buildProps(stage.biome, a.list, a.cellToWorld, stage.id, a.kindOf);
+    const pb = buildProps(stage.biome, b.list, b.cellToWorld, stage.id, swapped);
+    const before = triCount(pa.group);
+    expect(triCount(pb.group), '바꾼 칸이 정말 달라졌는가 (안 달라졌으면 이 테스트는 아무것도 안 잰다)').not.toBe(before);
+
+    expect(pa.removeCell(target.x, target.z)).toBe(true);
+    expect(pb.removeCell(target.x, target.z)).toBe(true);
+    const ga = propsMeshOf(pa.group).geometry.getAttribute('position');
+    const gb = propsMeshOf(pb.group).geometry.getAttribute('position');
+    expect(gb.count, '바꾼 칸을 빼고 나면 삼각형 수가 같아야 한다').toBe(ga.count);
+    let diff = 0;
+    for (let i = 0; i < ga.count; i++) {
+      if (Math.abs(ga.getX(i) - gb.getX(i)) > 1e-9 || Math.abs(ga.getY(i) - gb.getY(i)) > 1e-9 || Math.abs(ga.getZ(i) - gb.getZ(i)) > 1e-9) diff++;
+    }
+    expect(diff, '자원표 한 칸이 이웃 칸의 소품을 밀었다 — 소품 rng 가 다시 판 단위가 됐다').toBe(0);
+    pa.dispose();
+    pb.dispose();
+  });
+});
+
 describe('스테이지별 소품 예산', () => {
   it('6개 스테이지 전부 상한 안이고, 개정 전 프레임 청구액보다 적다', () => {
     const rows: string[] = [];
     for (const stage of STAGES) {
-      const { list, cellToWorld } = sceneryOf(stage);
-      const props = buildProps(stage.biome, list, cellToWorld, stage.id);
+      const { list, cellToWorld, kindOf } = sceneryOf(stage);
+      const props = buildProps(stage.biome, list, cellToWorld, stage.id, kindOf);
       const tris = triCount(props.group);
       const cap = STAGE_CAP[stage.id] ?? 0;
       const before = BEFORE[stage.id] ?? 0;
@@ -493,8 +592,8 @@ describe('스테이지별 소품 예산', () => {
     let worst = 0;
     let worstAt = '';
     for (const stage of STAGES) {
-      const { list, cellToWorld } = sceneryOf(stage);
-      const props = buildProps(stage.biome, list, cellToWorld, stage.id);
+      const { list, cellToWorld, kindOf } = sceneryOf(stage);
+      const props = buildProps(stage.biome, list, cellToWorld, stage.id, kindOf);
       let prev = triCount(props.group);
       for (const cell of list) {
         expect(props.removeCell(cell.x, cell.z)).toBe(true);
@@ -516,8 +615,8 @@ describe('스테이지별 소품 예산', () => {
 
   it('드로우콜은 스테이지와 무관하게 1개다', () => {
     for (const stage of STAGES) {
-      const { list, cellToWorld } = sceneryOf(stage);
-      const props = buildProps(stage.biome, list, cellToWorld, stage.id);
+      const { list, cellToWorld, kindOf } = sceneryOf(stage);
+      const props = buildProps(stage.biome, list, cellToWorld, stage.id, kindOf);
       let meshes = 0;
       props.group.traverse((o) => {
         if ((o as THREE.Mesh).isMesh && o.visible) meshes++;
@@ -531,8 +630,8 @@ describe('스테이지별 소품 예산', () => {
 describe('접촉 그림자 계약', () => {
   it('소품은 섀도 캐스터가 아니다 (대신 지면 판을 깐다)', () => {
     const stage = STAGES[0] as StageDef;
-    const { list, cellToWorld } = sceneryOf(stage);
-    const props = buildProps(stage.biome, list, cellToWorld, stage.id);
+    const { list, cellToWorld, kindOf } = sceneryOf(stage);
+    const props = buildProps(stage.biome, list, cellToWorld, stage.id, kindOf);
     const mesh = propsMeshOf(props.group);
     expect(mesh.castShadow, '소품이 섀도 캐스터로 되돌아가면 프레임 삼각형이 2배가 된다').toBe(false);
     expect(mesh.receiveShadow, '타워/유닛 그림자는 소품 위에 떨어져야 한다').toBe(true);
@@ -541,8 +640,8 @@ describe('접촉 그림자 계약', () => {
 
   it('그림자 판이 셀(1×1) 밖으로 새지 않는다 — 섬 가장자리에서 허공에 뜨면 안 된다', () => {
     const stage = STAGES[0] as StageDef;
-    const { list, cellToWorld } = sceneryOf(stage);
-    const props = buildProps(stage.biome, list, cellToWorld, stage.id);
+    const { list, cellToWorld, kindOf } = sceneryOf(stage);
+    const props = buildProps(stage.biome, list, cellToWorld, stage.id, kindOf);
     const mesh = propsMeshOf(props.group);
     const pos = mesh.geometry.getAttribute('position');
     const halfW = (stage.gridW - 1) / 2;
@@ -569,8 +668,8 @@ describe('결정론 · 제거 계약', () => {
     const stage = STAGES[2] as StageDef;
     const a = sceneryOf(stage);
     const b = sceneryOf(stage);
-    const pa = buildProps(stage.biome, a.list, a.cellToWorld, stage.id);
-    const pb = buildProps(stage.biome, b.list, b.cellToWorld, stage.id);
+    const pa = buildProps(stage.biome, a.list, a.cellToWorld, stage.id, a.kindOf);
+    const pb = buildProps(stage.biome, b.list, b.cellToWorld, stage.id, b.kindOf);
     const ga = propsMeshOf(pa.group).geometry.getAttribute('position');
     const gb = propsMeshOf(pb.group).geometry.getAttribute('position');
     expect(gb.count).toBe(ga.count);
@@ -585,8 +684,8 @@ describe('결정론 · 제거 계약', () => {
 
   it('removeCell 은 그 셀의 3층 전부를 지우고 offsetOf 는 1층 밑동을 가리킨다', () => {
     const stage = STAGES[0] as StageDef;
-    const { list, cellToWorld } = sceneryOf(stage);
-    const props = buildProps(stage.biome, list, cellToWorld, stage.id);
+    const { list, cellToWorld, kindOf } = sceneryOf(stage);
+    const props = buildProps(stage.biome, list, cellToWorld, stage.id, kindOf);
     const cell = list[0] as Vec2;
     const off = props.offsetOf(cell.x, cell.z);
     expect(off).not.toBeNull();

@@ -241,6 +241,32 @@ const ALLY_SCRIPT: [number, BattleCommand][] = [
  */
 const SOLO_ORDER_TICK = 420;
 
+/**
+ * SOLO 명령이 찍는 셀. **`(2,2)`에서 `(3,2)`로 옮겼다.**
+ *
+ * 이유: 채집이 들어오면서 `moveAlly`의 도착지에 뜻이 하나 붙었다(D7) — 찍은 칸이 자원
+ * 칸이면 그 아군은 **거기 서는 대신 캐기 시작한다.** 그러면 이 스크립트가 잠그던 것
+ * (`walked`·`tgtX/tgtZ`가 해시에 반영되는가)이 더 이상 그것이 아니게 된다. 두 판이
+ * 똑같이 바뀌므로 A/B 비교는 그대로 통과하고, **그래서 조용히 커버리지만 사라진다.**
+ * 실측: 배포본 스테이지1에서 `(2,2)`는 실제 자원 칸이다(fruit, 마을거리 13.04).
+ *
+ * ⚠ 옮긴 이유를 **어서션으로 굳힌다** — 아래 `expectNotResource`가 이 스크립트가 찍는
+ *   네 칸이 전부 자원 칸이 아님을 매 실행마다 직접 검사한다. 주석만 남기면 스테이지나
+ *   소품 시드가 바뀐 날 같은 사고가 말없이 되돌아온다.
+ */
+const SOLO_CELL = { x: 3, z: 2 };
+
+/** 이 스크립트가 찍는 칸이 **자원 칸이 아님**을 그 자리에서 못 박는다 (위 SOLO_CELL 주석) */
+function expectNotResource(sim: BattleSim, cells: readonly { x: number; z: number }[]): void {
+  for (const c of cells) {
+    expect(
+      sim.state.resources.some((r) => r.cellX === c.x && r.cellZ === c.z),
+      `(${c.x},${c.z})는 자원 칸이 아니어야 한다 — 자원 칸이면 이 스크립트는 이동이 아니라 채집을 잰다`,
+    ).toBe(false);
+    expect(sim.resourceAt(c.x, c.z), `(${c.x},${c.z}) resourceAt`).toBeNull();
+  }
+}
+
 function runAllies(seed: number): {
   hashes: number[];
   trained: number;
@@ -278,6 +304,8 @@ function runAllies(seed: number): {
       ],
     }),
   );
+  // ⚠ **먼저** 못 박는다 — 이 스크립트가 찍는 네 칸이 자원 칸이면 잠그는 대상이 바뀐다
+  expectNotResource(sim, [SOLO_CELL, { x: 3, z: 2 }, { x: 4, z: 2 }, { x: 5, z: 2 }]);
   const hashes: number[] = [];
   let trained = 0;
   let died = 0;
@@ -289,7 +317,12 @@ function runAllies(seed: number): {
     if (!soloSent && t >= SOLO_ORDER_TICK) {
       const solo = sim.state.allies[0];
       if (solo) {
-        soloSent = sim.applyCommand({ type: 'moveAlly', allyId: solo.id, cellX: 2, cellZ: 2 });
+        soloSent = sim.applyCommand({
+          type: 'moveAlly',
+          allyId: solo.id,
+          cellX: SOLO_CELL.x,
+          cellZ: SOLO_CELL.z,
+        });
       }
     }
     sim.tick();
@@ -475,6 +508,148 @@ function runHometown(seed: number): { hashes: number[]; shots: number; upgrades:
   return { hashes, shots, upgrades };
 }
 
+// ---------------------------------------------------------------------------
+// 채집 시나리오 (docs/gather-spec.md §9-2) — **밟아야 할 분기 여덟 개**를 한 판에 넣는다.
+//  ① 개체 지정(allyId >= 0)과 종족 지정(-1) 둘 다
+//  ② 같은 칸에 둘 → 예약 배타성 (E-8·E-9)
+//  ③ 채집 중 다른 칸으로 moveAlly (E-3)
+//  ④ carryCap 2로 두 칸 → 자동 귀환 → 배달 (D6·D3)
+//  ⑤ 텄음 칸에 타워 배치 시도 → 실패 (D1)
+//  ⑥ 안 턴 칸을 골드로 치우기 (E-14)
+//  ⑦ 적이 붙어 진행분이 깨졌다 다시 캐기 (E-11)
+//  ⑧ 운반 중 사망 (E-10)
+// 잠그는 것: 아군 다섯 필드(gatherKey/gatherTicks/carryGold/carryCount/gatherHpMark)와
+// 자원 밭(taken)이 hash()에 들어가는가. 하나라도 빠지면 "언제 누가 무엇을 캐는가"의
+// 발산을 해시가 놓친다.
+//
+// ⚠ **짐값 기준을 6으로 주입해 돌린다**(createBattle의 BattleTuning). 배포본 상수는 아직
+//   0이라(T6이 켠다) 주입 없이는 carryGold·v.gold가 **영원히 0**이고, 그러면 이 시나리오가
+//   "0을 0과 비교하는" 실패 불가능한 계약이 된다.
+// ---------------------------------------------------------------------------
+const GATHER_SCRIPT: [number, BattleCommand][] = [
+  // 넷을 뽑는다. **callWave보다 먼저** 뽑아야 아군 id가 1~4로 굳는다 — id 카운터를
+  // 적·투사체와 공유하므로 웨이브가 시작된 뒤에 뽑으면 개체 지정 명령이 헛나간다.
+  [2, { type: 'trainAlly', defId: 'gatherer' }], // #1 A — 왕복 배달을 완주하는 사람
+  [3, { type: 'trainAlly', defId: 'gatherer' }], // #2 B — 전선 옆에서 맞으며 캔다
+  [4, { type: 'trainAlly', defId: 'clubber' }], // #3 C — hp 12. **짐을 진 채 죽는다**
+  [5, { type: 'trainAlly', defId: 'guardian' }], // #4 D — 캐던 칸이 치워진다
+  [6, { type: 'callWave' }],
+  // ① 종족 지정 — 자원 칸이므로 sim이 **한 사람만** 고른다(E-9). 나머지는 자리도 안 바꾼다
+  [8, { type: 'moveAlly', allyId: -1, defId: 'gatherer', cellX: 0, cellZ: 4 }],
+  // ②·① 개체 지정으로 **같은 칸**에 한 명 더 — 걸어는 가되 예약은 못 붙인다(배타성)
+  [10, { type: 'moveAlly', allyId: 2, cellX: 0, cellZ: 4 }],
+  [100, { type: 'moveAlly', allyId: 2, cellX: 7, cellZ: 0 }], // B 캐기 시작
+  // ③ 캐던 도중 **다른 자원 칸**으로 — 예약 취소('moved') + 진행분 폐기. 앞 칸은 살아 돌아온다
+  [250, { type: 'moveAlly', allyId: 2, cellX: 3, cellZ: 0 }],
+  [320, { type: 'moveAlly', allyId: 3, cellX: 2, cellZ: 0 }], // C: 안전한 칸에서 한 짐
+  [322, { type: 'moveAlly', allyId: 4, cellX: 0, cellZ: 1 }], // D: 곧 치워질 칸
+  // ④ A는 첫 칸을 다 캔 뒤 옆칸으로 → 짐 2개 → 자동 귀환 → 배달
+  [560, { type: 'moveAlly', allyId: 1, cellX: 1, cellZ: 4 }],
+  // ⑥ D가 캐던 칸을 골드로 치운다 → cancelGatherersOf('cleared'). **치운 사람이 그 짐을 버린 것**
+  [620, { type: 'clearScenery', cellX: 0, cellZ: 1 }],
+  // ⑦ B를 **전선 옆 칸**으로 — 지나가는 적이 스칠 때마다 진행분이 0으로 돌아간다(E-11).
+  //   hp가 커서 죽지는 않는다: ⑧(운반 중 사망)은 hp 12짜리 C가 자동 귀환길에 맡는다
+  [700, { type: 'moveAlly', allyId: 2, cellX: 7, cellZ: 3 }],
+];
+
+/** ⑤·⑥의 관측 지점 — 텄음 칸을 확인하는 틱(A가 (0,4)를 다 캔 뒤) */
+const TAKEN_PROBE_TICK = 520;
+
+interface GatherRun {
+  hashes: number[];
+  started: number;
+  gathered: number;
+  delivered: number;
+  deliveredGold: number;
+  lost: Record<'hit' | 'moved' | 'cleared' | 'died', number>;
+  finalGold: number;
+  takenCells: number;
+  /** ⑤ 텄음 칸이 여전히 건설 불가인가 (D1의 직접 증거) */
+  takenStillBlocked: boolean;
+  /** ⑤ 텄음 칸의 유료 제거 비용이 그대로인가 — 채집은 제거 지수를 한 톨도 안 건드린다 */
+  clearCostUnchanged: boolean;
+}
+
+function runGather(seed: number): GatherRun {
+  const sim = createBattle(
+    options({
+      seed,
+      endless: true,
+      deck: ['spear', 'frost', 'catapult'],
+      stage: stageDef({ waveCount: 3, baseHp: 9999, startGold: 100000 }),
+      enemyDefs: enemyDefs({
+        // 길(z=2)을 느리게 걸어가며 **옆칸의 채집꾼을 스친다**(규칙 5-c brushTarget).
+        // 난투 피해를 3으로 낮춘 것이 핵심이다: 기본값(cost 40 → 13)이면 채집꾼이
+        // 첫 뭉치에 즉사해 **E-11('맞으면 진행분만 0')이 한 번도 안 밟힌다** —
+        // 죽는 판정(E-10)이 맞는 판정을 통째로 가린다.
+        warrior: { hp: 1200, speed: 0.25, cost: 40, brawl: { dmg: 3, cooldownTicks: 30 } },
+        raptor: { hp: 400, speed: 0.35, cost: 25, brawl: { dmg: 3, cooldownTicks: 30 } },
+      }),
+      // 넷 다 채집을 할 줄 알게 만든다 — 종을 나눈 이유는 **hp를 따로 주기 위해서**다.
+      // 목 표는 종당 하나뿐이라, "죽는 사람"과 "맞으면서도 버티는 사람"을 같은 판에
+      // 넣으려면 종을 갈라야 한다. 넷 다 blocks:false다 — 봉쇄가 끼면 이 시나리오가
+      // 재는 것이 채집인지 봉쇄인지 알 수 없게 된다.
+      allyDefs: allyDefs({
+        gatherer: { hp: 300, dmg: 1, range: 0.9, speed: 1.3, blocks: false, gatherPct: 300, carryCap: 2 },
+        // hp 12 = 난투 4대. 안전한 칸에서 한 짐을 지고 **자동 귀환길에 길을 건너다 죽는다**
+        clubber: { hp: 12, dmg: 1, range: 0.9, speed: 1.3, blocks: false, gatherPct: 300, carryCap: 1 },
+        guardian: { hp: 300, dmg: 1, range: 0.9, speed: 1.3, blocks: false, gatherPct: 300, carryCap: 1 },
+      }),
+      waves: [
+        wave([
+          { enemyId: 'warrior', count: 6, intervalTicks: 60 },
+          { enemyId: 'raptor', count: 6, intervalTicks: 40, delayTicks: 300 },
+        ]),
+        wave([{ enemyId: 'warrior', count: 6, intervalTicks: 50 }]),
+        wave([{ enemyId: 'raptor', count: 8, intervalTicks: 40, hpMul: 1.5 }]),
+      ],
+    }),
+    // ⚠ 짐값 기준 주입 — 배포본 상수(0)로는 이 시나리오가 아무것도 안 잰다
+    { gatherBaseValue: 6 },
+  );
+  const hashes: number[] = [];
+  const lost = { hit: 0, moved: 0, cleared: 0, died: 0 };
+  let started = 0;
+  let gathered = 0;
+  let delivered = 0;
+  let deliveredGold = 0;
+  // 초기값은 **기대와 반대**로 둔다 — 탐침이 아예 안 돌면 통과가 아니라 실패다
+  let takenStillBlocked = true;
+  let clearCostUnchanged = false;
+  const clearCost0 = sim.clearSceneryCost(0, 4);
+  for (let t = 0; t < 1400; t++) {
+    for (const [at, cmd] of GATHER_SCRIPT) if (at === t) sim.applyCommand(cmd);
+    sim.tick();
+    for (const ev of sim.drainEvents()) {
+      if (ev.type === 'gatherStarted') started++;
+      else if (ev.type === 'gathered') gathered++;
+      else if (ev.type === 'gatherDelivered') {
+        delivered++;
+        deliveredGold += ev.gold;
+      } else if (ev.type === 'gatherLost') lost[ev.reason]++;
+    }
+    if (t === TAKEN_PROBE_TICK) {
+      // ⑤ 다 캔 칸은 **그루터기로 남는다** — 소품 Set에서 빠지지 않으므로 계속 건설 불가이고
+      //    유료 제거 비용도 그대로다(채집은 clearedScenery 지수를 안 올린다)
+      takenStillBlocked = !sim.canPlaceAt(0, 4);
+      clearCostUnchanged = sim.clearSceneryCost(0, 4) === clearCost0;
+    }
+    if (t % 50 === 49) hashes.push(sim.hash());
+  }
+  return {
+    hashes,
+    started,
+    gathered,
+    delivered,
+    deliveredGold,
+    lost,
+    finalGold: sim.state.gold,
+    takenCells: sim.state.resources.filter((r) => r.taken).length,
+    takenStillBlocked,
+    clearCostUnchanged,
+  };
+}
+
 describe('결정론', () => {
   it('같은 시드 + 같은 스크립트 → 2000틱 해시 전 구간 일치', () => {
     const a = runScripted(123);
@@ -592,6 +767,109 @@ describe('결정론', () => {
     expect(a.hashes.length).toBe(30);
     expect(b.died).toBe(a.died);
     expect(b.ordered).toBe(a.ordered);
+  });
+
+  it('채집(캐기·운반·배달·사망·제거)이 섞인 시나리오도 해시 전 구간 일치', () => {
+    const a = runGather(9090);
+    const b = runGather(9090);
+    // ── 시나리오가 실제로 여덟 분기를 밟았는지 먼저 확인 (검증이 헛돌지 않게) ──────
+    expect(a.started, '캐기를 시작했다').toBeGreaterThan(0);
+    expect(a.gathered, '짐을 실제로 졌다').toBeGreaterThan(0);
+    expect(a.delivered, '마을까지 지고 와 지급됐다').toBeGreaterThan(0);
+    // 배달이 골드를 내는 **유일한** 사건이다 — 짐값 기준 6 주입이 실제로 먹혔다는 증거
+    expect(a.deliveredGold, '지급액이 0이 아니다').toBeGreaterThan(0);
+    expect(a.lost.moved, 'E-3 채집 중 다른 칸으로').toBeGreaterThan(0);
+    expect(a.lost.cleared, 'E-14 캐던 칸이 골드로 치워졌다').toBeGreaterThan(0);
+    expect(a.lost.hit, 'E-11 맞아서 진행분이 0으로').toBeGreaterThan(0);
+    expect(a.lost.died, 'E-10 운반 중 사망').toBeGreaterThan(0);
+    // ⑤ D1 — 다 캔 칸은 그루터기로 남아 **여전히 건설 불가**이고 제거 비용도 그대로다
+    expect(a.takenStillBlocked, '텄음 칸은 여전히 건설 불가다(D1)').toBe(true);
+    expect(a.clearCostUnchanged, '채집은 유료 제거 지수를 한 톨도 안 올린다').toBe(true);
+    // ── 본론: 전 구간 해시 일치 ────────────────────────────────────────────────
+    expect(a.hashes).toEqual(b.hashes);
+    expect(a.hashes.length).toBe(28);
+    expect(b.finalGold).toBe(a.finalGold);
+    expect(b.takenCells).toBe(a.takenCells);
+    expect(b.lost).toEqual(a.lost);
+  });
+
+  /**
+   * 채집 상태 다섯이 **각각** hash()에 반영되는지. 한꺼번에 흔들면 하나만 들어가 있어도
+   * 통과하므로 반드시 하나씩 흔든다. 다섯 다 다른 것을 잡는다:
+   *  · gatherKey    — 다음 틱에 이 사람이 무엇을 하는가 자체
+   *  · gatherTicks  — 순수 누적기. x/z로도 walked로도 복원할 수 없다
+   *  · carryGold    — 앞으로 발행될 골드 (v.gold로도 갈리지만 그건 배달 뒤에나 보인다)
+   *  · carryCount   — 언제 자동 귀환이 걸리는가 = 앞으로의 동선 전부
+   *  · gatherHpMark — 같은 hp라도 시도 시작 시점이 다르면 중단 여부가 갈린다
+   * ⚠ `carryGold`/`carryCount`/`gatherHpMark`는 **채집이 실제로 돈 뒤에** 흔든다 —
+   *   0을 1로 바꾸는 것과 구분되게(bountyPaid 테스트가 겪은 그 함정이다).
+   */
+  it('채집 상태 다섯이 각각 hash()에 들어간다', () => {
+    const fields = ['gatherKey', 'gatherTicks', 'carryGold', 'carryCount', 'gatherHpMark'] as const;
+    for (const f of fields) {
+      const sim = createBattle(
+        options({
+          seed: 5,
+          deck: ['spear'],
+          // ⚠ **endless가 필수다.** 목 스테이지는 waveCount 2에 빈 웨이브라
+          //   240틱 남짓이면 'won'이 되고 tick()이 즉시 return해 **채집도 함께 언다**
+          //   (E-12). 그러면 아래 900틱 루프가 짐을 한 번도 못 지고 조용히 실패한다.
+          endless: true,
+          stage: stageDef({ startGold: 100000 }),
+          allyDefs: allyDefs({
+            gatherer: { speed: 1.3, blocks: false, gatherPct: 300, carryCap: 2 },
+          }),
+          waves: [wave([{ count: 0 }])],
+        }),
+        { gatherBaseValue: 6 },
+      );
+      expect(sim.applyCommand({ type: 'trainAlly', defId: 'gatherer' })).toBe(true);
+      // 가장 가까운 자원 칸으로 보내 **실제로 한 짐을 지고 걸어오는** 상태까지 돌린다
+      const cell = sim.state.resources[0];
+      expect(cell, '목 스테이지에 자원 칸이 있다').toBeDefined();
+      expect(
+        sim.applyCommand({
+          type: 'moveAlly',
+          allyId: -1,
+          cellX: (cell as { cellX: number }).cellX,
+          cellZ: (cell as { cellZ: number }).cellZ,
+        }),
+      ).toBe(true);
+      let carried = false;
+      for (let t = 0; t < 900 && !carried; t++) {
+        sim.tick();
+        sim.drainEvents();
+        carried = sim.state.allies.some((x) => x.carryCount > 0);
+      }
+      expect(carried, `${f}: 짐을 실제로 진 뒤에 흔든다`).toBe(true);
+      const target = sim.state.allies[0];
+      expect(target, `${f}: 관측할 아군이 있다`).toBeDefined();
+      const h0 = sim.hash();
+      // gatherHpMark는 AllyState에 없는 내부 필드라 캐스트로 흔든다 (의도된 비공개)
+      const obj = target as unknown as Record<string, number>;
+      obj[f] = (obj[f] ?? 0) + 1;
+      expect(sim.hash(), `${f}가 해시에 없다`).not.toBe(h0);
+    }
+  });
+
+  /**
+   * 자원 밭의 `taken`이 hash()에 들어가는지 — **텄다는 사실 자체**가 상태다.
+   * 아군 다섯 필드만 접으면 "짐을 다 진 뒤 그 사람이 죽어 사라진" 판에서 텄음 여부가
+   * 해시에서 통째로 빠진다(그 칸은 영영 다시 못 캐는데도).
+   */
+  it('자원 칸의 taken이 hash()에 들어간다', () => {
+    const mk = (): ReturnType<typeof createBattle> =>
+      createBattle(
+        options({ seed: 5, deck: ['spear'], stage: stageDef({ startGold: 100000 }), waves: [wave([{ count: 0 }])] }),
+        { gatherBaseValue: 6 },
+      );
+    const a = mk();
+    const b = mk();
+    expect(a.hash()).toBe(b.hash());
+    const cell = b.state.resources[0];
+    expect(cell, '목 스테이지에 자원 칸이 있다').toBeDefined();
+    (cell as { taken: boolean }).taken = true;
+    expect(a.hash(), '자원 칸의 taken이 해시에 없다').not.toBe(b.hash());
   });
 
   it('기지가 쏘고 레벨업하는 시나리오도 해시 전 구간 일치', () => {

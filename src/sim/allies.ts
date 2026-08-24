@@ -115,13 +115,16 @@ import {
   enemyBrawlDmgFor,
 } from '@/data/balance';
 import { dist2 } from '@/core/mathx';
+// ⚠ 도착 판정 상수는 **여기서 선언하지 않는다.** 예전에는 이 파일이 `ARRIVE_EPS2 = 1e-6`을
+//   따로 들고 있었고 `data/resources.ts`의 `isGathering`이 같은 값을 또 들고 있었다 —
+//   두 값이 우연히 같아서 아무도 안 잡는 형태였다. 도착을 두 곳에서 각자 판정하면
+//   "가는 중"과 "캐는 중"이 한 틱 어긋나는 날이 온다. 이제 출처는 하나다.
+import { ARRIVE_EPS2, isGathering } from '@/data/resources';
 import { addGold, damageAlly, damageEnemy } from './combat';
-import type { AllySim, EnemySim, SimCtx } from './entities';
+import { fillAliveAllyIds, type AllySim, type EnemySim, type SimCtx } from './entities';
+import { setGatherTarget } from './gather';
 import { allyCapFor } from './hometown';
 import { isStunned } from './status';
-
-/** 목표에 이 거리(제곱) 안으로 들면 도착으로 본다 — 부동소수 왕복 진동을 막는다 */
-const ARRIVE_EPS2 = 1e-6;
 
 /** 지금 이 종을 한 명 더 뽑는 실비용 (나가 있는 인원 수에 따라 오른다) */
 export function allyTrainCost(ctx: SimCtx, def: AllyDef): number {
@@ -218,6 +221,16 @@ export function trainAlly(ctx: SimCtx, defId: AllyId): boolean {
  *
  * 격자 밖 셀은 거부한다. 이건 "어디든 찍을 수 있다"(규칙 2)와 충돌하지 않는다 —
  * 판 밖은 자리가 아니라 **없는 칸**이고, 허용하면 아군이 화면 밖으로 걸어 나간다.
+ *
+ * ── 채집 (docs/gather-spec.md D7) ──────────────────────────────────────────
+ * 찍은 칸에 **아직 안 턴 자원이 있으면** 대상은 그 칸으로 걸어가 도착 후 **캔다**.
+ * 자원이 없거나 이미 텄으면 지금까지와 똑같이 그냥 가서 선다. 곧 이 커맨드의 의미는
+ * 한 글자도 안 바뀌었고 **도착지에 뜻이 하나 붙었을 뿐**이다. 그래서 새 커맨드를
+ * 만들지 않았다 — 커맨드 유니온이 안 늘어 determinism SCRIPT와 e2e 훅이 그대로다.
+ *
+ * ⚠ **이 함수 안의 `setGatherTarget` 한 줄이 `gatherKey`를 0 이상으로 만드는 유일한
+ *   코드 경로다**(계약 A: "탭이 없으면 코인도 없다"). `trainAlly`의 집결 이동은
+ *   `a.tgtX/tgtZ`를 직접 대입하므로 이 통로를 안 탄다 — 그것이 방치 수입 0의 방벽이다.
  */
 export function moveAlly(
   ctx: SimCtx,
@@ -229,17 +242,71 @@ export function moveAlly(
   const stage = ctx.opts.stage;
   if (!Number.isFinite(cellX) || !Number.isFinite(cellZ)) return false;
   if (cellX < 0 || cellZ < 0 || cellX > stage.gridW - 1 || cellZ > stage.gridH - 1) return false;
+
+  // ── ① 자원 칸인가 — **정수 셀만** 자원 칸이 될 수 있다 ──────────────────────
+  //  ⚠ moveAlly는 지금까지 정수를 요구하지 않았다(Number.isFinite + 범위뿐). 그런데
+  //    key = cellZ * gridW + cellX 는 **소수쌍에서도 정수가 될 수 있다** —
+  //    gridW = 11에서 (cellX 5.5, cellZ 1.5) → key = 22 = 셀 (0,2)다. 가드가 없으면
+  //    "서 있는 자리"와 "캐는 자리"를 분리할 수 있고, 마을 반경 안에 서서 맵 반대편 칸을
+  //    캐 왕복 0으로 배달할 수 있다 — **거리 경제(D3)가 통째로 무효화된다.**
+  //    UI는 셀을 반올림해 보내지만 moveAlly는 공개 커맨드이고 봇 하네스·e2e 훅·
+  //    determinism SCRIPT가 직접 쏜다. (`canPlaceAt`은 이미 정수를 강제한다 — 여기만 비어 있었다.)
+  const onCell = Number.isInteger(cellX) && Number.isInteger(cellZ);
+  const key = onCell ? cellZ * stage.gridW + cellX : -1;
+  const cell = key >= 0 ? ctx.resources.at(key) : null;
+  const isResource = cell !== null && !cell.taken;
+
+  // ── ② 대상 목록 — id 오름차순 (풀 순서 의존 금지, 계약 B) ───────────────────
+  fillAliveAllyIds(ctx.world.allies.items, orderOrder);
+
+  // ── ③ 자원 칸이고 종족 명령이면 **sim이 한 사람을 고른다** (D7) ─────────────
+  //  왜 UI가 아니라 sim인가: 현재 선택 단위는 개체가 아니라 **종족**이고
+  //  (`game/placement.ts`의 `selectedAllyDef: AllyId | null`, 언제나 `allyId: -1`),
+  //  그 종족 단위 선택은 파일 주석이 **사용자 지시를 인용해** 못 박아 둔 규칙이라
+  //  UI를 개체 선택으로 좁히는 것은 사용자 요구를 뒤집는 일이다.
+  //  → D7의 취지("한 짐 = 한 사람")를 sim에서 지킨다. 규칙이 hash()와 sim 테스트 안으로
+  //    들어오는 부수 이득도 있다(UI에 두면 어느 쪽도 못 잡는다).
+  //  고르는 규칙: **이미 그 칸을 맡은 사람 → gatherPct 내림차순 → id 오름차순.**
+  //  전부 정수/열거 비교라 부동소수 동점 문제가 없고, `orderOrder`가 id 오름차순이므로
+  //  "동점이면 낮은 id"가 순회 순서 하나로 자동으로 나온다(`>` 비교라 앞사람이 이긴다).
+  //  짐이 가득 찬 사람과 못 캐는 종(gatherPct 0)은 애초에 후보가 아니다 — 뽑아 봐야
+  //  setGatherTarget이 예약을 안 붙여 헛걸음만 시킨다.
+  let only: AllySim | null = null;
+  if (isResource && allyId < 0) {
+    for (const a of orderOrder) {
+      if (defId !== undefined && a.defId !== defId) continue;
+      if ((a.def.gatherPct ?? 100) <= 0) continue;
+      if (a.carryCount >= (a.def.carryCap ?? 1)) continue;
+      if (a.gatherKey === key) {
+        only = a; // 이미 그 칸을 맡은 사람이 언제나 우선 (E-1: 진행분을 지킨다)
+        break;
+      }
+      if (only === null || (a.def.gatherPct ?? 100) > (only.def.gatherPct ?? 100)) only = a;
+    }
+    // 아무도 자격이 없으면 only는 null → 아래 루프가 **평소대로 전원 이동**한다.
+    // (자원 칸이지만 캘 사람이 없는 것뿐이므로 "거기로 가라"는 여전히 유효한 명령이다)
+  }
+
+  // ── ④ 기존 루프 ─────────────────────────────────────────────────────────────
   let count = 0;
-  for (const a of ctx.world.allies.items) {
-    if (!a.alive) continue;
+  for (const a of orderOrder) {
     if (allyId >= 0) {
       if (a.id !== allyId) continue;
+    } else if (only !== null) {
+      if (a !== only) continue; // 자원 칸 = 한 사람만. 나머지는 **자리도 안 바꾼다**(E-9)
     } else if (defId !== undefined && a.defId !== defId) continue;
     a.tgtX = cellX;
     a.tgtZ = cellZ;
+    // 채집 — 자원이 없거나 이미 텄거나 남이 예약했거나 짐이 가득 찼으면
+    // 조용히 기존 명령만 푼다(E-2 ~ E-7). 바깥 계약은 안 바뀐다.
+    setGatherTarget(ctx, a, key);
     count++;
   }
   if (count === 0) return false;
+  // ⚠ 자원 칸에서 `count`가 1이 되는 것은 **의도**다 — 화면의 목표 표식이 "한 사람이
+  //   간다"를 그대로 말한다. fx는 count를 표식 개수로 쓰지 않으므로(위치 하나) 무변경이다.
+  // ⚠ 채집 중이던 사람을 옮기면 이 호출 하나가 이벤트를 2건 낸다:
+  //   `gatherLost{'moved'}` + `allyOrdered`.
   ctx.events.push({ type: 'allyOrdered', count, cellX, cellZ });
   return true;
 }
@@ -319,22 +386,16 @@ function claimBlockade(ctx: SimCtx, a: AllySim, r2: number): void {
  * 규칙 6-b) 아군을 **id 오름차순**으로 늘어놓는 스크래치 버퍼.
  * 풀(DenseList)은 swap-remove라 items 순서가 사망으로 섞인다. 그 순서대로 적을
  * 고르게 두면 결정론은 유지되지만(같은 시드면 같은 순서) 규칙을 말로 적을 수 없다.
- * 정원이 한 자리 수라 삽입 정렬이면 충분하고, 버퍼를 재사용해 매 틱 할당이 없다.
+ * 정렬 자체는 `entities.fillAliveAllyIds`가 한다(`updateGather`와 **같은 구현**을 쓰기 위해).
+ *
+ * ⚠ **버퍼는 셋이고 서로 공유하지 않는다** — 각 버퍼 위에 어느 함수 전용인지 박아 둔다.
+ *   `moveAlly`는 루프 **안에서** `setGatherTarget`을 부르므로, `updateAllies`와 버퍼를
+ *   빌려 쓰면 "루프 도중에 같은 버퍼를 다시 채우는" 재진입 지뢰가 선다. 지금은
+ *   `applyCommand`가 `tick()` 밖에서 도는 덕에 충돌이 없지만 그 성질은 언제든 깨진다.
+ *   (셋째는 `sim/gather.ts`의 `gatherOrder`다 — 그쪽은 **시체까지** 넣는다.)
  */
-const pickOrder: AllySim[] = [];
-
-function fillPickOrder(items: readonly AllySim[]): void {
-  pickOrder.length = 0;
-  for (const a of items) {
-    if (!a.alive) continue;
-    let i = pickOrder.length;
-    pickOrder.push(a);
-    for (; i > 0 && (pickOrder[i - 1] as AllySim).id > a.id; i--) {
-      pickOrder[i] = pickOrder[i - 1] as AllySim;
-    }
-    pickOrder[i] = a;
-  }
-}
+const pickOrder: AllySim[] = []; // updateAllies 전용
+const orderOrder: AllySim[] = []; // moveAlly 전용
 
 /**
  * 매 틱 — 아군 조준/타격 + 봉쇄 지정 + 적의 난투 반격.
@@ -353,9 +414,36 @@ export function updateAllies(ctx: SimCtx): void {
   for (const e of enemies) e.blockerAllyId = -1;
 
   // 1단계: 아군의 조준/타격 + 봉쇄 지정 — 규칙 6-b) id 오름차순(=대체로 먼저 뽑은 순)
-  fillPickOrder(allies);
+  fillAliveAllyIds(allies, pickOrder);
   for (const a of pickOrder) {
+    // ⚠ **쿨다운 감소는 조기 탈출 위다.** 안 그러면 attackCdLeft가 채집 내내 얼어붙어
+    //   해시에 "안 흐르는 정수"가 남고, 채집을 마치자마자 즉시 한 대 치는 부작용이 생긴다.
     if (a.attackCdLeft > 0) a.attackCdLeft--;
+    // 채집 (docs/gather-spec.md D5) — **캐는 중이거나 짐을 진 사람은 싸우지 않는다.**
+    // claimBlockade 앞에서 빠져나가므로 봉쇄도 안 걸고 조준도 안 선다.
+    // **맞기는 한다**: 적의 난투 2단계는 blockerAllyId < 0이므로 brushTarget(규칙 5-c,
+    // BRAWL_BRUSH_RANGE 1.1) 경로로 들어와 정상적으로 때린다 — 기존 규칙이 그대로 일을
+    // 하고 **새 피해 경로가 없다.**
+    //
+    // ⚠ **`가는 중`은 전투 불능이 아니다.** D5는 "캐는 중·지고 오는 중"만 말한다.
+    //   빈손으로 걸어가는 동안은 지금까지의 moveAlly와 완전히 같다. 그 결과
+    //   blocks:true인 몽둥이꾼·파수꾼은 **교전이 붙으면 자원 칸에 영영 못 간다**
+    //   (moveAllies의 `if (a.def.blocks && a.targetId >= 0) continue`). 버그가 아니라
+    //   규칙이다 — **싸움이 붙으면 일하러 못 간다.** 반대로 **짐을 지면 그 문장이 풀린다**
+    //   (targetId가 −1로 고정되므로): 손이 멈추지 발은 안 멈춘다.
+    //
+    // ⚠ 대가를 이름 대서 적는다: 전선에서 봉쇄 중이던 몽둥이꾼에게 채집을 시키면 **그 순간
+    //   봉쇄가 풀려** 붙잡고 있던 적 최대 ALLY_BLOCK_CAPACITY마리가 다시 걷는다.
+    //   규칙 5("봉쇄 = 타워의 수명을 산다")를 정면으로 되돌리는 동작이라 대가가 크고,
+    //   **그래서 이 기능은 채집꾼을 판다.**
+    // ⚠ 부작용 하나 더: 자원 칸이 전선 옆일 때 채집꾼이 몽둥이꾼보다 적에게 가까우면
+    //   brushTarget이 **맞는 사람을 채집꾼으로 바꾼다**(brushTarget은 blocks도 targetId도
+    //   안 본다). 봉쇄가 없어 몽둥이꾼은 그 적을 세우지도 못하는데 피해만 옮겨 간다 —
+    //   새 피해 경로는 아니지만 **새 사고 형태**이고, UI가 "전선 옆 칸"을 경고할 근거다.
+    if (isGathering(a) || a.carryCount > 0) {
+      a.targetId = -1;
+      continue;
+    }
     const def = a.def;
     const r2 = def.range * def.range;
     // 규칙 5-b) 몸으로 막는다 — 사거리 안의 가까운 적부터 ALLY_BLOCK_CAPACITY마리까지

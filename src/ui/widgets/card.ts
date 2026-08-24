@@ -141,9 +141,13 @@ export const sceneryIconSvg = SVG(
 );
 
 /**
- * 아군 부족원 아이콘 3종 (출동 바).
+ * 아군 부족원 아이콘 4종 (출동 바).
  * 타워 아이콘과 달리 **사람 실루엣**을 공통으로 두고 무기만 바꾼다 —
  * 3D 모델도 몸통을 공유하므로(meshlib/enemies.ts allyVariant) 아이콘과 화면이 일치한다.
+ *
+ * 넷째(채집꾼)만 규칙이 하나 다르다: **손에 무기가 아니라 등에 짐이 붙는다.**
+ * 3D도 같은 자리에서 갈린다(kitGatherer — 전투 3종은 부피가 손·머리 위에, 채집꾼만 등에).
+ * 28px 띠에서 "무기 실루엣이 없는 하나"가 그대로 "싸우지 않는 카드"로 읽힌다.
  */
 const ALLY_BODY = `<circle cx="20" cy="13" r="7" fill="#e0a878" stroke="#7a4a28" stroke-width="2.5"/>
    <path d="M20 20 L20 34 M20 24 L13 30 M20 34 L14 43 M20 34 L26 43"
@@ -171,10 +175,28 @@ export const allyGuardianSvg = SVG(
    <path d="M38 18 L38 36" stroke="#7a5230" stroke-width="2.5"/>`,
 );
 
+/**
+ * 채집꾼 — 등에 진 광주리 + 짧은 뒤지개 (비전투).
+ * 몸을 살짝 앞으로 기울인 것도 3D와 같다(짐을 진 사람은 상체를 숙인다).
+ * 광주리는 마른 풀색(#dcb562 = palette C.straw)이라 파랑·회색뿐인 나머지 셋 사이에서
+ * **띠에서 유일하게 따뜻한 조각**이 된다 — 3D 등짐과 같은 색이다.
+ */
+export const allyGathererSvg = SVG(
+  `<path d="M8 30 L14 15 L27 15 L30 30 Z"
+     fill="#dcb562" stroke="#7a5a24" stroke-width="2.6" stroke-linejoin="round"/>
+   <path d="M12 17 L29 17" stroke="#a8792f" stroke-width="2.4"/>
+   <circle cx="20" cy="12" r="6.4" fill="#e0a878" stroke="#7a4a28" stroke-width="2.5"/>
+   <path d="M21 19 L22 33 M22 33 L17 43 M22 33 L28 43"
+     fill="none" stroke="#e0a878" stroke-width="4.6" stroke-linecap="round"/>
+   <path d="M25 23 L38 31" stroke="#8a5a30" stroke-width="4" stroke-linecap="round"/>
+   <path d="M37 30 L43 36" stroke="#666e75" stroke-width="4.4" stroke-linecap="round"/>`,
+);
+
 export const ALLY_ICON_SVG: Record<AllyId, string> = {
   clubber: allyClubberSvg,
   slinger: allySlingerSvg,
   guardian: allyGuardianSvg,
+  gatherer: allyGathererSvg,
 };
 
 // ---------------------------------------------------------------------------

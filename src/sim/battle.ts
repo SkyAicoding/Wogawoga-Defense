@@ -31,6 +31,7 @@ import type {
   EnemyId,
   SimEvent,
   TowerState,
+  ResourceCellState,
   Vec2,
   WaveDef,
   WavePreview,
@@ -52,6 +53,7 @@ import { recomputeBuffs, updateProjectiles, updateTowers } from './attack';
 import { addGold, leakEnemy } from './combat';
 import { Economy, sceneryClearCostFor, sellRefundFor } from './economy';
 import { pathFor, World, type EnemySim, type SimCtx } from './entities';
+import { ResourceField, cancelGatherersOf, updateGather } from './gather';
 import {
   baseNextStats,
   allyCapFor,
@@ -110,8 +112,14 @@ class Battle implements BattleSim {
   /** 치운 소품 셀 키 — 제거 순서대로. length가 곧 다음 제거 비용의 지수 */
   private readonly clearedScenery: number[] = [];
 
-  constructor(opts: BattleOptions) {
+  constructor(opts: BattleOptions, tuning?: BattleTuning) {
     const stage = opts.stage;
+    // ⚠ 소품 셀은 **ctx 리터럴보다 먼저** 계산한다 — 자원 밭이 그 집합 위에 서고,
+    //   ctx와 view가 **같은 배열**을 들어야 하기 때문이다(둘이 갈리면 UI가 다른 판을 그린다).
+    const pathCells = rasterizePathCells(stage);
+    const scenery = sceneryCells(stage, pathCells);
+    // 자원 밭 — 소품 칸의 **뜻**만 얹는다. `scenery` Set 자체는 한 글자도 안 바뀐다(D1).
+    const resources = new ResourceField(stage, scenery, { baseValue: tuning?.gatherBaseValue });
     const groundPaths = stage.paths.map((w) => buildPath(w));
     const airPaths =
       stage.airPaths && stage.airPaths.length > 0
@@ -147,6 +155,8 @@ class Battle implements BattleSim {
       allyCap: ALLY_MAX_ACTIVE,
       amberEarned: 0,
       endless: opts.endless,
+      // ctx.resources.list와 **같은 배열 객체**다 — 목록은 안 변하고 taken만 변한다
+      resources: resources.list,
     };
     this.ctx = {
       opts,
@@ -157,9 +167,10 @@ class Battle implements BattleSim {
       groundPaths,
       airPaths,
       hometown: createHometown(),
+      resources,
     };
-    this.pathCells = rasterizePathCells(stage);
-    this.scenery = sceneryCells(stage, this.pathCells);
+    this.pathCells = pathCells;
+    this.scenery = scenery;
     // 정원은 마을 레벨의 함수라 **시작 시점에도** 표에서 읽어야 한다. 위 리터럴의
     // ALLY_MAX_ACTIVE는 그저 형태를 맞추는 값이고, 진짜 Lv1 값은 여기서 들어온다
     // (ctx가 조립되기 전에는 allyCapFor를 부를 수 없어 두 줄로 나뉜다).
@@ -211,6 +222,27 @@ class Battle implements BattleSim {
     updateHometown(ctx);
     // 8) 투사체 이동/명중 (타워 투사체와 홈타운 화살이 같은 단계를 탄다)
     updateProjectiles(ctx);
+    // 8-b) 채집 — 캐기 진행 · 짐 확정 · 자동 귀환 · **배달** (docs/gather-spec.md §4-7)
+    //  한 자리가 네 조건을 동시에 만족한다:
+    //   · 4) moveAllies 뒤 → **같은 틱의 도착**과 **같은 틱의 배달 진입**을 읽는다(지연 없음)
+    //   · 2) updateAllies(난투 = 아군 피해의 **유일한** 발생지) 뒤 → **이 틱의 피해**로
+    //        중단 판정(D5)이 선다. 앞에 두면 언제나 한 틱 늦게 끊긴다
+    //   · 9) sweepDeadAllies 앞 → **죽은 사람의 짐**을 흘릴 수 있다. 뒤로 가면 시체가
+    //        이미 회수돼 gatherLost{'died'}가 영영 안 나가고, 그 전에 시체가 마을에 닿아
+    //        **지급까지 받는다** — "지고 오는 길이 위험하다"가 통째로 사라진다
+    //   · 10) checkEnd 앞 → **승패를 선언하는 틱에도 마을에 닿아 있으면 지급된다.**
+    //        이 선후는 운반·배달이 생기면서 **다시 판단한 것**이고 답은 "앞"이다:
+    //        (1) 이기는 판 — 승리 골드는 결과 화면에 안 쓰이므로(결과는 호박만 읽는다)
+    //            수치는 안 바뀌고, 바뀌는 것은 마지막 프레임에 배달 연출이 나오느냐뿐이다.
+    //            그 한 프레임이 "짐을 지고 오면 돈이 된다"의 마지막 확인이다.
+    //        (2) 지는 판 — leakEnemy는 4단계인데 checkEnd는 10단계다. 8-b가 앞이므로
+    //            **지는 판의 마지막 배달도 지급된다.** 뒤로 옮기면 "마을이 무너지는 순간
+    //            등에 진 짐이 사라진다"가 되는데, 그건 화면에서 **운반 중 사망 벌금과
+    //            구별되지 않는다** — 같은 그림에 규칙 둘이 겹치면 어느 쪽도 안 배워진다.
+    //        되먹임은 없다: 이 골드를 이 틱의 어떤 판정도 읽지 않는다.
+    //  대가 하나: 여기는 updateTowers(7)·updateProjectiles(8) **뒤**라 배달 골드는
+    //  **다음 틱**부터 쓸 수 있다. 커맨드는 틱 경계에 적용되므로 손에는 차이가 없다(1/30초).
+    updateGather(ctx);
     // 9) 사망 처리 (이벤트는 피해/귀환 시점에 발생, 여기서는 회수만)
     for (let i = enemies.length - 1; i >= 0; i--) {
       if (!(enemies[i] as EnemySim).alive) ctx.world.removeEnemyAt(i);
@@ -422,6 +454,12 @@ class Battle implements BattleSim {
     addGold(ctx, -cost);
     this.scenery.delete(key);
     this.clearedScenery.push(key);
+    // 치운 칸의 짐은 **버려진다** — 소품이 사라졌는데 배지가 짐값을 계속 그리거나 그 칸을
+    // 다시 채집 대상으로 찍을 수 있으면 안 된다. **여기서 짐을 버리는 것이 D1이 만든
+    // `clearScenery`의 기회비용이다**(다 캐도 칸은 안 열리므로, 치우는 쪽이 값을 낸다).
+    const r = this.ctx.resources.at(key);
+    if (r) r.taken = true;
+    cancelGatherersOf(this.ctx, key);
     ctx.events.push({
       type: 'sceneryCleared',
       cellX,
@@ -493,6 +531,18 @@ class Battle implements BattleSim {
       h = mix(h, a.hp);
       h = mix(h, a.attackCdLeft);
       h = mix(h, a.targetId);
+      // 채집 — 다섯 다 어디서도 유도되지 않는다. **빠뜨리면 결정론이 조용히 깨진다.**
+      //  · gatherKey    : 다음 틱에 이 사람이 무엇을 하는가 자체다
+      //  · gatherTicks  : 순수 누적기. x/z로도 walked로도 복원할 수 없고,
+      //                   resetAlly 누락(풀 재사용)이 그 틱에 드러나는 유일한 자리다
+      //  · carryGold    : 앞으로 발행될 골드. v.gold로도 갈리지만 그건 배달 뒤에나 보인다
+      //  · carryCount   : 언제 자동 귀환이 걸리는가 = 앞으로의 동선 전부
+      //  · gatherHpMark : 같은 hp라도 시도 시작 시점이 다르면 중단 여부가 갈린다
+      h = mix(h, a.gatherKey);
+      h = mix(h, a.gatherTicks);
+      h = mix(h, a.carryGold);
+      h = mix(h, a.carryCount);
+      h = mix(h, a.gatherHpMark);
     }
     for (const t of ctx.world.towers.items) {
       h = mix(h, t.id);
@@ -515,6 +565,21 @@ class Battle implements BattleSim {
     // 제거를 포함한 커맨드열의 결정론이 검증된다
     h = mix(h, this.clearedScenery.length);
     for (const key of this.clearedScenery) h = mix(h, key);
+    // 자원 칸 — **자료구조의 순회 순서에 결정론을 걸지 않는다.**
+    // ctx.resources.list는 생성 시 셀 키 오름차순으로 굳고 그 뒤로 재정렬도 삭제도 없다
+    // (텄어도 taken = true로 남는다). 곧 접는 순서가 Map/Set 구현과 완전히 무관하다.
+    // 셀 좌표를 함께 접는 이유: taken만 접으면 **목록 자체가 잘못 만들어진 회귀**
+    // (resourceKindOf가 갈리거나 정렬이 빠진 경우)를 못 잡는다. 40~51칸이라 값이 싸다.
+    // kind와 value는 안 접는다 — 생성 시 굳어 절대 안 변하므로 **상태가 아니다**:
+    //   종류가 갈리면 캐는 틱 수가 갈려 gatherTicks가, 값이 갈리면 carryGold가 반드시
+    //   먼저 갈린다(bountyChunks를 안 접는 것과 같은 논거).
+    // **텐 순서는 안 접는다.** clearedScenery가 순서까지 접는 이유는 그 순서가 다음
+    //   제거값의 지수이기 때문인데, 채집에는 순서에 의존하는 값이 하나도 없다.
+    //   같은 집합을 다른 순서로 텄다면 아군의 위치·gatherTicks가 이미 갈려 있다.
+    for (const r of ctx.resources.list) {
+      h = mix(h, r.cellX * 1000 + r.cellZ);
+      h = mix(h, r.taken ? 1 : 0);
+    }
     return h;
   }
 
@@ -598,6 +663,20 @@ class Battle implements BattleSim {
     return this.towerAt(cellX, cellZ) === null;
   }
 
+  /**
+   * 자원 칸 조회 — 소품이 없거나 격자 밖이면 null. HUD 자원 패널과 e2e 훅이 쓴다.
+   * `hasScenery`와 **같은 정수/범위 가드**를 쓴다 — 두 답이 갈리면 "소품은 있는데 자원은
+   * 없다"는 칸이 생기고, 화면이 그 차이를 설명할 방법이 없다.
+   * ⚠ **`taken`을 걸러 내지 않는다.** 텄음 칸도 그루터기로 서 있고(D1) 배지가 회색으로
+   *   그것을 그려야 한다. "캘 수 있는가"는 호출부가 `taken`으로 판단한다.
+   */
+  resourceAt(cellX: number, cellZ: number): ResourceCellState | null {
+    const stage = this.ctx.opts.stage;
+    if (!Number.isInteger(cellX) || !Number.isInteger(cellZ)) return null;
+    if (cellX < 0 || cellX >= stage.gridW || cellZ < 0 || cellZ >= stage.gridH) return null;
+    return this.ctx.resources.at(cellZ * stage.gridW + cellX);
+  }
+
   hasScenery(cellX: number, cellZ: number): boolean {
     const stage = this.ctx.opts.stage;
     if (!Number.isInteger(cellX) || !Number.isInteger(cellZ)) return false;
@@ -665,6 +744,22 @@ class Battle implements BattleSim {
   }
 }
 
-export function createBattle(options: BattleOptions): BattleSim {
-  return new Battle(options);
+/**
+ * **테스트 전용 주입구.** 게임 코드에서 이 인자를 넘기는 곳은 **한 군데도 없다** —
+ * 넘기지 않으면 `ResourceField`가 `GATHER_BASE_VALUE` 하나를 읽으므로 "되돌리는 손잡이는
+ * 하나"(D9)가 그대로 지켜진다.
+ *
+ * 그런데도 인자가 필요한 이유: 주입구가 없으면 난이도 봉투가 **짐값 축을 A/B할 수 없다.**
+ * 대조군 `gather-x4`(짐값 네 배 = 반드시 빨개져야 하는 팔)를 만들 수 없고, 그러면 채집
+ * 다리들이 전부 UNPROVEN으로 태어난다 — `tests/sim/controls.ts`가 `SCENERY_CLEAR_BASE_COST`에
+ * 대해 이미 한 번 적어 둔 처지 그대로다. `BattleOptions`에 안 넣고 여기 둔 이유는
+ * 그것이 **게임 데이터가 아니라 실험 손잡이**이기 때문이다.
+ */
+export interface BattleTuning {
+  /** 짐값의 기준 크기 (생략 = `GATHER_BASE_VALUE`) */
+  gatherBaseValue?: number;
+}
+
+export function createBattle(options: BattleOptions, tuning?: BattleTuning): BattleSim {
+  return new Battle(options, tuning);
 }

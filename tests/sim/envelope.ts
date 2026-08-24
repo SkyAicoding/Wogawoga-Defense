@@ -266,6 +266,19 @@ export interface DataPatch {
   readonly allies?: (t: Readonly<Record<AllyId, AllyDef>>) => Readonly<Record<AllyId, AllyDef>>;
   readonly enemies?: (t: Readonly<Record<EnemyId, EnemyDef>>) => Readonly<Record<EnemyId, EnemyDef>>;
   readonly towers?: (t: Readonly<Record<TowerId, TowerDef>>) => Readonly<Record<TowerId, TowerDef>>;
+  /**
+   * **채집 짐값의 기준 크기**를 갈아 끼운다 (`createBattle`의 `BattleTuning`으로 들어간다).
+   *
+   * ⚠ 이 훅이 없으면 채집 축은 봉투에서 **측정 불가**가 된다. 위 네 표는 전부
+   * `BattleOptions`의 주입 필드라 패치가 그냥 얹히는데, 짐값 기준은 `balance.ts`의
+   * 모듈 상수라 같은 방법이 안 통한다 — 곧 대조군 `gather-x4`(짐값 네 배 = **반드시
+   * 빨개져야 하는 팔**)를 만들 수 없고, 그러면 채집 다리들이 전부 UNPROVEN으로 태어난다.
+   * `controls.ts`가 `SCENERY_CLEAR_BASE_COST`에 대해 이미 적어 둔 처지 그대로다.
+   *
+   * 함수가 아니라 값인 이유: 배포본 값이 상수 하나라 "곱하기"가 아니라 "이 값으로 놓기"가
+   * 읽기 쉽고, 대조군의 신원(`id`)이 곧 그 숫자를 설명한다.
+   */
+  readonly gather?: { readonly baseValue: number };
 }
 
 /** 배포본 그대로 */
@@ -346,6 +359,9 @@ export function makeSim(
     allies,
     enemies,
     towers,
+    // 짐값 기준 — 패치가 없으면 undefined 를 넘겨 **배포본 상수 하나**가 그대로 읽힌다
+    // (D9: 되돌리는 손잡이는 GATHER_BASE_VALUE 하나여야 한다)
+    p.gather ? { gatherBaseValue: p.gather.baseValue } : undefined,
   );
   return { sim, stage };
 }

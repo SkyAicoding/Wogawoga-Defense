@@ -89,7 +89,7 @@
  * 파괴는 "타워 한 기"가 아니라 "성장 정체"로 청구된다 — placed(총 배치 횟수)와
  * lostGold(파괴로 날아간 누적 투자)가 그 값을 계측한다.
  */
-import { createBattle } from '@/sim/battle';
+import { createBattle, type BattleTuning } from '@/sim/battle';
 import { buildPath, buildStraight } from '@/sim/path';
 import { ALLY_DEFS, BASE_LEVELS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
 import { GATHER_BASE_VALUE, SIEGE_ENGAGE_RANGE, gatherValueFor } from '@/data/balance';
@@ -765,6 +765,16 @@ export function makeBotSimFor(
    * 같은 배치 순서**를 밟고 타워가 부서지는 빈도만 달라진다 — A/B가 성립하는 이유다.
    */
   towerDefTable: Readonly<Record<TowerId, TowerDef>> = TOWER_DEFS,
+  /**
+   * **실험 손잡이** — 위 넷과 달리 `BattleOptions`가 아니라 `createBattle`의 둘째 인자로
+   * 들어간다(`BattleTuning`). 지금 여기 실린 것은 채집 짐값의 기준 크기 하나다.
+   *
+   * 왜 표가 아니라 별도 인자인가: 짐값 기준은 게임 **데이터**가 아니라 `balance.ts`의
+   * 모듈 상수라 표 주입으로는 못 닿는다. 이 통로가 없으면 봉투가 채집 축을 A/B할 수
+   * 없고(대조군 `gather-x4`를 만들 수 없다) 채집 다리가 전부 UNPROVEN으로 태어난다.
+   * ⚠ 생략하면 배포본 상수 하나가 그대로 읽힌다 — **되돌리는 손잡이는 여전히 하나다.**
+   */
+  tuning?: BattleTuning,
 ): BattleSim {
   const starMap: Partial<Record<TowerId, number>> = {};
   for (const id of deck) starMap[id] = stars;
@@ -779,7 +789,7 @@ export function makeBotSimFor(
     allyDefs: allyDefTable,
     baseLevels: baseLevelTable,
     waveFor: makeWaveFor(stage),
-  });
+  }, tuning);
   return sim;
 }
 

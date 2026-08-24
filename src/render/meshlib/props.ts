@@ -59,7 +59,7 @@
  */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { BiomeId, Vec2 } from '@/data/types';
+import type { BiomeId, ResourceId, Vec2 } from '@/data/types';
 import { Rng, hashSeed } from '@/core/rng';
 import { clamp01 } from '@/core/mathx';
 import { BIOMES, C, flatMat } from '../palette';
@@ -219,6 +219,29 @@ const P = {
   sulfurLit: 0xb8c85a,
   charGrassCol: 0x5a4a38,
   lavaCrust: 0x2b1712,
+
+  /*
+   * ── 채집 자원 색 (gather-spec §6-3) ──────────────────────────────────────
+   * 자원 종류가 곧 1층 실루엣이므로, 여기 색이 하는 일은 "장식을 예쁘게"가 아니라
+   * **그 실루엣이 어느 종인지**를 20px에서 한 번 더 확인해 주는 것이다.
+   * ⚠ 꽃과 열매를 가르는 진짜 장치는 색이 아니라 **위치**다 — flowerRed(H≈6°)와
+   *   berryRed(H≈350°)는 4px 에서 구분되지 않는다. 꽃은 덤불 꼭대기·실루엣 안,
+   *   열매는 덤불 옆구리·실루엣 밖이다(berryBush 주석의 표).
+   */
+  berryRed: 0xd6203c,
+  berryDeep: 0x9b1528,
+  berryBlue: 0x4356c4,
+  berryBlueDeep: 0x2c3a92,
+  fruitGold: 0xf0a52a,
+  fruitDate: 0xa8622c,
+  cactusPear: 0xe0447a,
+  honeyWax: 0xd8a33e,
+  honeyGold: 0xf5c65a,
+  honeyBee: 0x2e2822,
+  flintPale: 0xe6e2d4,
+  flintCore: 0x6d6a63,
+  /** 설원 버섯 갓 — glowMushroom 을 색으로 인자화하면서 필요해진 한 색 */
+  frozenPale: 0xbcd8e8,
 } as const;
 
 // --- 납작한 조각(판) ------------------------------------------------------
@@ -674,17 +697,24 @@ function deadTreeUp(): Element {
   return { solids };
 }
 
-/** 발광 버섯 군집 — 늪의 유일한 광원 (82 tri, 높이 0.64) */
-function glowMushroom(): Element {
+/**
+ * 발광 버섯 군집 — 늪의 유일한 광원 (82 tri, 높이 0.64).
+ *
+ * **색만 인자화했다 — 신규 삼각형 0이다**(gather-spec §6-3). `mushroom` 자원이 늪뿐
+ * 아니라 정글·설원에도 있는데, 세 판에 같은 형광 초록 갓을 세우면 "늪 소품이 잘못
+ * 섞였다"로 읽힌다. 갓 색 하나만 갈아 끼우면 같은 실루엣이 세 바이옴의 것이 된다:
+ * 정글은 붉은 갓(독버섯), 늪은 기존 형광 초록, 설원은 언 파랑.
+ */
+function glowMushroom(cap: number = P.glowCap, stem: number = P.glowStem): Element {
   return {
     ao: 0.08, // 발광체는 밑동이 어두우면 빛나 보이지 않는다
     solids: [
-      { kind: 'cyl', pos: [0, 0.21, 0], scale: [0.16, 0.42, 0.16], color: P.glowStem, seg: 5 },
-      { kind: 'ico', pos: [0, 0.48, 0], rot: [0.2, 0.4, 0], scale: [0.62, 0.34, 0.60], color: P.glowCap, hueJitter: 0.03 },
-      { kind: 'cyl', pos: [0.29, 0.14, 0.14], scale: [0.12, 0.28, 0.12], color: P.glowStem, seg: 4 },
-      { kind: 'cone', pos: [0.29, 0.33, 0.14], scale: [0.42, 0.24, 0.42], color: P.glowCapDeep, seg: 6, hueJitter: 0.03 },
-      { kind: 'cone', pos: [-0.27, 0.10, 0.19], scale: [0.09, 0.20, 0.09], color: P.glowStem, seg: 3 },
-      { kind: 'cone', pos: [-0.27, 0.25, 0.19], scale: [0.28, 0.18, 0.28], color: P.glowCap, seg: 4 },
+      { kind: 'cyl', pos: [0, 0.21, 0], scale: [0.16, 0.42, 0.16], color: stem, seg: 5 },
+      { kind: 'ico', pos: [0, 0.48, 0], rot: [0.2, 0.4, 0], scale: [0.62, 0.34, 0.60], color: cap, hueJitter: 0.03 },
+      { kind: 'cyl', pos: [0.29, 0.14, 0.14], scale: [0.12, 0.28, 0.12], color: stem, seg: 4 },
+      { kind: 'cone', pos: [0.29, 0.33, 0.14], scale: [0.42, 0.24, 0.42], color: shade(cap, 0.78), seg: 6, hueJitter: 0.03 },
+      { kind: 'cone', pos: [-0.27, 0.10, 0.19], scale: [0.09, 0.20, 0.09], color: stem, seg: 3 },
+      { kind: 'cone', pos: [-0.27, 0.25, 0.19], scale: [0.28, 0.18, 0.28], color: cap, seg: 4 },
     ],
   };
 }
@@ -1040,14 +1070,19 @@ function sandArch(): Element {
  * 첨탑 바위 — 실제 캡처에서 mesaRock(0.92)이 전부 같은 크기의 둥근 주황 덩어리로
  * 반복돼 감자밭이 됐다. 사막에 **수직 리듬**을 주는 솟은 사암 (72 tri, 높이 1.70).
  */
-function rockSpire(): Element {
+function rockSpire(
+  deep: number = P.sandRockDeep,
+  mid: number = P.sandRock,
+  lit: number = P.sandRockLit,
+  foot: number = P.sandArchShade,
+): Element {
   return {
     solids: [
-      { kind: 'cyl', pos: [0, 0.18, 0], scale: [0.68, 0.36, 0.62], color: P.sandRockDeep, seg: 6, hueJitter: 0.015 },
-      { kind: 'cone', pos: [0, 0.64, 0], scale: [0.54, 0.64, 0.52], color: P.sandRock, seg: 5, hueJitter: 0.015 },
-      { kind: 'cone', pos: [0.02, 1.08, 0.01], scale: [0.38, 0.56, 0.36], color: P.sandRockLit, seg: 5, hueJitter: 0.015 },
-      { kind: 'cone', pos: [0.03, 1.44, 0], scale: [0.23, 0.52, 0.23], color: P.sandRock, seg: 4 },
-      { kind: 'ico', pos: [-0.36, 0.18, 0.18], rot: [0.6, 0.5, 0.3], scale: [0.36, 0.32, 0.34], color: P.sandArchShade, hueJitter: 0.015 },
+      { kind: 'cyl', pos: [0, 0.18, 0], scale: [0.68, 0.36, 0.62], color: deep, seg: 6, hueJitter: 0.015 },
+      { kind: 'cone', pos: [0, 0.64, 0], scale: [0.54, 0.64, 0.52], color: mid, seg: 5, hueJitter: 0.015 },
+      { kind: 'cone', pos: [0.02, 1.08, 0.01], scale: [0.38, 0.56, 0.36], color: lit, seg: 5, hueJitter: 0.015 },
+      { kind: 'cone', pos: [0.03, 1.44, 0], scale: [0.23, 0.52, 0.23], color: mid, seg: 4 },
+      { kind: 'ico', pos: [-0.36, 0.18, 0.18], rot: [0.6, 0.5, 0.3], scale: [0.36, 0.32, 0.34], color: foot, hueJitter: 0.015 },
     ],
   };
 }
@@ -1494,6 +1529,164 @@ function volcanoCone(): Element {
       { pos: [0.30, 0.80, 0.18], rot: [-1.05, 0.55, 0], scale: [0.13, 1.60], color: P.lavaHot, sides: 4, hueJitter: 0.03 },
       { pos: [-0.26, 0.72, -0.22], rot: [-1.05, 3.85, 0], scale: [0.10, 1.44], color: P.lavaDeep, sides: 4, hueJitter: 0.03 },
       { pos: [-0.10, 0.66, 0.30], rot: [-1.05, 1.90, 0], scale: [0.08, 1.30], color: P.lavaHot, sides: 4 },
+    ],
+  };
+}
+
+// ── 1층: 채집 자원 원형 ────────────────────────────────────────────────────
+/*
+ * gather-spec §6-1 이 이 여섯 개에 준 일은 장식이 아니라 **식별**이다:
+ * "자원 종류 = 1층 실루엣". 곧 판 위에서 딸기밭과 통나무를 가르는 것은 배지가 아니라
+ * 그 칸에 서 있는 것의 **모양**이어야 하고, 배지는 그 위에 값을 얹을 뿐이다.
+ * 그래서 여섯 개 전부 기존 1층과 **겹치지 않는 실루엣**을 최우선으로 골랐다.
+ *
+ * ⚠ 셋(datePalm·cactusFruit·honeycomb 의 벌)은 기존 원형을 **그대로 재사용**하고
+ *   열매 판만 얹는다. 새로 굽는 것은 열매뿐이라 삼각형이 12~16만 는다 —
+ *   §6-5 의 삼각형 여유(12,843)가 이 절약에서 나온다.
+ */
+
+/**
+ * 딸기덤불 — 잎 덩이 3(옆으로) + 열매 송이 4(실루엣 밖) (76 tri, 높이 0.42).
+ *
+ * **꽃과 열매를 가르는 진짜 장치는 색이 아니라 「위치」다.** P.flowerRed(H≈6°)와
+ * P.berryRed(H≈350°)는 화면 4px 에서 구분되지 않는다. 그래서 표로 못 박는다:
+ *   꽃(flowerBush/wildflowerBunch) y 0.31~0.34(덤불 **꼭대기**) · 반경 ≤0.12(실루엣 **안**) · 수평 · 2송이
+ *   열매(여기)              y 0.10~0.24(덤불 **아래·옆구리**) · 반경 0.24~0.30(실루엣 **밖**) · rot.x 0.5~0.9 · 4송이
+ */
+function berryBush(leaf: number, berry: number): Element {
+  return {
+    ao: 0.16,
+    solids: [
+      // ⚠ bushRound(:1504)는 큰 것 **위에** 작은 것 = 수직 적층이다. 딸기는 셋이
+      //    **옆으로 나란히** 앉는다 — 같은 ico 두 개로 실루엣을 가르는 유일한 수단이
+      //    배치 축이고, 화면 20px 에서 "낮고 넓다"가 남는다.
+      { kind: 'ico', pos: [-0.15, 0.17, 0.04], rot: [0.35, 0.6, 0.15], scale: [0.34, 0.30, 0.32], color: leaf, hueJitter: 0.04 },
+      { kind: 'ico', pos: [0.14, 0.19, -0.06], rot: [0.90, 0.2, 0.50], scale: [0.32, 0.32, 0.30], color: shade(leaf, 0.86), hueJitter: 0.04 },
+      { kind: 'ico', pos: [0.02, 0.30, 0.10], rot: [0.20, 1.1, 0.80], scale: [0.26, 0.24, 0.26], color: shade(leaf, 1.10), hueJitter: 0.04 },
+    ],
+    // 열매 = 6각 판 4장. **blossom()을 쓰지 않는다** — 그 헬퍼는 수평·꼭대기 전용이고
+    // 여기서 필요한 것은 "옆구리에 매달려 실루엣 밖으로 나온" 배치다(위 표).
+    flats: [
+      { pos: [-0.27, 0.15, 0.09], rot: [0.72, 0.4, 0], scale: [0.17, 0.16], color: berry, sides: 6, hueJitter: 0.05 },
+      { pos: [0.26, 0.19, -0.11], rot: [0.80, 2.1, 0], scale: [0.18, 0.17], color: shade(berry, 0.86), sides: 6, hueJitter: 0.05 },
+      { pos: [0.06, 0.11, 0.28], rot: [0.62, 3.4, 0], scale: [0.16, 0.15], color: shade(berry, 1.10), sides: 6, hueJitter: 0.05 },
+      { pos: [-0.09, 0.24, -0.25], rot: [0.88, 4.7, 0], scale: [0.15, 0.14], color: berry, sides: 6, hueJitter: 0.05 },
+    ],
+  };
+}
+
+/**
+ * 열매나무 — 낮은 줄기 + 둥근 수관 2덩이 + 열매 4개 (86 tri, 높이 1.45).
+ *
+ * broadleaf(1.38)와 키가 비슷한데도 실루엣이 안 겹치는 이유는 **수관의 폭과 밑동
+ * 높이**다: broadleaf 는 줄기 0.55 에 수관 4덩이가 넓게(0.86) 퍼지고, 이쪽은 줄기가
+ * 0.62 로 더 높고 수관이 둥글게 **한 덩이로 뭉친다**. 55° 부감에서 "위에서 본 덩어리"가
+ * 하나면 과수, 넷이면 활엽수로 갈린다.
+ * 열매는 수관 **아래 가장자리**에 매달린다 — 위에 얹으면 꽃으로 읽힌다(berryBush 표).
+ */
+function fruitTree(): Element {
+  return {
+    solids: [
+      flare(0, 0.08, 0, 0.30, 0.16, shade(C.bark, 0.78)),
+      { kind: 'cyl', pos: [0, 0.38, 0], scale: [0.15, 0.62, 0.15], color: C.bark, seg: 5 },
+      { kind: 'ico', pos: [0, 0.98, 0], rot: [0.3, 0.4, 0.15], scale: [0.84, 0.58, 0.80], color: C.leaf, hueJitter: 0.035 },
+      { kind: 'ico', pos: [0.08, 1.20, 0.04], rot: [0.9, 1.1, 0.4], scale: [0.54, 0.50, 0.52], color: shade(C.leaf, 1.14), hueJitter: 0.035 },
+    ],
+    flats: [
+      { pos: [0.40, 0.88, 0.06], rot: [0.78, 0.5, 0], scale: [0.19, 0.18], color: P.fruitGold, sides: 6, hueJitter: 0.05 },
+      { pos: [-0.36, 0.92, -0.14], rot: [0.84, 2.4, 0], scale: [0.18, 0.17], color: shade(P.fruitGold, 0.86), sides: 6, hueJitter: 0.05 },
+      { pos: [0.10, 0.84, 0.38], rot: [0.70, 3.9, 0], scale: [0.17, 0.16], color: shade(P.fruitGold, 1.08), sides: 6, hueJitter: 0.05 },
+      { pos: [-0.12, 0.96, -0.34], rot: [0.88, 5.2, 0], scale: [0.16, 0.15], color: P.fruitGold, sides: 6, hueJitter: 0.05 },
+    ],
+  };
+}
+
+/**
+ * 대추야자 — palmTall(92) 재사용 + 대추 송이 3장 (104 tri, 높이 1.61).
+ *
+ * 사막의 `fruit` 이다. **새 야자를 굽지 않는다** — 사막 판에 야자가 두 실루엣으로
+ * 서면 그건 종류가 는 게 아니라 같은 나무가 두 번 나오는 것이고, 열매 판 3장이
+ * 정확히 "저 야자에는 뭔가 매달려 있다"만 더한다. 신규 삼각형 12개다.
+ */
+function datePalm(): Element {
+  const base = palmTall();
+  return {
+    solids: base.solids,
+    flats: [
+      ...(base.flats ?? []),
+      // 잎 밑동(x≈0.26, y≈1.30) 바로 아래에 매달린다 — 잎보다 위면 왕관을 가린다
+      { pos: [0.48, 1.16, 0.10], rot: [0.66, 0.6, 0], scale: [0.21, 0.19], color: P.fruitDate, sides: 6, hueJitter: 0.05 },
+      { pos: [0.10, 1.12, -0.22], rot: [0.74, 2.6, 0], scale: [0.19, 0.18], color: shade(P.fruitDate, 0.86), sides: 6, hueJitter: 0.05 },
+      { pos: [0.22, 1.20, 0.30], rot: [0.60, 4.3, 0], scale: [0.18, 0.17], color: shade(P.fruitDate, 1.12), sides: 6, hueJitter: 0.05 },
+    ],
+  };
+}
+
+/**
+ * 벌집 — 마른 가지에 매달린 밀랍 덩이 + 벌 3점 (60 tri, 높이 0.88).
+ *
+ * 이 판에서 유일하게 **공중에 뜬 질량**이다. 나머지 1층은 전부 밑동이 지면에 붙어
+ * 있어서, 0.4~0.6 높이에 덩이 하나만 떠 있어도 20px 에서 곧장 갈린다.
+ * 벌 3점은 장식이 아니라 **거리 표시**다 — 덩이에서 떨어진 작은 점 셋이 있으면
+ * 그 덩이가 "매달린 것"으로 읽히고, 없으면 그냥 가지에 난 혹으로 보인다.
+ */
+function honeycomb(): Element {
+  return {
+    ao: 0.14,
+    solids: [
+      { kind: 'cyl', pos: [0.02, 0.44, 0], rot: [0.06, 0.5, 0.16], scale: [0.11, 0.88, 0.11], color: P.deadWood, seg: 4, hueJitter: 0.02 },
+      { kind: 'ico', pos: [0.16, 0.46, 0.03], rot: [0.3, 0.8, 0.2], scale: [0.38, 0.42, 0.36], color: P.honeyWax, hueJitter: 0.03 },
+      // 아래턱 — 뒤집힌 원뿔이라 벌집이 물방울처럼 아래로 뾰족해진다
+      { kind: 'cone', pos: [0.16, 0.16, 0.03], rot: [Math.PI, 0, 0.08], scale: [0.30, 0.24, 0.28], color: P.honeyGold, seg: 6, hueJitter: 0.03 },
+    ],
+    flats: [
+      { pos: [0.44, 0.62, 0.12], rot: [0.5, 0.7, 0], scale: [0.10, 0.09], color: P.honeyBee, sides: 6 },
+      { pos: [-0.16, 0.54, 0.26], rot: [0.4, 2.9, 0], scale: [0.09, 0.085], color: P.honeyBee, sides: 6 },
+      { pos: [0.24, 0.76, -0.28], rot: [0.6, 4.6, 0], scale: [0.085, 0.08], color: P.honeyBee, sides: 6 },
+    ],
+  };
+}
+
+/**
+ * 규석 노두 — 모암 + 깨진 면 2 + 파단면 판 3 (48 tri, 높이 0.34).
+ *
+ * 자원 8종 중 **가장 낮다**(0.34). 그게 일이다 — flint 는 사막·설원·화산에만 있고
+ * 그 셋은 전부 큰 종(stone/obsidian)의 비중이 높은 판이라, 낮은 칸을 만드는 몫을
+ * 이 하나가 진다(§6-4 "낮은칸 ≥ 15%"). 화산은 flint 가 유일한 낮은 종이다.
+ * 파단면은 **판**으로 굽는다 — 규석이 깨진 면은 두께가 안 보이고 빛만 튄다.
+ */
+function flintNodule(): Element {
+  return {
+    ao: 0.20,
+    solids: [
+      { kind: 'ico', pos: [0, 0.16, 0], rot: [0.5, 0.9, 0.25], scale: [0.60, 0.36, 0.54], color: P.flintCore, hueJitter: 0.02 },
+      { kind: 'cone', pos: [0.22, 0.09, 0.14], rot: [0.3, 0.6, 0.4], scale: [0.28, 0.20, 0.26], color: shade(P.flintCore, 0.84), seg: 4, hueJitter: 0.02 },
+      { kind: 'cone', pos: [-0.20, 0.11, -0.12], rot: [0.2, 1.5, -0.3], scale: [0.24, 0.24, 0.22], color: shade(P.flintCore, 1.14), seg: 4, hueJitter: 0.02 },
+    ],
+    flats: [
+      { pos: [0.06, 0.30, 0.02], rot: [0.28, 0.4, 0], scale: [0.30, 0.26], color: P.flintPale, sides: 6, hueJitter: 0.03 },
+      { pos: [-0.26, 0.18, 0.16], rot: [0.62, 2.2, 0], scale: [0.22, 0.20], color: shade(P.flintPale, 0.90), sides: 6, hueJitter: 0.03 },
+      { pos: [0.24, 0.14, -0.20], rot: [0.70, 4.0, 0], scale: [0.20, 0.18], color: P.flintPale, sides: 6, hueJitter: 0.03 },
+    ],
+  };
+}
+
+/**
+ * 열매 선인장 — barrelCactus(44) 재사용 + 열매 3장 정수리 링 (56 tri, 높이 0.51).
+ *
+ * 사막의 `berry` 다. 자홍(P.cactusPear)은 **사막 주황 지면 위 유일한 냉색**이라
+ * 축소 캡처에서도 "저기 뭔가 열렸다"가 남는다. 열매를 정수리 **링**으로 두는 것도
+ * 실제 백년초의 모양이고, blossom(꼭대기 중앙)과 자리가 갈려 꽃과 안 헷갈린다.
+ */
+function cactusFruit(): Element {
+  const base = barrelCactus();
+  return {
+    solids: base.solids,
+    flats: [
+      ...(base.flats ?? []),
+      { pos: [0.26, 0.44, 0.04], rot: [0.62, 0.3, 0], scale: [0.17, 0.16], color: P.cactusPear, sides: 6, hueJitter: 0.04 },
+      { pos: [-0.14, 0.46, 0.22], rot: [0.58, 2.5, 0], scale: [0.16, 0.15], color: shade(P.cactusPear, 0.88), sides: 6, hueJitter: 0.04 },
+      { pos: [-0.10, 0.42, -0.24], rot: [0.66, 4.4, 0], scale: [0.15, 0.14], color: shade(P.cactusPear, 1.10), sides: 6, hueJitter: 0.04 },
     ],
   };
 }
@@ -2251,9 +2444,14 @@ export interface BiomeKit {
   /** 1층 후보 (배열에 여러 번 넣으면 그만큼 자주 나온다) */
   hero: Element[];
   /**
-   * 1층 **랜드마크** 후보 — 셀 아홉에 하나꼴로 hero 대신 여기서 뽑는다.
+   * 1층 **랜드마크** 후보 — 그 셀이 랜드마크면 hero 대신 여기서 뽑는다.
    * 2.5~3.4급이라 hero 최댓값(2.3)과 **사이에 틈**이 있다. 그 틈이 "확실히 큰 것"을
    * 만든다 — 위 "신규 1층 ③" 주석 참조.
+   *
+   * ⚠ **어느 셀이 랜드마크인가는 이 파일이 안 정한다** — `data/resources.ts`
+   *   `isLandmarkCell`(wood/stone 셀의 24% = 전체의 9.6~13.9%, 판당 3~7그루)이
+   *   정하고 buildProps 의 kindOf 인자로 들어온다. 랜드마크는 **시각 전용**이라
+   *   짐값에 안 닿지만, 판정을 셀 단독 해시로 못 박아야 sim 과 렌더가 같은 답을 본다.
    */
   landmark: Element[];
   /**
@@ -2278,7 +2476,44 @@ export interface BiomeKit {
   shadowTint: number;
   /** 접촉 그림자 명도 배율 */
   shadowMul: number;
+  /**
+   * 자원 종류 → **hero 배열의 인덱스 목록**. 자원 종류가 곧 1층 실루엣이다
+   * (gather-spec §6-1). 같은 인덱스를 두 번 넣으면 그만큼 자주 나온다.
+   *
+   * 배열 자체가 아니라 인덱스를 담는 이유: kit.hero 의 모양을 안 바꿔야
+   * "이름 없는 요소 금지"(props.test.ts:169)·가림 실측(:400)·heroPoolsOf 캐시가
+   * 전부 손대지 않고 산다. **그리고 더 중요한 이유가 하나 더 있다** — bakedOf 의
+   * 지오메트리 캐시 키가 `prop:${biome}:h:${idx}` 라서, 종류마다 잘라 낸 **부분
+   * 배열**을 넘기면 같은 키에 다른 원형이 캐시된다. 인덱스는 언제나 원본 배열의 것이다.
+   *
+   * ⚠ 여기 안 적힌 인덱스는 **판에 한 번도 안 선다**. 그런데도 kit.hero 에 남겨 두면
+   *   heroPoolsOf 의 "높이 하위/상위 절반"이 유령 원형 때문에 밀린다. 그래서
+   *   6바이옴 전부 **hero 인덱스가 빠짐없이 어느 한 종에는 들어간다**.
+   */
+  heroByKind: Readonly<Partial<Record<ResourceId, readonly number[]>>>;
 }
+
+/**
+ * 자원 종류별 1층 **계층 가중치** [작은, 보통, 큰] — HERO_TIERS 와 같은 순서.
+ *
+ * 개정 전 26/46/28 은 "모든 셀이 같은 분포"였다. 이제 종류가 실루엣이므로
+ * **낮은 종은 절대 큰 계층에 안 가고, 큰 종은 절대 작은 계층에 안 간다.**
+ * 안 그러면 2.0급 딸기덤불이 서고(그 순간 "실루엣 = 종류"가 거짓말이 된다),
+ * 동시에 "큰것(1.4+) ≥ 25%"(props.test.ts:462)가 설원·늪에서 먼저 깨진다.
+ *
+ * ⚠ 합이 100 인 것은 규약이다 — drawHero 가 이 합을 그대로 rng 구간으로 쓴다.
+ *   가중치가 0 인 계층은 **건너뛴다**(rng 가 정확히 0 을 뽑아도 새지 않는다).
+ */
+const KIND_TIER_W: Readonly<Record<ResourceId, readonly [number, number, number]>> = {
+  berry: [70, 30, 0],
+  honey: [70, 30, 0],
+  mushroom: [60, 40, 0],
+  flint: [80, 20, 0],
+  fruit: [0, 40, 60],
+  wood: [0, 40, 60],
+  stone: [0, 40, 60],
+  obsidian: [0, 40, 60],
+};
 
 /**
  * 1층 **크기 계층** — heroScale 봉투를 세 구간으로 자르고 가중치로 뽑는다.
@@ -2318,21 +2553,23 @@ export interface BiomeKit {
  * 이제 "큰 셀"은 큰 원형 × 큰 배율이라 반드시 크고, "작은 셀"은 반드시 작다.
  * 초원 기준 큰 계층은 1.48~2.29, 작은 계층은 0.17~0.53 으로 갈라진다.
  */
+/**
+ * ⚠ 채집 개정 후 `w` 는 **더 이상 쓰이지 않는다** — 계층 가중치는 자원 종류가 정한다
+ * (KIND_TIER_W). 여기 남긴 것은 위 주석의 26/46/28 이 어디서 온 값인지가 기록이기
+ * 때문이고, 종류별 가중치의 합(100)도 그 값을 기준선으로 잡았다.
+ */
 const HERO_TIERS: readonly { readonly w: number; readonly t0: number; readonly t1: number }[] = [
   { w: 26, t0: 0.0, t1: 0.18 },
   { w: 46, t0: 0.38, t1: 0.62 },
   { w: 28, t0: 0.82, t1: 1.0 },
 ];
-const HERO_TIER_W = HERO_TIERS.reduce((s, t) => s + t.w, 0);
 
-/**
- * 랜드마크가 서는 셀의 비율 — 셀 아홉에 하나.
- * 스테이지당 소품 셀이 40~51개이므로 판마다 **4~6그루**다. 0.2로 올려 봤더니
- * 큰 것이 흔해져 그냥 "전부 큰 판"이 됐다(다시 균일함이다). 0.05면 스테이지에
- * 두 개뿐이라 카메라를 돌리면 화면에서 사라진다. 0.11이 "화면 어딘가에 늘 하나는
- * 있고, 둘이 나란히 서는 일은 드물다"가 되는 값이다.
+/*
+ * ⚠ `LANDMARK_RATE = 0.11` 은 **여기서 사라졌다**. 랜드마크 판정은 이제 렌더가 아니라
+ * `data/resources.ts isLandmarkCell`(wood/stone 셀의 24%, 전체의 9.6~13.9%)이 한다 —
+ * sim 과 렌더가 같은 답을 봐야 하고, 렌더가 자기 rng 에서 뽑으면 스트림 분리가 다시
+ * 깨지기 때문이다(gather-spec §5-3). 판당 그루 수(4~6)는 두 값이 거의 같다.
  */
-const LANDMARK_RATE = 0.11;
 
 /**
  * 랜드마크 배율 봉투 — hero 처럼 계층으로 나누지 않고 **좁게** 뽑는다.
@@ -2362,22 +2599,91 @@ function heroPoolsOf(biome: BiomeId, kit: BiomeKit): readonly (readonly number[]
   return pools;
 }
 
-/** 계층 하나를 뽑아 **그 계층의 원형 풀 + 봉투 안 실제 배율**을 돌려준다 */
+/**
+ * 계층별 × **자원 종류별** 1층 원형 후보 — `heroPoolsOf(계층) ∩ heroByKind(종류)`.
+ *
+ * 교집합이 비면 종류 풀 전체로 폴백한다. 그게 실제로 필요한 자리가 있다: 화산의
+ * `wood` 는 후보가 charTree 하나뿐인데 그 하나가 바이옴 높이 **하위** 절반에 들어
+ * 있어서, 큰 계층(상위 절반)과의 교집합이 빈다. 폴백이 없으면 그 칸이 통째로 빈다.
+ *
+ * 캐시 키에 종류를 넣는 이유는 heroPoolsOf 와 같다 — 셀마다 filter 를 돌리면
+ * 6판 265셀 × 3계층이고, 값은 바이옴·종류마다 **한 번 정해지면 안 변한다**.
+ */
+const kindPoolCache = new Map<string, readonly (readonly number[])[]>();
+
+function kindPoolsOf(biome: BiomeId, kit: BiomeKit, kind: ResourceId): readonly (readonly number[])[] {
+  const key = `${biome}:${kind}`;
+  const hit = kindPoolCache.get(key);
+  if (hit) return hit;
+  const own = kit.heroByKind[kind] ?? kit.hero.map((_, i) => i);
+  const set = new Set(own);
+  const pools = heroPoolsOf(biome, kit).map((p) => {
+    const cut = p.filter((i) => set.has(i));
+    return cut.length > 0 ? cut : own;
+  });
+  kindPoolCache.set(key, pools);
+  return pools;
+}
+
+/**
+ * 계층 하나를 뽑아 **그 계층의 원형 풀 + 봉투 안 실제 배율**을 돌려준다.
+ * rng 소비는 언제나 **정확히 2회**다(계층 range · 배율 range) — 호출부의 인덱스
+ * 추첨까지 합쳐 3회. 이 횟수가 흔들리면 같은 셀의 2·3층이 통째로 밀린다.
+ */
 function drawHero(
   rng: Rng,
   envelope: readonly [number, number],
   pools: readonly (readonly number[])[],
+  tierW: readonly [number, number, number],
 ): { pool: readonly number[]; scale: number } {
-  let r = rng.range(0, HERO_TIER_W);
+  let total = 0;
+  for (const w of tierW) total += w;
+  let r = rng.range(0, total);
+  let last = 0;
   for (let i = 0; i < HERO_TIERS.length; i++) {
-    const tier = HERO_TIERS[i] as { w: number; t0: number; t1: number };
-    r -= tier.w;
-    if (r <= 0) {
-      const t = rng.range(tier.t0, tier.t1);
-      return { pool: pools[i] as readonly number[], scale: envelope[0] + (envelope[1] - envelope[0]) * t };
-    }
+    const w = tierW[i] ?? 0;
+    if (w <= 0) continue; // 그 종이 절대 가지 않는 계층
+    last = i;
+    r -= w;
+    if (r <= 0) break;
   }
-  return { pool: pools[2] as readonly number[], scale: envelope[1] };
+  const tier = HERO_TIERS[last] as { w: number; t0: number; t1: number };
+  const t = rng.range(tier.t0, tier.t1);
+  return { pool: pools[last] as readonly number[], scale: envelope[0] + (envelope[1] - envelope[0]) * t };
+}
+
+/**
+ * 꽃 색을 쓴 판이 있는가 — `berry` 셀의 2·3층 후보에서 **꽃을 빼기** 위한 판별.
+ *
+ * §6-3 이 못 박은 대로 꽃과 열매를 가르는 것은 색이 아니라 **위치**인데, 딸기덤불
+ * 셀 위에 꽃 소품이 같이 흩어지면 그 대비 자체가 지워진다("옆구리에 매달린 빨강"과
+ * "바닥에 깔린 빨강"이 한 칸에 같이 있으면 둘 다 얼룩이다). 삼각형 비용 0 —
+ * 후보 목록에서 인덱스를 빼는 것뿐이다.
+ */
+const FLOWER_COLORS: ReadonlySet<number> = new Set<number>([P.flowerWhite, P.flowerYellow, P.flowerPink, P.flowerRed]);
+
+function hasBlossom(el: Element): boolean {
+  for (const f of el.flats ?? []) if (FLOWER_COLORS.has(f.color)) return true;
+  return false;
+}
+
+/**
+ * 층 후보의 **인덱스 목록** — 통째로(all)와 꽃을 뺀 것(noFlower) 둘.
+ * ⚠ 잘라 낸 **배열**이 아니라 인덱스를 넘긴다. bakedOf 의 캐시 키가
+ *   `prop:${biome}:${layer}:${idx}` 라서 부분 배열을 넘기면 같은 키에 다른 원형이
+ *   구워진다 — heroByKind 가 인덱스인 것과 같은 이유다.
+ */
+const layerIdxCache = new Map<string, { all: readonly number[]; noFlower: readonly number[] }>();
+
+function layerIdx(biome: BiomeId, layer: string, list: readonly Element[]): { all: readonly number[]; noFlower: readonly number[] } {
+  const key = `${biome}:${layer}`;
+  const hit = layerIdxCache.get(key);
+  if (hit) return hit;
+  const all = list.map((_, i) => i);
+  const cut = all.filter((i) => !hasBlossom(list[i] as Element));
+  const v = { all, noFlower: cut.length > 0 ? cut : all };
+  layerIdxCache.set(key, v);
+  return v;
 }
 
 /**
@@ -2402,7 +2708,20 @@ const BIOME_KITS: Record<BiomeId, BiomeKit> = {
       rockPile(C.rock),
       fallenLog(),
       stumpMossy(),
+      // ── 채집: berry / honey / fruit 의 실루엣 ──
+      berryBush(C.leafDark, P.berryRed),
+      honeycomb(),
+      fruitTree(),
     ],
+    // 통나무·그루터기가 wood 인 것은 말이 되기도 하고 값이 되기도 한다 — 큰 종에
+    // 낮은 실루엣을 하나 섞어 두면 "wood 칸 = 무조건 큰 나무"의 단조로움이 깨진다.
+    heroByKind: {
+      berry: [10],
+      honey: [11],
+      fruit: [12],
+      wood: [0, 1, 2, 3, 4, 5, 8, 9],
+      stone: [6, 7],
+    },
     landmark: [elderTree()],
     heroScale: [0.58, 1.18],
     companion: [sapling(), stumpMossy(), fallenLog(), bushRound(P.bushDark, P.bushLit)],
@@ -2431,7 +2750,33 @@ const BIOME_KITS: Record<BiomeId, BiomeKit> = {
   jungle: {
     // ⚠ 정글은 셀 예산이 6개 중 가장 빡빡하다(1층 최고가 112). buttressTree 를 넣는
     //   대신 jungleTree(110) 중복 하나를 뺐다 — 종류는 늘고 최악값은 그대로다.
-    hero: [palmTall(), palmTall(), jungleTree(), buttressTree(), bambooClump(), fernTree(), mossyLog()],
+    hero: [
+      palmTall(),
+      palmTall(),
+      jungleTree(),
+      buttressTree(),
+      bambooClump(),
+      fernTree(),
+      mossyLog(),
+      // ── 채집: berry / honey / mushroom / fruit / stone 의 실루엣 ──
+      berryBush(P.jungleCanopy, P.berryRed),
+      honeycomb(),
+      glowMushroom(0xd4442a, P.glowStem), // 붉은 갓 = 정글의 독버섯. 늪의 형광 초록과 갈린다
+      fruitTree(),
+      // ⚠ 정글에는 **1층 바위가 없었다**. 그런데 stone 이 셀의 20%다 —
+      //   그 칸들이 전부 나무로 서면 "종류 = 실루엣"이 정글에서만 거짓말이 되고,
+      //   동시에 큰것(1.4+) 계약이 정글에서 23%로 떨어진다(실측). 사암 첨탑의
+      //   **색만** 회녹색으로 갈아 세운다 — 신규 삼각형 0.
+      rockSpire(P.jungleRock, P.jungleRockLit, shade(P.jungleRockLit, 1.12), shade(P.jungleRock, 0.72)),
+    ],
+    heroByKind: {
+      berry: [7],
+      honey: [8],
+      mushroom: [9],
+      fruit: [10],
+      wood: [0, 1, 2, 3, 4, 5, 6],
+      stone: [11],
+    },
     landmark: [palmColossus()],
     heroScale: [0.60, 1.12],
     companion: [fernTree(), mossyLog(), elephantEar(), fernBush(P.frond)],
@@ -2459,7 +2804,30 @@ const BIOME_KITS: Record<BiomeId, BiomeKit> = {
   },
   desert: {
     // ① rockSpire  ② sandArch(구멍 뚫린 실루엣)  ③ cairnStack  ④ ocotillo
-    hero: [saguaro(), saguaro(), mesaRock(), rockSpire(), sandArch(), cairnStack(), boneFossil(), barrelCactus()],
+    hero: [
+      saguaro(),
+      saguaro(),
+      mesaRock(),
+      rockSpire(),
+      sandArch(),
+      cairnStack(),
+      boneFossil(),
+      barrelCactus(),
+      // ── 채집: berry / flint / fruit 의 실루엣 ──
+      cactusFruit(),
+      flintNodule(),
+      datePalm(),
+    ],
+    // 사막의 `wood` 는 사구아로다 — 실제로 사막 부족이 기둥을 얻는 곳이고, 이 판에서
+    // 1.32급 세로 실루엣은 그것뿐이다. 뼈(boneFossil)는 flint 와 같은 "도구 재료" 칸에
+    // 넣어 두 낮은 원형이 한 종에 모이게 했다.
+    heroByKind: {
+      berry: [8, 7],
+      flint: [9, 6],
+      fruit: [10],
+      wood: [0, 1],
+      stone: [2, 3, 4, 5],
+    },
     landmark: [archColossus()],
     heroScale: [0.62, 1.22],
     companion: [smallCactus(), barrelCactus(), skullAlone(), cairnStack()],
@@ -2495,7 +2863,20 @@ const BIOME_KITS: Record<BiomeId, BiomeKit> = {
       snowDeadTree(),
       snowBoulder(),
       snowLog(),
+      // ── 채집: berry / mushroom / flint 의 실루엣 ──
+      berryBush(P.needleSnow, P.berryRed), // 눈밭 위 빨강 = 설원에서 가장 멀리서 읽히는 점
+      glowMushroom(P.frozenPale, P.glowStem),
+      flintNodule(),
     ],
+    // 얼음(iceCrystal·iceSpireTall)을 stone 에 넣는다 — 설원에서 캐는 단단한 것은
+    // 바위와 얼음 둘이고, 그 둘을 갈라 봐야 화면에서 구분되지 않는다.
+    heroByKind: {
+      berry: [8],
+      mushroom: [9],
+      flint: [10],
+      wood: [0, 1, 5, 7],
+      stone: [2, 3, 4, 6],
+    },
     landmark: [iceColossus()],
     heroScale: [0.62, 1.18],
     companion: [frozenShrub(), icicleCluster(), snowDrift(), snowLog()],
@@ -2515,7 +2896,31 @@ const BIOME_KITS: Record<BiomeId, BiomeKit> = {
   },
   swamp: {
     // ① giantGlowCap(판의 광원이자 랜드마크)  ② swampLog  ③ bubblingMud(갈색)  ④ cattail
-    hero: [mangrove(), mangrove(), deadTreeUp(), giantGlowCap(), rootArch(), swampLog(), glowMushroom(), mossBoulder()],
+    hero: [
+      mangrove(),
+      mangrove(),
+      deadTreeUp(),
+      giantGlowCap(),
+      rootArch(),
+      swampLog(),
+      glowMushroom(),
+      mossBoulder(),
+      // ── 채집: berry / honey / stone 의 실루엣 ──
+      berryBush(P.swampLeaf, P.berryBlue), // 늪은 블루베리 — 어두운 초록 위 유일한 냉색 점
+      honeycomb(),
+      // ⚠ 정글과 같은 이유다: 늪의 1층 바위는 mossBoulder(0.42) 뿐인데 stone 이 19%라
+      //   그 칸이 전부 낮게 깔렸다. 이끼 낀 선돌로 세운다(색만 바꾼 rockSpire).
+      rockSpire(0x5c6a5e, 0x74806e, 0x8b9682, P.mossHang),
+    ],
+    // 큰 발광갓(giantGlowCap)은 mushroom 의 큰 쪽이다 — 같은 종 안에서 크기가
+    // 갈리는 유일한 자리이고, 늪의 "판을 밝히는 버섯"이라는 콘셉트가 여기서 산다.
+    heroByKind: {
+      berry: [8],
+      honey: [9],
+      mushroom: [6, 3],
+      wood: [0, 1, 2, 4, 5],
+      stone: [7, 10],
+    },
     landmark: [deadColossus()],
     heroScale: [0.60, 1.26],
     companion: [glowCluster(), cypressKnees(), mossBoulder(), swampLog()],
@@ -2534,7 +2939,26 @@ const BIOME_KITS: Record<BiomeId, BiomeKit> = {
   },
   volcano: {
     // ① basaltStack(계단식)  ③ fumarole(흰 연기)·sulfurCrust(노랑)  ④ volcanicBomb(둥근 것)
-    hero: [basaltColumn(), basaltColumn(), basaltStack(), charTree(), fumarole(), obsidianSpike(), ventCrater()],
+    hero: [
+      basaltColumn(),
+      basaltColumn(),
+      basaltStack(),
+      charTree(),
+      fumarole(),
+      obsidianSpike(),
+      ventCrater(),
+      // ── 채집: flint 의 실루엣 (화산에 식량이 0인 대신 obsidian 이 34%다) ──
+      flintNodule(),
+    ],
+    // ⚠ 화산의 `wood` 후보는 charTree 하나뿐이고 그 하나가 바이옴 높이 하위 절반에
+    //   들어 있다 — 큰 계층과의 교집합이 비므로 kindPoolsOf 의 폴백이 실제로 도는
+    //   유일한 자리다. flint 는 화산에서 **유일한 낮은 종**이라 낮은칸 계약을 혼자 진다.
+    heroByKind: {
+      flint: [7],
+      obsidian: [5],
+      wood: [3],
+      stone: [0, 1, 2, 4, 6],
+    },
     landmark: [volcanoCone()],
     heroScale: [0.62, 1.24],
     companion: [obsidianSpike(), volcanicBomb(), ashCone(), emberRock()],
@@ -2708,18 +3132,24 @@ export function buildProps(
   propCellList: readonly Vec2[],
   cellToWorld: (x: number, z: number, out?: THREE.Vector3) => THREE.Vector3,
   seed: number,
+  /**
+   * 셀 → 자원 종류 / 랜드마크 여부. sim 과 **같은 함수**(`data/resources.ts`)에서 온다.
+   * 렌더가 자기 rng 스트림에서 종류를 뽑으면 자원표를 한 줄만 고쳐도 배치가 통째로
+   * 밀린다 — gather-spec §5-2 의 "세 다리" 중 하나가 이 인자다.
+   */
+  kindOf: (cellX: number, cellZ: number) => { kind: ResourceId; landmark: boolean },
 ): PropsBuild {
-  const rng = new Rng(hashSeed(`props:${biome}:${seed}`));
   const kit = BIOME_KITS[biome];
-  const pools = heroPoolsOf(biome, kit);
   const shColor = shadowColor(biome);
+  const midIdx = layerIdx(biome, 'm', kit.mid);
+  const groundIdx = layerIdx(biome, 'g', kit.ground);
   /** 셀 좌표 → 그 셀의 변환/틴트 완료 지오메트리 (병합 전 원본, 재병합용으로 보관) */
   const parts = new Map<string, THREE.BufferGeometry>();
   /** 셀 좌표 → 1층 산포 오프셋 (선택 링이 밑동을 감싸도록 밖에 알려 준다) */
   const offsets = new Map<string, { dx: number; dz: number }>();
 
-  /** 원형을 클론해 자리에 앉히고 색을 흩는다 */
-  const place = (b: Baked, x: number, z: number, scale: number, dh: number, lm: number): THREE.BufferGeometry => {
+  /** 원형을 클론해 자리에 앉히고 색을 흩는다 (rng 는 **그 셀의 것**을 받는다) */
+  const place = (rng: Rng, b: Baked, x: number, z: number, scale: number, dh: number, lm: number): THREE.BufferGeometry => {
     const g = b.geo.clone();
     geoTransform(g, x, 0, z, rng.range(0, Math.PI * 2), scale);
     shiftGeoColor(g, dh, lm);
@@ -2727,6 +3157,17 @@ export function buildProps(
   };
 
   for (const cell of propCellList) {
+    /*
+     * ── 소품 rng 를 **셀 단위로 가른다** (gather-spec §5-3) ──────────────────
+     * 개정 전에는 판 하나가 스트림 하나였다. 곧 앞 셀에서 뽑는 횟수가 한 번만 달라져도
+     * 그 뒤 모든 셀의 소품이 밀린다 — 그리고 이번 개정은 셀마다 뽑는 횟수를 **자원
+     * 종류에 따라** 다르게 만든다(랜드마크 분기 · 종류별 계층). 셀 단위로 가르지 않으면
+     * 자원표를 한 줄 고칠 때마다 6판의 소품 배치가 통째로 바뀌고, 그건 삼각형 실측을
+     * 매번 다시 재야 한다는 뜻이다. 셀 단위면 **그 셀만** 바뀐다.
+     * (배치가 이번 개정에서 한 번 통째로 바뀌는 것은 이 전환 자체 때문이다 — 한 번뿐이다)
+     */
+    const rng = new Rng(hashSeed(`props:${biome}:${seed}:${cell.z * 1000 + cell.x}`));
+    const { kind, landmark } = kindOf(cell.x, cell.z);
     cellToWorld(cell.x, cell.z, _v);
     const cx = _v.x;
     const cz = _v.z;
@@ -2746,7 +3187,13 @@ export function buildProps(
      * 않고 좁은 봉투로 크게만 뽑는다 — 그 한 그루가 주변 hero 들과의 대비를 만들어
      * 판에 크기 계층을 세운다(HERO_TIERS / "신규 1층 ③" 주석 참조).
      */
-    const isLandmark = kit.landmark.length > 0 && rng.next() < LANDMARK_RATE;
+    /*
+     * ⚠ 랜드마크 판정이 **rng 에서 빠졌다**. 개정 전 `kit.landmark.length > 0 &&
+     * rng.next() < LANDMARK_RATE` 는 `&&` 가 단락 평가라 조건에 따라 rng.next() 가
+     * 건너뛰어졌고, 그 위에 자원별 분기를 얹으면 스트림이 조용히 밀린다. 지금은
+     * 자원 모듈(isLandmarkCell)이 셀 단독 해시로 정하므로 그 함정이 원천 소멸한다.
+     */
+    const isLandmark = landmark && kit.landmark.length > 0;
     let hero: Baked;
     let hs: number;
     if (isLandmark) {
@@ -2754,14 +3201,14 @@ export function buildProps(
       hero = bakedOf(biome, 'L', li, kit.landmark[li] as Element);
       hs = rng.range(LANDMARK_SCALE[0], LANDMARK_SCALE[1]);
     } else {
-      const drawn = drawHero(rng, kit.heroScale, pools);
+      const drawn = drawHero(rng, kit.heroScale, kindPoolsOf(biome, kit, kind), KIND_TIER_W[kind]);
       const hi = drawn.pool[rng.int(0, drawn.pool.length - 1)] as number;
       hero = bakedOf(biome, 'h', hi, kit.hero[hi] as Element);
       hs = drawn.scale;
     }
     const dx = rng.range(-PROP_JITTER, PROP_JITTER);
     const dz = rng.range(-PROP_JITTER, PROP_JITTER);
-    pieces.push(place(hero, cx + dx, cz + dz, hs, rng.range(-0.022, 0.022), rng.range(0.9, 1.1)));
+    pieces.push(place(rng, hero, cx + dx, cz + dz, hs, rng.range(-0.022, 0.022), rng.range(0.9, 1.1)));
     left -= hero.tri + SHADOW_TRI;
 
     // ── 접촉 그림자 (소품이 그림자를 굽지 않는 대신) ──
@@ -2789,6 +3236,7 @@ export function buildProps(
         const rad = rng.range(0.26, 0.40);
         pieces.push(
           place(
+            rng,
             comp,
             cx + dx + Math.cos(a) * rad,
             cz + dz + Math.sin(a) * rad,
@@ -2804,6 +3252,8 @@ export function buildProps(
     // ── 2층·3층: 셀 안 고리에 흩는다 (1층 밑동과는 겹치지 않게 민다) ──
     const scatter = (
       list: Element[],
+      /** 뽑아도 되는 **원본 배열 인덱스** (berry 셀은 꽃이 빠진 목록이 온다) */
+      pick: readonly number[],
       layer: string,
       n: number,
       rMin: number,
@@ -2814,7 +3264,7 @@ export function buildProps(
       fitInCell: boolean,
     ): void => {
       for (let i = 0; i < n; i++) {
-        const idx = rng.int(0, list.length - 1);
+        const idx = pick[rng.int(0, pick.length - 1)] as number;
         const el = list[idx];
         if (!el) continue;
         const b = bakedOf(biome, layer, idx, el);
@@ -2838,16 +3288,19 @@ export function buildProps(
          * 흙두덕 판이 이웃 칸으로 넘어가 접촉 그림자 계약 테스트가 잡아냈다.
          */
         if (fitInCell) rad = Math.max(0, Math.min(rad, SHADOW_FIT - b.rc * s));
-        pieces.push(place(b, cx + Math.cos(a) * rad, cz + Math.sin(a) * rad, s, dh, lm));
+        pieces.push(place(rng, b, cx + Math.cos(a) * rad, cz + Math.sin(a) * rad, s, dh, lm));
         left -= b.tri;
       }
     };
     // 2층은 3층 몫(GROUND_RESERVE)을 남기고 쓴다 — 3층이 잘리면 밑동이 지면에서 뜬다
-    scatter(kit.mid, 'm', rng.int(kit.midCount[0], kit.midCount[1]), 0.24, UNDER_RADIUS_MAX, 0.8, 1.15, GROUND_RESERVE, false);
+    // berry 셀에서만 꽃 소품을 뺀다 — 열매(옆구리·실루엣 밖)와 꽃(꼭대기·실루엣 안)의
+    // 대비가 이 필터로 산다(hasBlossom 주석). 삼각형 비용 0, rng 소비 횟수 그대로다.
+    const berryCell = kind === 'berry';
+    scatter(kit.mid, berryCell ? midIdx.noFlower : midIdx.all, 'm', rng.int(kit.midCount[0], kit.midCount[1]), 0.24, UNDER_RADIUS_MAX, 0.8, 1.15, GROUND_RESERVE, false);
     // 3층 rMin 을 0.14 → 0.26 으로 밀었다: 개정 전에는 지피가 1층 밑동 그늘에 파묻혀
     // 게임 카메라 거리 캡처에서 **한 개도 식별되지 않았다**. 대신 rMax 를 0.42 로
     // 당겨 셀 밖으로 새는 양은 그대로 둔다.
-    scatter(kit.ground, 'g', rng.int(kit.groundCount[0], kit.groundCount[1]), 0.26, 0.42, 0.75, 1.25, 0, true);
+    scatter(kit.ground, berryCell ? groundIdx.noFlower : groundIdx.all, 'g', rng.int(kit.groundCount[0], kit.groundCount[1]), 0.26, 0.42, 0.75, 1.25, 0, true);
 
     const merged = mergeGeometries(pieces, false);
     for (const p of pieces) p.dispose();
@@ -3010,6 +3463,13 @@ export const PROP_ELEMENTS: Readonly<Record<string, Element>> = {
   volcanoCone: volcanoCone(),
   iceFleck: iceFleck(),
   swampMossFleck: swampMossFleck(),
+  // ── 채집 개정: 자원 원형 6 (gather-spec §6-3). glowMushroom 은 색만 인자화라 신규 0 ──
+  berryBush: berryBush(C.leafDark, P.berryRed),
+  fruitTree: fruitTree(),
+  datePalm: datePalm(),
+  honeycomb: honeycomb(),
+  flintNodule: flintNodule(),
+  cactusFruit: cactusFruit(),
 };
 
 /** 설계도의 삼각형 수 (실제로 굽지 않고 센다 — 원가표 테스트용) */

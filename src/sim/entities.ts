@@ -18,6 +18,7 @@ import type {
 } from '@/data/types';
 import type { BattlePath } from './path';
 import type { HometownSim } from './hometown';
+import type { ResourceField } from './gather';
 
 export interface EnemySim extends EnemyState {
   def: EnemyDef;
@@ -160,9 +161,28 @@ function resetEnemy(e: EnemySim): void {
   e.bountyPaid = 0;
 }
 
-/** 아군 유닛 내부 확장 — 정의 참조만 더한다 (상태이상이 없어 EnemySim보다 얇다) */
+/** 아군 유닛 내부 확장 — 정의 참조 + 채집 중단 판정용 hp 마크 (상태이상이 없어 EnemySim보다 얇다) */
 export interface AllySim extends AllyState {
   def: AllyDef;
+  /**
+   * **캐기 시도를 시작한 시점의 hp.** 맞았는지 판정하는 데만 쓴다 (gather-spec D5).
+   *
+   * 왜 이 방식인가: 대안은 `damageAlly`(combat.ts)가 캐기를 끊어 주는 것인데, 그러면
+   * `combat.ts → gather.ts` 임포트가 생기고 `gather.ts → combat.ts`(addGold)와 **값 순환**이
+   * 된다. hp를 기억해 두고 비교하면 **`combat.ts`를 한 줄도 안 고친다.**
+   * 중단해서 다시 시작하면 그 자리가 새 시도의 시작이므로 **다시 마크한다**(gather.ts §4-6).
+   * 아군을 회복시키는 코드는 이 저장소에 없으므로(healAura는 적 전용) hp는 단조 감소다 —
+   * 곧 `a.hp < a.gatherHpMark`는 "이 시도 중에 맞았다"와 정확히 같다.
+   *
+   * ⚠ **공개 `AllyState`가 아니라 여기 있다.** 이 값은 순수 내부 판정값이고 렌더가 읽을
+   *   일이 0이다 — 위 `siegeWalkLeft`·`bountyChunks`가 두 번 선언한 논거("공개 상태에
+   *   안 올린다. 노출하면 연출이 판정을 흉내 내기 시작한다")에 정확히 걸린다.
+   *   `hash()`는 이 필드를 접으므로(battle.ts) 결정론에는 영향이 없다.
+   *
+   * ⚠ **0은 "이번 예약에서 아직 캐기를 시작 안 함"이라는 센티널**이기도 하다 —
+   *   `gatherStarted` 이벤트가 예약당 한 번만 나가게 하는 장치다(types.ts SimEvent 주석).
+   */
+  gatherHpMark: number;
 }
 
 function makeAlly(): AllySim {
@@ -183,6 +203,12 @@ function makeAlly(): AllySim {
     targetId: -1,
     alive: true,
     def: null as unknown as AllyDef, // 출동 시 반드시 채워짐
+    // ── 채집 다섯 (gather-spec §3-4) — 넷은 공개 AllyState, gatherHpMark만 여기 것이다
+    gatherKey: -1,
+    gatherTicks: 0,
+    carryGold: 0,
+    carryCount: 0,
+    gatherHpMark: 0,
   };
 }
 
@@ -193,6 +219,62 @@ function resetAlly(a: AllySim): void {
   // 걸은 거리는 **반드시** 0으로 되돌린다 — 풀 재사용이라 안 지우면 새 부족원이
   // 앞사람의 보행 위상을 물려받아 태어나자마자 다리가 엉뚱한 각도에서 시작한다
   a.walked = 0;
+  // ── 채집 상태 다섯 — 안 지우면 "탭이 없으면 코인도 없다"가 그 자리에서 깨진다 ─────
+  // gatherKey/gatherTicks: 앞사람이 캐던 칸을 물려받은 새 부족원은 집결 지점이 곧 자기
+  //   tgt라 "도착해 있는" 상태다. 그 칸이 우연히 집결 지점이면 **명령을 한 번도 안 받았는데**
+  //   gatherTicks를 이어 채운다 — 곧 탭 없이 짐이 생긴다.
+  // carryGold/carryCount: 더 나쁘다 — 새로 뽑은 사람이 마을 코앞(집결 지점)에 서므로
+  //   그 짐이 다음 틱에 지급된다. **`trainAlly`가 곧 `addGold`가 되는 것**이고,
+  //   그 골드가 풀 재사용 순서를 타므로 시드마다 갈려 hash()도 함께 갈라진다.
+  //   (위 resetEnemy의 bountyPaid와 정확히 같은 사고다)
+  //   ⚠ GATHER_DELIVER_RANGE를 0.7로 내려 집결 자리를 반경 밖으로 뺐지만(balance.ts),
+  //     그건 **둘째 방어선**이다. 첫째는 언제나 이 다섯 줄이다.
+  // gatherHpMark: 앞사람의 높은 hp가 남으면 새 사람이 **맞지도 않았는데 중단**되고,
+  //   "0이면 아직 시작 안 함"이라는 gatherStarted 스로틀 센티널도 함께 거짓말을 한다.
+  a.gatherKey = -1;
+  a.gatherTicks = 0;
+  a.carryGold = 0;
+  a.carryCount = 0;
+  a.gatherHpMark = 0;
+}
+
+/**
+ * 아군을 **id 오름차순**으로 늘어놓는 공용 순회 헬퍼 — 살아 있는 사람만 / 시체까지 전부.
+ *
+ * 풀(DenseList)은 swap-remove라 `items` 순서가 사망으로 섞인다. 그 순서대로 규칙을 돌리면
+ * 결정론은 유지되지만(같은 시드면 같은 순서) **규칙을 말로 적을 수 없다.**
+ * 정원이 한 자리 수라 삽입 정렬이면 충분하고, 호출부가 버퍼를 재사용해 매 틱 할당이 없다.
+ *
+ * ⚠ **이름에 생사를 박아 둘로 갈랐다.** 하나로는 세 호출부를 만족시킬 수 없다:
+ *  · `updateAllies` 1단계 — 시체 불필요 (죽은 아군은 조준도 봉쇄도 안 한다)
+ *  · `moveAlly`        — 시체 불필요 (시체를 count에 세면 "대상이 하나도 없으면 거부한다"가 무너진다)
+ *  · `updateGather`    — **시체 필요** (시체가 진 짐을 정산해야 gatherLost{'died'}가 나간다)
+ */
+function fillAllyIdsInto(items: readonly AllySim[], out: AllySim[], aliveOnly: boolean): void {
+  out.length = 0;
+  for (const a of items) {
+    if (aliveOnly && !a.alive) continue;
+    let i = out.length;
+    out.push(a);
+    for (; i > 0 && (out[i - 1] as AllySim).id > a.id; i--) {
+      out[i] = out[i - 1] as AllySim;
+    }
+    out[i] = a;
+  }
+}
+
+/** 살아 있는 아군만, id 오름차순. `updateAllies` · `moveAlly` 전용 */
+export function fillAliveAllyIds(items: readonly AllySim[], out: AllySim[]): void {
+  fillAllyIdsInto(items, out, true);
+}
+
+/**
+ * 죽은 아군까지 전부, id 오름차순. **`updateGather` 전용** — 시체의 짐을 정산해야 한다.
+ * 여기서 시체를 거르면 `gatherLost{'died'}`가 영영 안 나가고 "운반 중 사망 = 전액 소멸"이
+ * **도달 불가 코드**가 된다(사망은 2단계, 회수는 9단계, 채집은 그 사이 8-b다).
+ */
+export function fillAllAllyIds(items: readonly AllySim[], out: AllySim[]): void {
+  fillAllyIdsInto(items, out, false);
 }
 
 function makeProjectile(): ProjectileSim {
@@ -321,6 +403,12 @@ export interface SimCtx {
    * 갖는다 — 한 값을 두 곳에 두지 않기 위해 소유를 이렇게 갈랐다.
    */
   readonly hometown: HometownSim;
+  /**
+   * 자원 칸 밭 (gather-spec §4). 공개 목록(`view.resources`)과 **같은 객체 배열**을 들고 있고,
+   * 조회 색인(Map)은 여기만 안다 — **순회는 언제나 배열**이다(계약 B: 자료구조의 순회
+   * 순서에 결정론을 걸지 않는다). `hometown`과 정확히 같은 소유 패턴이다.
+   */
+  readonly resources: ResourceField;
 }
 
 /** 적이 따라가는 경로 (공중이면 airPaths, 인덱스 초과 시 0번 폴백) */

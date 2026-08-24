@@ -4,6 +4,7 @@ import { Rng } from '@/core/rng';
 import type { BattleStateView, EnemyDef } from '@/data/types';
 import { World, type EnemySim, type SimCtx } from '@/sim/entities';
 import { createHometown } from '@/sim/hometown';
+import { ResourceField } from '@/sim/gather';
 import {
   effectiveSpeed,
   isStunned,
@@ -38,9 +39,12 @@ function miniCtx(seed = 1): SimCtx {
     projectiles: world.projectiles.items,
     amberEarned: 0,
     endless: false,
+    // 이 랩이 재는 것은 상태이상뿐이라 자원 칸이 없다 (아래 ctx.resources와 짝)
+    resources: [],
   };
+  const opts = options();
   return {
-    opts: options(),
+    opts,
     rng: new Rng(seed),
     world,
     events: [],
@@ -48,6 +52,8 @@ function miniCtx(seed = 1): SimCtx {
     groundPaths: [],
     airPaths: [],
     hometown: createHometown(),
+    // 소품이 하나도 없는 밭 — view.resources(빈 배열)와 **같은 답**이어야 한다
+    resources: new ResourceField(opts.stage, new Set<number>()),
   };
 }
 

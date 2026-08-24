@@ -82,6 +82,11 @@ const STEP = 0.05;
  * 통째로 사라지고 목표 좌표(tgtX/tgtZ)와 걸은 거리(walked)가 들어왔다.
  * 기본값은 "홈타운 앞 집결 지점에 막 태어나 아직 한 걸음도 안 뗀 부족원"이다 —
  * walked 0, 목표 = 지금 자리. 걷는 장면은 그것을 재는 테스트가 직접 흔든다.
+ *
+ * 11단계) 채집 4필드가 붙었다. 기본값은 **채집과 무관한 사람**이다 —
+ * gatherKey −1(명령 없음, targetId 와 같은 센티널) · 진행분 0 · 빈손.
+ * 이 파일이 재는 것은 메시와 공격 모션이라 여기서 그 값을 흔들 일은 없지만,
+ * 필드가 필수라 기본값이 있어야 한다(data/types.ts AllyState).
  */
 function ally(o: Partial<AllyState> = {}): AllyState {
   return {
@@ -99,6 +104,10 @@ function ally(o: Partial<AllyState> = {}): AllyState {
     heading: Math.PI,
     attackCdLeft: 0,
     targetId: -1,
+    gatherKey: -1,
+    gatherTicks: 0,
+    carryGold: 0,
+    carryCount: 0,
     alive: true,
     ...o,
   };
@@ -176,7 +185,7 @@ describe('아군 유닛 렌더 — 메시 하나로 모인다', () => {
     expect(allyRig().gaitPerDist).toBeCloseTo(enemyRig('blade').gaitPerDist, 6);
   });
 
-  it('아군 3종의 변형 번호가 서로 다르고 아군 지오메트리에 실제로 구워져 있다', () => {
+  it('아군 4종의 변형 번호가 서로 다르고 아군 지오메트리에 실제로 구워져 있다', () => {
     const variants = ALL_ALLY_IDS.map(allyVariant);
     expect(new Set(variants).size).toBe(ALL_ALLY_IDS.length); // 겹치면 두 종이 같은 장비를 낀다
     const attr = buildAlly().getAttribute(VARIANT_ATTR);
@@ -186,7 +195,7 @@ describe('아군 유닛 렌더 — 메시 하나로 모인다', () => {
     for (const v of variants) expect(baked.has(v), `variant ${v}`).toBe(true);
   });
 
-  it('아군 3종이 InstancedMesh 하나에만 모인다 (종마다 만들면 3개가 된다)', () => {
+  it('아군 4종이 InstancedMesh 하나에만 모인다 (종마다 만들면 4개가 된다)', () => {
     const scene = new THREE.Scene();
     const view = new EnemyView(scene);
     const before = meshesOf(scene).length;
@@ -539,14 +548,19 @@ describe('아군 공격 동작 — 쿨다운 잔여 틱에 물린 한 번의 타
 
   it('④ 무기가 벼르는 자세에서 치켜들었다가 타격에 앞아래로 떨어진다', () => {
     for (const id of ALL_ALLY_IDS) {
-      const ready = limbTop(id, 0, 1); // 적을 물고 벼르는 자세 (조준 유지)
+      const ready = limbTop(id, 0, 1); // 적을 물고 벼르는 자세 (조준 유지)  ※ 채집꾼은 캐기
       const rest = limbTop(id, 0, 0); // 그냥 서 있는 자세 (보행 리그 그대로)
       const hit = limbTop(id, ATK_RELEASE, 1); // 무기가 가장 앞아래로 내려간 지점
       expect(ready, `${id} 벼르는 자세가 쉬는 자세와 같다`).not.toBeCloseTo(rest, 2);
       /**
        * 모델 키가 0.77 남짓(2.5등신)이므로 0.2는 **몸 높이의 1/4 이상** 떨어진다는 뜻이다.
        * 실측: 몽둥이꾼 0.750 → 0.374 (0.376) · 무릿매 0.899 → 0.436 (0.463) ·
-       *       파수꾼 0.676 → 0.361 (0.315).
+       *       파수꾼 0.676 → 0.361 (0.315) · **채집꾼 0.636 → 0.349 (0.287)**.
+       *
+       * ⚠ 채집꾼이 이 어서션의 최저 여유(43%)를 쥔 종이다. 캐기 포즈는 각도가 얕고
+       * (back 0.70 — 파수꾼 1.25의 절반) 뒤지개도 무기가 아니라 짧은 도구라, 낙차를
+       * 벌 손잡이가 **지렛대 길이**밖에 없다. 뒤지개를 줄이면 여기가 먼저 빨개진다
+       * (meshlib/enemies.ts kitGatherer: MAIN 최원거리 0.352, 하한은 파수꾼급 0.166).
        */
       expect(ready - hit, `${id} 무기가 내려오지 않는다`).toBeGreaterThan(0.2);
     }

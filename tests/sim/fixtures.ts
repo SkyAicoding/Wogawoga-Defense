@@ -111,7 +111,13 @@ export function enemyDefs(
   return out;
 }
 
-export const ALL_ALLY_IDS: AllyId[] = ['clubber', 'slinger', 'guardian'];
+/**
+ * ⚠ **`src/data/allies.ts`의 같은 이름 배열과 신원이 다르다** — 이쪽은 목 표를 만들기 위한
+ * 목록이라 순서에 뜻이 없다(저쪽은 "싼 것부터" = 출동 바 버튼 순서다).
+ * 종을 더하면 여기도 손으로 더해야 한다 — 아래 `allyDefs`의 순수 Record 리터럴이
+ * 그 누락을 `tsc`로 잡아 준다(예전에는 `as` 캐스트가 그걸 삼켰다).
+ */
+export const ALL_ALLY_IDS: AllyId[] = ['clubber', 'slinger', 'guardian', 'gatherer'];
 
 /**
  * 아군 목 정의 — 실제 밸런스 데이터와 무관한 "읽기 쉬운" 기본값.
@@ -136,12 +142,22 @@ export function allyDef(id: AllyId, partial?: Partial<AllyDef>): AllyDef {
   };
 }
 
+/**
+ * ⚠ **`as Record<AllyId, AllyDef>` 캐스트를 일부러 안 쓴다.**
+ * 예전 판본은 `{} as Record<AllyId, AllyDef>`에 루프로 채웠는데, 그러면 `AllyId`에 종이
+ * 하나 늘어도 **테스트가 빨개지지 않고 커버리지만 조용히 사라진다** — 목 표에 없는 종은
+ * `trainAlly`가 `def === undefined`로 거부하므로 그 종을 쓰는 테스트가 런타임에 터진다.
+ * 순수 Record 리터럴이면 `tsc`가 누락을 그 자리에서 잡는다(계약 D와 같은 규약).
+ */
 export function allyDefs(
   overrides?: Partial<Record<AllyId, Partial<AllyDef>>>,
 ): Record<AllyId, AllyDef> {
-  const out = {} as Record<AllyId, AllyDef>;
-  for (const id of ALL_ALLY_IDS) out[id] = allyDef(id, overrides?.[id]);
-  return out;
+  return {
+    clubber: allyDef('clubber', overrides?.clubber),
+    slinger: allyDef('slinger', overrides?.slinger),
+    guardian: allyDef('guardian', overrides?.guardian),
+    gatherer: allyDef('gatherer', overrides?.gatherer),
+  };
 }
 
 /**

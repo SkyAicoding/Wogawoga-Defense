@@ -26,6 +26,7 @@ import {
 } from '@/data';
 import { World, type EnemySim, type SimCtx } from '@/sim/entities';
 import { createHometown } from '@/sim/hometown';
+import { ResourceField } from '@/sim/gather';
 import { damageEnemy } from '@/sim/combat';
 import { options } from '../sim/fixtures';
 import { damageText } from '@/ui/widgets/damagenumbers';
@@ -58,10 +59,15 @@ function miniCtx(): SimCtx {
     enemies: world.enemies.items, allies: world.allies.items, allyCap: 6,
     towers: world.towers.items, projectiles: world.projectiles.items,
     amberEarned: 0, endless: false,
+    // 이 랩이 재는 것은 적 태그 유도뿐이라 자원 칸이 없다 (아래 ctx.resources와 짝)
+    resources: [],
   };
+  const opts = options();
   return {
-    opts: options(), rng: new Rng(1), world, events: [], view,
+    opts, rng: new Rng(1), world, events: [], view,
     groundPaths: [], airPaths: [], hometown: createHometown(),
+    // 소품이 하나도 없는 밭 — view.resources(빈 배열)와 **같은 답**이어야 한다
+    resources: new ResourceField(opts.stage, new Set<number>()),
   };
 }
 

@@ -132,6 +132,9 @@ export function run(): void {
     ],
     deck: ['spear', 'catapult', 'frost'], refreshCost: 0, enemies: [], towers: [mockTower],
     projectiles: [], allies: [], allyCap: 6, amberEarned: 0, endless: false,
+    // 랩에는 자원 칸이 없다 — UI 랩이 재는 것은 패널 레이아웃이고, 자원 칸은 배지와
+    // 3D 배치가 함께 있어야 뜻이 생긴다(그건 meshlab/실전투가 잰다).
+    resources: [],
   };
 
   /**
@@ -180,6 +183,9 @@ export function run(): void {
     sellRefund: () => 45,
     // 목: (3,4)에만 소품이 있다고 가정 — 제거 패널 레이아웃 확인용
     hasScenery: (x, z) => x === 3 && z === 4,
+    // 위 st.resources가 비어 있는 것과 **같은 답**이어야 한다 — 둘이 갈리면
+    // "목록에 없는데 조회되는 칸"이 생겨 패널이 배지를 그리고 목록이 안 그린다.
+    resourceAt: () => null,
     clearSceneryCost: (x, z) => (x === 3 && z === 4 ? 80 : null),
     allyCost: () => 55,
     canTrainAlly: () => true,
