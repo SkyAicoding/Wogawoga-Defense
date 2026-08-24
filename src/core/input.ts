@@ -112,6 +112,9 @@ export class InputManager {
   private rotOpen = false;
   private panOpen = false;
 
+  /** 우클릭 메뉴 억제를 건 문서 (DOM 이 없는 환경에서는 null) — dispose 가 같은 것을 뗀다 */
+  private doc: Document | null = null;
+
   constructor(private el: HTMLElement) {
     el.addEventListener('pointerdown', this.onDown, { passive: false });
     window.addEventListener('pointermove', this.onMove, { passive: false });
@@ -134,7 +137,16 @@ export class InputManager {
      * 문서 레벨로 올리는 대가는 "이 페이지에서는 우클릭 메뉴를 못 쓴다" 하나이고,
      * 전체 화면 게임에서 그건 잃는 것이 아니다(모바일 롱프레스 메뉴도 같은 이유로 막고 있다).
      */
-    document.addEventListener('contextmenu', this.onContextMenu);
+    // ⚠ 전역 `document` 가 아니라 **엘리먼트의 소유 문서**를 쓴다. 이유 둘:
+    //  · 더 올바르다 — 이 매니저가 사는 문서에만 걸린다(iframe 등에서 남의 문서를 안 건드린다)
+    //  · 전역 참조는 DOM 이 없는 환경에서 **생성자가 통째로 터진다**. 실제로 그렇게 짰다가
+    //    tests/ui/input.test.ts 7건이 `ReferenceError: document is not defined` 로 죽었다.
+    //    이 클래스는 가짜 엘리먼트로도 만들어지므로 없으면 조용히 건너뛴다.
+    const doc = (el as { ownerDocument?: Document | null }).ownerDocument ?? null;
+    if (doc && typeof doc.addEventListener === 'function') {
+      this.doc = doc;
+      doc.addEventListener('contextmenu', this.onContextMenu);
+    }
   }
 
   private onContextMenu = (e: Event): void => {
@@ -344,7 +356,7 @@ export class InputManager {
     window.removeEventListener('keydown', this.onKey);
     this.el.removeEventListener('wheel', this.onWheel);
     this.el.removeEventListener('contextmenu', this.onContextMenu);
-    document.removeEventListener('contextmenu', this.onContextMenu);
+    this.doc?.removeEventListener('contextmenu', this.onContextMenu);
     this.el.removeEventListener('dblclick', this.onDblClick);
     this.events.clear();
   }

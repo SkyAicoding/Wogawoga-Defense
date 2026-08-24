@@ -43,7 +43,7 @@ import {
  * 정정대로 실측으로 유도했다 — balance.ts 의 상수 주석에 유도 전문이 있다), 이 파일의
  * 총액 표 전부가 여기에 걸려 있다. 아래 첫 어서션이 이 값과 배포본 상수를 묶는다.
  */
-const B = 8;
+const B = 6;
 
 const ALL_RESOURCE_IDS: readonly ResourceId[] = [
   'berry',
@@ -270,24 +270,37 @@ describe('총액 (§9-1 ⑦) — 이 한 줄이 D9의 감사 가능성 전부다
       );
     }
 
-    // 스테이지1 = 745골드 (B = 8). 부록 A의 검산 상수와 함께 잠근다.
+    // 스테이지1 = 559골드 (B = 6). 부록 A의 검산 상수와 함께 잠근다.
     const s1 = fieldOf(STAGES[0] as StageDef, B);
     expect((STAGES[0] as StageDef).id).toBe(1);
     expect(s1.length).toBe(40);
     expect(s1.reduce((n, c) => n + c.dist, 0)).toBeCloseTo(306.4476, 4);
-    expect(totals[0]).toBe(745);
+    expect(totals[0]).toBe(559);
     // 종류 배정도 사실이다 — wood 15 · berry 11 · stone 8 · fruit 4 · honey 2
     const s1kinds: Record<string, number> = {};
     for (const c of s1) s1kinds[c.kind] = (s1kinds[c.kind] ?? 0) + 1;
     expect(s1kinds).toEqual({ wood: 15, berry: 11, stone: 8, fruit: 4, honey: 2 });
     const s1vals = s1.map((c) => c.value).sort((a, b) => a - b);
-    expect([s1vals[0], median(s1vals), s1vals[s1vals.length - 1]]).toEqual([7, 18, 34]);
+    expect([s1vals[0], median(s1vals), s1vals[s1vals.length - 1]]).toEqual([5, 14, 25]);
 
-    // ⚠ 아래 벽 (§1-5-B): 조기 호출 완벽 연타가 13.66골드/탭이다. 채집의 탭당 값은 짐값
-    //   그 자체이므로(1탭 = 짐 하나), 평균이 그 아래로 내려가면 **아무도 안 누른다**.
-    //   B = 6(착수값)에서는 13.97로 벽에서 0.31골드밖에 안 떠 있었다. B = 8이면 18.63 =
-    //   조기 호출의 1.36배이고, 그 여유가 T6이 8을 고른 두 번째 이유다(§1-5-D ④).
-    expect(745 / 40).toBeGreaterThan(13.66);
+    /*
+     * ⚠⚠ **아래 벽(§1-5-B)의 전제가 자동 채집으로 바뀌었다 — 다시 유도한다.**
+     *
+     * 옛 유도: 조기 호출 완벽 연타가 13.66골드/탭이고, 채집은 **1탭 = 짐 하나**라
+     *   짐값 평균이 13.66 아래면 "이미 있는 버튼보다 못한 잡일"이 되어 아무도 안 누른다.
+     *   그래서 B = 8(18.63/탭)이 6(13.97/탭)보다 안전하다는 것이 T6의 근거 하나였다.
+     *
+     * 지금은 **1탭 = 짐 하나가 아니다.** 일꾼은 `trainAlly` 한 번이면 명령 없이 스스로
+     * 캐고 지고 와서 다시 나간다(사용자 항목 2·4). 곧 탭당 값의 분모가 "짐 수"가 아니라
+     * **"뽑은 사람 수"**로 바뀌었다 — 실측으로 채집꾼 하나가 판 전체에서 캐 오는 몫은
+     * 판당 배달 528골드 / 뽑은 인원 9.39명 ≈ **56골드/탭**이고, 조기 호출 13.66의 4.1배다.
+     * 곧 이 벽은 더 이상 B를 아래에서 묶지 않는다.
+     *
+     * 그래서 아래 어서션은 **남기되 뜻이 달라졌다**: "짐 하나가 조기 호출 한 번보다는
+     * 값이 있다"는 읽기 좋은 하한이고, B를 정하는 것은 이제 위쪽(18.* 계약 여유)뿐이다.
+     * 실측 여유는 얇다(13.97 대 13.66) — 그 사실을 감추지 않고 적어 둔다.
+     */
+    expect(559 / 40).toBeGreaterThan(13.66);
   });
 
   it('`resources.stageSpread` — 나머지 다섯이 s1의 **1.5배 이하**다', () => {
@@ -338,8 +351,11 @@ describe('총액 (§9-1 ⑦) — 이 한 줄이 D9의 감사 가능성 전부다
 
 describe('gatherValueFor — round는 정확히 한 번만 닿는다', () => {
   it('마을 셀(거리 0)의 값은 기준값 × 배수의 반올림이다', () => {
-    expect(gatherValueFor(B, 1, 0)).toBe(8);
-    expect(gatherValueFor(B, RESOURCE_DEFS.berry.kindMul, 0)).toBe(Math.round(8 * 0.73));
+    expect(gatherValueFor(B, 1, 0)).toBe(6);
+    // ⚠ 리터럴이 아니라 **B**를 쓴다 — 여기 8이 박혀 있어서 짐값을 6으로 되돌리자
+    //   이 한 줄만 갈라졌다(round(8×0.73)=6 대 실제 round(6×0.73)=4).
+    //   이 테스트가 재려는 것은 값이 아니라 **round 가 정확히 한 번만 닿는다**이다.
+    expect(gatherValueFor(B, RESOURCE_DEFS.berry.kindMul, 0)).toBe(Math.round(B * 0.73));
   });
 
   it('거리 이득이 1타일당 정확히 GATHER_DIST_GAIN이다', () => {
@@ -349,7 +365,7 @@ describe('gatherValueFor — round는 정확히 한 번만 닿는다', () => {
     expect(gatherValueFor(100, 1, 10)).toBe(280); // 100 × (1 + 0.18 × 10)
   });
 
-  it('명령당 값의 폭이 4.5배를 넘는다 (s1 최소 7 → 최대 34, B = 8)', () => {
+  it('명령당 값의 폭이 4.5배를 넘는다 (s1 최소 5 → 최대 25, B = 6)', () => {
     /**
      * ⚠ 한때 여기 `toBe(5)`가 박혀 있었다(B = 6에서 5 → 25). **그 5.0은 설계가 아니라
      * 반올림의 우연이었다** — 폭을 만드는 것은 B가 아니라 두 끝 칸의 `kindMul × 거리이득`
@@ -360,11 +376,13 @@ describe('gatherValueFor — round는 정확히 한 번만 닿는다', () => {
      * 반올림이 그 위에 얹혀 B = 6 이면 25/5 = 5.000, B = 8 이면 34/7 = 4.857로 흔들린다.
      * 그래서 문턱을 **반올림 전 값(4.637) 아래**인 4.5로 잡는다 — 이건 완화가 아니라
      * B에 안 흔들리는 자리로 옮긴 것이고, 실제 폭은 값과 함께 인쇄한다.
+     * (자동 채집 도입 뒤 B가 8 → 6으로 되돌아와 두 끝 값도 7/34 → 5/25로 돌아왔다.
+     *  문턱 4.5는 그때도 지금도 한 자리도 안 건드렸다 — 그것이 이 자리를 고른 이유다.)
      */
     const vals = fieldOf(STAGES[0] as StageDef, B).map((c) => c.value);
     const lo = Math.min(...vals);
     const hi = Math.max(...vals);
-    expect([lo, hi]).toEqual([7, 34]);
+    expect([lo, hi]).toEqual([5, 25]);
     expect(hi / lo).toBeGreaterThan(4.5);
     console.log(`[resources] 명령당 값의 폭 = ${(hi / lo).toFixed(3)}배 (${lo} → ${hi}) · 반올림 전 4.637배`);
   });
