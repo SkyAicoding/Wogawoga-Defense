@@ -2,10 +2,10 @@
  * English strings (fallback). Key set must exactly match ko.ts.
  */
 export const en: Record<string, string> = {
-  'app.name': 'Wogawoga Defense',
+  'app.name': 'Age of Dinosaurs',
 
-  'title.logoTop': 'WOGAWOGA',
-  'title.logoBottom': 'DEFENSE',
+  'title.logoTop': 'AGE OF',
+  'title.logoBottom': 'DINOSAURS',
   'title.tapToStart': 'Tap to Start',
   'title.version': 'v{v}',
 
