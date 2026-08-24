@@ -177,6 +177,20 @@ const godAlly = (t: Readonly<Record<AllyId, AllyDef>>): Record<AllyId, AllyDef> 
 const superTown = (t: readonly BaseLevelDef[]): BaseLevelDef[] =>
   t.map((d, i) => ({ ...d, cost: 1, dmg: d.dmg * 5, hpMul: 1 + 0.12 * i }));
 
+// ── 채집 축 ─────────────────────────────────────────────────────────────────
+/**
+ * **채집 능력을 통째로 지운다** — 전 종 `gatherPct 0`. 짐값(`GATHER_BASE_VALUE`)은 그대로 두고
+ * **캐는 손**만 없앤다. 곧 채집꾼은 여전히 뽑히고 여전히 144골드를 먹고 여전히 정원을 차지하되
+ * 한 푼도 안 벌어 온다 = **채집 기능이 붙기 전의 세계**다.
+ *
+ * ⚠ 이 되돌리기가 깨는 것은 계약이 아니라 **전제**(`18.gatherHappens`) 하나뿐이고, 그게 요점이다:
+ *   "[18] 이 정말로 채집을 재고 있는가"의 음성 대조다. 나머지 [18] 다리는 전부 초록으로 남는다
+ *   (수입이 0이면 총액 항등식도 승률 상한도 지배 금지도 자동으로 만족한다) — 곧 이 팔은
+ *   **배포본 복원이 봉투를 한 군데도 안 깬다**는 것까지 같이 보인다.
+ */
+const gatherOff = (t: Readonly<Record<AllyId, AllyDef>>): Record<AllyId, AllyDef> =>
+  mapVals(t, (d) => ({ ...d, gatherPct: 0 }));
+
 // ── 스테이지 축 ─────────────────────────────────────────────────────────────
 const leakOff = (s: StageDef): StageDef => {
   const { leakDamage: _drop, ...rest } = s;
@@ -199,7 +213,9 @@ export const CONTROLS: readonly Control[] = [
     //   습격대가 아니라 **커버 등급(킬존)** 에서 온다. [4]의 문서화된 되돌리기는 정지선이고
     //   그건 모듈 상수라 주입구가 없다 — UNREACHABLE 과 UNPROVEN 에 그대로 적어 뒀다.
     // 실측(fast): 판당파괴 0 · 중앙값 0 · 0파괴 100% — [2] 의 계약 세 다리를 전부 깬다.
-    targets: ['2.perGame', '2.median', '2.zeroShare'],
+    // ⚠ **`1a.notTrivial` 도 겨냥한다**(T6 신설, 실측 80.63% → 95.63%). 타워가 안 부서지면
+    //   판이 쉬워지고, 그 방향은 [1-a] 의 하한 네 다리가 구조적으로 못 잡는 자리다.
+    targets: ['1a.notTrivial', '2.perGame', '2.median', '2.zeroShare'],
     patch: { id: 'raid-off', why: '전 적의 towerAttack 삭제', enemies: raidOff },
   },
   {
@@ -254,7 +270,10 @@ export const CONTROLS: readonly Control[] = [
      *   그건 UNPROVEN 에 그대로 남긴다. 대체 대조군을 "같은 축"이라 우기지 않는다는 규율은
      *   **다리 단위로** 지킨다.
      */
-    targets: ['1b.slack', '1b.slackMedian', '4.hugRate', '4.waveRatio', '4.blockRatio', '4.strongHug.rate', '4.strongHug.slack'],
+    // ⚠ **`1a.notTrivial`(완주율 상한, T6 신설)도 여기서 깬다** — 실측 80.63% → 98.13%.
+    //   [1-a] 는 네 다리가 전부 하한이라 "쉬워졌다"를 못 잡던 항목이고, 그 방향을 처음으로
+    //   재는 다리가 그것이다. 같은 패치가 상한과 하한을 양쪽에서 깨우는 것이 정상이다.
+    targets: ['1a.notTrivial', '1b.slack', '1b.slackMedian', '4.hugRate', '4.waveRatio', '4.blockRatio', '4.strongHug.rate', '4.strongHug.slack'],
     patch: { id: 'enemy-hp-x070', why: '적 hp ×0.7', enemies: enemyHp(0.7) },
   },
   {
@@ -389,6 +408,42 @@ export const CONTROLS: readonly Control[] = [
     //   실측(fast): 40/40 대 29/40 · 불일치쌍 11:0(p 4.88e-4) — 두 등급 모두에서 깨진다.
     targets: ['7.unit.notDominant', '7.unit.rateCap', '7.unitAll'],
     patch: { id: 'unit-super', why: '아군 cost 1 · dmg·hp ×100 · 사거리 ×5', allies: godAlly },
+  },
+  {
+    id: 'gather-x4',
+    why: '짐값 기준값 ×4 (8 → 32, 스테이지1 총액 745 → 2,978) — 채집이 실제로 지배 전략이 되는 세계',
+    grade: 'kill',
+    /**
+     * ⚠ **[18] 의 계약 다리 일곱을 전부 겨냥한다.** 신설 항목이라 "겨냥을 좁게 적는 것 자체가
+     *   커버리지 공백"이라는 이 파일의 교훈을 처음부터 지킨다. 실측(full, 짐값 32):
+     *     · `18.rateCap`        판당 배달+손실 2,978 대 문턱 745
+     *     · `18.g1.rateCap`     90.00% 대 타워 81.25%(+2.5%p 상한 83.75%)
+     *     · `18.g2.rateCap`     95.00% 대 같은 상한
+     *     · `18.g1.notDominant` 불일치쌍 9:2 · 여유부호 60:3(p 4.52e-15) → dominant
+     *     · `18.g2.notDominant` 불일치쌍 11:0 · 여유부호 71:1(p 1.55e-20) → dominant
+     *     · `18.allIn`          몰빵 95.00% = 벤치의 1.169배 (문턱 0.8배)
+     *     · `18.strongGather`   최강+채집 여유 66.80% (문턱 55%)
+     *   같은 팔들이 배포본 짐값(8)에서는 각각 77.50%/75.00%/dominant=false/0.43배/50.20% 다.
+     *   곧 이 일곱 다리는 **네 배와 한 배를 실제로 가른다.**
+     * ⚠ `patch.id` 를 반드시 다르게 준다 — `envelope.playKey` 가 id 를 접으므로 같은 id 를
+     *   쓰면 대조군이 배포본 표본을 조용히 돌려받는다(이 저장소에 그 지뢰가 있었다).
+     */
+    targets: [
+      '18.rateCap',
+      '18.g1.rateCap', '18.g1.notDominant',
+      '18.g2.rateCap', '18.g2.notDominant',
+      '18.allIn', '18.strongGather',
+    ],
+    patch: { id: 'gather-x4', why: '짐값 기준값 32 (배포본 8 의 네 배)', gather: { baseValue: 32 } },
+  },
+  {
+    id: 'gather-off',
+    why: '전 종 gatherPct 0 — 채집꾼은 그대로 뽑히고 돈만 못 벌어 온다 (= 채집 기능이 붙기 전의 세계)',
+    grade: 'kill',
+    // 겨냥은 **전제 하나**다. 계약이 아니라 "이 항목이 정말 채집을 재고 있는가"를 묻는
+    // 음성 대조라 그렇다 — 나머지 [18] 다리가 전부 초록으로 남는 것이 이 팔의 산출물이다.
+    targets: ['18.gatherHappens'],
+    patch: { id: 'gather-off', why: '전 종 gatherPct 0', allies: gatherOff },
   },
   {
     id: 'town-super',

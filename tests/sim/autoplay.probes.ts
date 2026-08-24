@@ -33,11 +33,12 @@ import type { AllyDef, AllyId, BaseLevelDef, TowerId } from '@/data/types';
 import { ALLY_DEFS, BASE_LEVELS, stageById } from '@/data';
 import { ALLY_MAX_ACTIVE } from '@/data/balance';
 import { buildPath } from '@/sim/path';
-import { STRONG_BOT, type BotOptions, type BotResult } from './botharness';
+import { STRONG_BOT, STRONG_GATHER_BOT, type BotOptions, type BotResult } from './botharness';
 import {
   ALPHA,
   ALPHA_GUARD,
   BASE,
+  BLOCKS,
   alignPair,
   type DataPatch,
   type Leg,
@@ -223,6 +224,26 @@ export function judgeCollapse(patch: DataPatch = BASE, prof: Profile = FULL): Ju
 
 /** 완주율 하한 — 옛 `wins ≥ 13/20` 을 표본 무관하게 다시 적은 것. **문턱 불변** */
 const CLEAR_FLOOR = 0.65;
+/**
+ * 완주율 **상한** — 신설(T6. gather-spec §8-8 [1-a] 처방 ③).
+ *
+ * 왜 필요한가: [1-a] 의 네 다리(`clearRate ≥ 0.65` · `q05 ≥ 42` · `cvar10 ≥ 43` · `floor ≥ 40`)가
+ * **전부 하한**이라, 게임이 쉬워지는 방향으로는 **절대 빨개지지 않는다.** 그건 "안전"이 아니라
+ * `autoplay.test.ts` 머리말이 스스로 금지한 **실패 불가능한 계약**이고, 채집처럼 수입을 더하는
+ * 기능은 정확히 그 방향으로 민다.
+ *
+ * ── 문턱 0.90 의 유도 ────────────────────────────────────────────────────────
+ * §8-8 은 "T0 두 번째 팔(채집꾼 정의만 있고 수입 0)의 실측 + 5%p" 로 정하되 0.95 를 넘으면
+ * 만들지 말라고 했다. **그 두 번째 팔의 실측은 배포본과 같다** — 이 파일의 어떤 정책도
+ * `gatherer` 를 뽑지 않으므로(`allyOrder` 하드코딩) 채집 기능을 켜도 이 팔은 한 비트도
+ * 안 움직인다. 곧 유도 기준은 ⟦원장 1a.clearRate = 80.63%⟧ 이고 +5%p 는 0.856 이다.
+ * 그런데 0.856 은 **블록 둘(대조군 fast 등급)의 실측 85.00% 와 1%p 밖에 안 떨어져** 대조군
+ * 스위트가 통째로 판정 불가에 걸린다 — 문턱을 실측에 붙이면 계약이 아니라 잡음을 재게 된다.
+ * 그래서 §8-8 이 이름과 함께 적어 둔 **0.90** 을 그대로 쓴다: full 여유 9.37%p ·
+ * fast 여유 5.00%p 이고, 0.95 상한도 지킨다.
+ * 판별력(실측): `enemy-hp-x070` 98.13% · `raid-off` 95.63% — **둘 다 깬다.**
+ */
+const CLEAR_CAP = 0.9;
 /** 웨이브 5퍼센타일 — 옛 `min(wave) ≥ 40`(극값)의 재유도. 아래 유도 참조 */
 const WAVE_Q05 = 42;
 /** 웨이브 하위 10% 꼬리 평균 — 신설 */
@@ -278,6 +299,9 @@ export function judge1a(patch: DataPatch = BASE, prof: Profile = FULL): Judged {
       contract('1a.floor', Math.min(...waves) >= WAVE_FLOOR,
         `전 시드 도달 웨이브 ≥ ${WAVE_FLOOR} (옛 극값 문턱 그대로 = 낮추지 않았다. 다만 판별력은 위 두 다리가 진다)`,
         `${Math.min(...waves)}`),
+      contract('1a.notTrivial', rate(rs) <= CLEAR_CAP,
+        `완주율 ≤ ${CLEAR_CAP} — **방향이 반대인 유일한 다리**(신설. 아래 유도)`,
+        `${pct(rate(rs))} (${wins(rs)}/${rs.length})`),
       monitor('1a.blocks', '블록별 완주 수 (판정에 쓰지 않는다 — 산포만 본다)',
         blocks.map((b) => `${wins(b)}/${b.length}`).join(' ')),
     ],
@@ -567,16 +591,34 @@ export function judge4(patch: DataPatch = BASE, prof: Profile = FULL): Judged {
 const IDLE_WAVE_CAP = 5;
 const IDLE_GOLD_CAP = 500;
 
-/** 방치 루프 — `callWave` 말고 어떤 커맨드도 안 낸다 */
-function runIdle(seed: number, patch: DataPatch, stageId = 1): { phase: string; wave: number; gold: number } {
+/**
+ * 방치 루프 — `callWave` 말고 어떤 커맨드도 안 낸다.
+ *
+ * ⚠ **채집 이벤트를 버리지 않고 센다** (T6 신설). 버리던 자리라 공짜이고, 그 두 숫자가
+ *   [18] 의 `18.idleZero` 전제를 짓는다: 방치 판은 `trainAlly` 를 한 번도 안 내므로
+ *   `state.allies` 가 늘 비어 있고, `updateGather` 의 순회가 0번 돌아 **채집 수입 경로가
+ *   존재하지 않는다**(§8-6). 그건 밸런스 주장이 아니라 코드 경로의 부재이고, 여기서
+ *   실행으로 확인한다 — 짐값을 200 으로 올려도(맵 위 18,595골드) 두 값은 0이다.
+ */
+function runIdle(
+  seed: number,
+  patch: DataPatch,
+  stageId = 1,
+): { phase: string; wave: number; gold: number; gatherGold: number; gatherEvents: number } {
   const { sim } = makeSim({ stageId, seed, deck: STAGE1_DECK, patch });
   sim.applyCommand({ type: 'callWave' });
+  let gatherGold = 0;
+  let gatherEvents = 0;
   for (let i = 0; i < 30 * 60 * 8 && sim.state.phase !== 'lost'; i++) {
     sim.tick();
     if (sim.state.phase === 'prep') sim.applyCommand({ type: 'callWave' });
-    sim.drainEvents();
+    for (const ev of sim.drainEvents()) {
+      if (!ev.type.startsWith('gather')) continue;
+      gatherEvents++;
+      if (ev.type === 'gatherDelivered') gatherGold += ev.gold;
+    }
   }
-  return { phase: sim.state.phase, wave: sim.state.waveIndex, gold: sim.state.gold };
+  return { phase: sim.state.phase, wave: sim.state.waveIndex, gold: sim.state.gold, gatherGold, gatherEvents };
 }
 
 /**
@@ -1310,6 +1352,177 @@ export function judge14(patch: DataPatch = BASE, prof: Profile = FULL): Judged {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// [18] 채집 축 — "채집이 지배 전략이 아니다"
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** 채집 갈래 — [7] 의 갈래들과 **같은 모양**이다(예비비 600 을 두고 자기 상품을 산다) */
+const GATHER_BRANCH: BotOptions = { towerReserve: 600, gather: { count: 1 } };
+/** 같은 갈래의 몰빵판 — Lv1 정원 2를 **전부** 비전투로 채운다(§8-3 의 61.2% 팔) */
+const GATHER_RUSH: BotOptions = { towerReserve: 600, gather: { count: 2 } };
+/** 채집에 전부 태운 팔 — [7] 의 `unitAll`/`baseAll` 과 같은 자리 */
+const GATHER_ALLIN: BotOptions = { towerReserve: 2400, gather: { count: 2 } };
+/** 채집 몰빵 완주율은 벤치의 몇 배 아래여야 하는가 — [13] `allIn` 의 문턱을 그대로 빌린다 */
+const GATHER_ALLIN_RATIO = 0.8;
+
+/**
+ * 스테이지1 짐값 총액 — **배포본 값에서만** 뽑는다(패치를 안 태운다).
+ * `18.rateCap` 이 재는 것은 "이 판이 총액보다 더 벌지 않았다"이고, 그 총액은 **배포본
+ * 계약**이라 대조군(`gather-x4`)이 짐값을 네 배로 올려도 여기는 안 따라가야 한다.
+ * 따라가면 그 다리는 자기 자신을 재는 항등식이 되어 **절대 안 빨개진다.**
+ * 자원 밭은 시드와 무관하므로(§5-1 셀 단독 해시) 시드 하나로 충분하고, 이 숫자 자체는
+ * tests/data/resources.test.ts 가 745 로 따로 잠근다.
+ */
+let s1FieldCache: { total: number; cells: number } | null = null;
+function s1GatherField(): { total: number; cells: number } {
+  if (s1FieldCache === null) {
+    const { sim } = makeSim({ stageId: 1, seed: BLOCKS[0]!, deck: STAGE1_DECK, patch: BASE });
+    s1FieldCache = {
+      total: sim.state.resources.reduce((n, r) => n + r.value, 0),
+      cells: sim.state.resources.length,
+    };
+  }
+  return s1FieldCache;
+}
+
+/**
+ * ── [18] 채집이 지배 전략이 아니다 (신설. gather-spec §8-8) ──────────────────
+ * **[7] 의 형식을 그대로 쓴다** — 채집을 "여섯 번째 갈래"로 놓고 공통 타워 벤치(창 `l2`)와
+ * 짝으로 잰다. 왜 그 형식이어야 하는지가 이 항목의 유도 전부이므로 먼저 적는다.
+ *
+ * ── ⚠ 왜 "같은 봇 + 채집 대 같은 봇" 이 아닌가 (실측이 형식을 정했다) ────────
+ * 처음에는 그 형태로 쟀다. 결과: 짝 지배검정이 **B = 6 에서도 발화**한다.
+ * 배포본(B = 8)의 같은 검정은 ⟦원장 18.strongGather.duel = 여유부호 62:34⟧ 이고,
+ * 아래 두 줄은 **이 트리에 재현할 창이 없는 이력**이라 손으로 적는다(B 를 갈아 끼운 실측):
+ *   B = 6 → 여유부호 58:35 (p 1.10e-2) · dominant · B = 4 → 48:37 (p 1.39e-1) · **not dominant**
+ * 곧 B = 4 에서야 꺼지는데 그 총액은 368 로
+ * §1-5-B 의 아래 벽(546) **밑**이다 — 곧 그 형식을 계약으로 삼으면 통과하는 유일한 값이
+ * "기능을 넣을 이유가 없는 값"이 된다. 이유는 명확하다: `STRONG_BOT` 은 `allies` 정책이
+ * 없어 **정원을 원래 한 칸도 안 쓴다.** 거기 채집꾼을 넣는 대가는 골드뿐이고 포기하는
+ * 전투력이 0이라, 짐값이 그대로 여유로 쌓인다. 그 비교가 재는 것은 "채집이 지배 전략인가"가
+ * 아니라 **"채집이 조금이라도 값을 하는가"** 다 — 어떤 유익한 기능도 통과할 수 없는 형태이고,
+ * 이 파일이 금지하는 "실패 불가능한 계약"의 거울상(**성공 불가능한 계약**)이다.
+ * 갈래 형식은 그 비대칭이 없다: 채집 갈래도 예비비 600 을 묶고 자기 상품을 사며,
+ * 벤치는 그 골드를 전부 타워에 넣는다. **같은 예산의 다른 배분**을 묻는다 = [7]·[10] 과 같은 질문.
+ *
+ * 그래서 최강 팔에는 짝 검정 대신 **난이도 상한 자체**를 건다(`18.strongGather`,
+ * 문턱은 [1-b] 의 0.55 를 한 자리도 안 바꿔 그대로 쓴다). 짝 검정 결과는 버리지 않고
+ * **감시 다리**로 원장에 남긴다 — 숨기지 않되 계약으로 삼지 않는다는 뜻이다.
+ *
+ * ── ⚠ [C-5] 비대칭 부양 — 이 항목이 그 처방이다 ─────────────────────────────
+ * §8-8 [C-5] 는 "`BotOptions.gather` 를 켜는 순간 갈래 대 타워 비교가 한쪽에만 새 수입원이
+ * 붙은 비교가 된다"를 [치명]으로 적어 두고, 편향이 2%p 를 넘으면 **갈래 팔의 채집을 끄고
+ * [18] 에서만 재라**고 했다. T6 은 그 후퇴를 **처음부터** 택했다: [6][7][10][11-b][13] 의
+ * 어떤 팔에도 `gather` 를 안 켠다. 곧 그 항목들의 편향은 추정이 아니라 **정확히 0**이고
+ * (채집 정책 없는 팔은 짐값을 켜도 `BotResult` 가 비트 단위로 같다 — botharness 헤더의 실측),
+ * 채집의 지배성은 이 항목 혼자 진다.
+ *
+ * ── 다리의 등급을 왜 이렇게 갈랐는가 ────────────────────────────────────────
+ * · `gatherHappens`·`taken`·`idleZero`·`waveRatio` 는 **전제**다. 전부 "실험이 공허하지
+ *   않은가"를 묻고(캐긴 캐는가 · 장부가 안 새는가 · 방치는 0인가 · 갈래가 살아 있는가),
+ *   문턱을 유도할 자리가 없다(0 이거나 40 이거나 [7] 의 0.93 을 빌린 것이다).
+ *   ⚠ 전제도 **차단한다** — 등급이 낮은 것이 아니라 재는 것이 다르다.
+ * · 계약 일곱은 전부 대조군 `gather-x4`(짐값 네 배)가 실제로 깬다. 판별력이 문장이 아니라
+ *   실행물이라는 이 파일의 규율이 신설 항목에도 그대로 걸린다.
+ * 판별력: `gather-x4`(전 계약 다리) · `gather-off`(전 종 gatherPct 0 → `18.gatherHappens` 빨강
+ *   = "이 항목이 정말 채집을 재고 있다"의 음성 대조).
+ */
+export function judge18(patch: DataPatch = BASE, prof: Profile = FULL): Judged {
+  const tower = sweep('l2', prof, patch);
+  const branches = [
+    { key: 'g1', name: '채집 갈래(1명)', rs: sweep('l2', prof, patch, { opts: GATHER_BRANCH }) },
+    { key: 'g2', name: '채집 갈래(2명 몰빵)', rs: sweep('l2', prof, patch, { opts: GATHER_RUSH }) },
+  ];
+  const allIn = sweep('allIn', prof, patch, { opts: GATHER_ALLIN });
+  const strong = sweep('strong', prof, patch, { opts: STRONG_BOT });
+  const strongG = sweep('strong', prof, patch, { opts: STRONG_GATHER_BOT });
+  const idle = seedsOf('idle', prof).map((s) => runIdle(s, patch));
+
+  const gatherArms: BotResult[] = [...branches.flatMap((b) => b.rs), ...allIn, ...strongG];
+  const per = (rs: readonly BotResult[], g: (r: BotResult) => number): number => mean(rs.map(g));
+  const haul = (r: BotResult): number => r.gatherGold + r.gatherLostGold;
+  const maxHaul = Math.max(...gatherArms.map(haul));
+  const maxTaken = Math.max(...gatherArms.map((r) => r.takenCells));
+  const { total: s1Total, cells } = s1GatherField();
+  const idleGold = idle.reduce((n, r) => n + r.gatherGold, 0);
+  const idleEvents = idle.reduce((n, r) => n + r.gatherEvents, 0);
+  const sd = duel(strongG, strong, nb(prof));
+
+  const legs: Leg[] = [
+    precondition('18.gatherHappens',
+      [...branches.map((b) => b.rs), strongG].every(
+        (rs) => per(rs, (r) => r.gatherDeliveries) > 0 && per(rs, (r) => r.gatherGold) > 0 && per(rs, (r) => r.takenCells) > 0,
+      ),
+      '채집 팔이 **실제로 캔다** — 배달·수입·텄음 칸이 판당 0이 아니다. ' +
+        '⚠ 이 전제가 없으면 아래 전부가 "아무것도 안 재고 통과"한다(옛 봉투가 sellTower·setTargeting 에서 겪은 함정)',
+      [...branches, { key: 'sg', name: '최강+채집', rs: strongG }]
+        .map((b) => `${b.key} 배달 ${f(per(b.rs, (r) => r.gatherDeliveries), 2)}/판 골드 ${f(per(b.rs, (r) => r.gatherGold), 1)}`)
+        .join(' · ')),
+    precondition('18.taken', maxTaken <= cells,
+      `한 판이 텄음으로 만든 칸이 스테이지1 자원 칸 수(${cells})를 넘지 않는다 — 같은 칸이 두 번 텄으면 여기서 걸린다`,
+      `최대 ${maxTaken}/${cells} · 판당 ${f(per(gatherArms, (r) => r.takenCells), 2)}`),
+    precondition('18.idleZero', idleGold === 0 && idleEvents === 0,
+      '방치 팔(타워 0 · callWave 말고 커맨드 없음)의 채집 수입이 **정확히 0**이다 — 계약 A(§8-6). ' +
+        '아군이 0명이라 updateGather 의 순회가 0번 돈다 = 수입 경로의 부재',
+      `${idle.length}판 · 채집골드 ${idleGold} · 채집이벤트 ${idleEvents}`),
+    contract('18.rateCap', maxHaul <= s1Total,
+      `판당 (배달 + 사망으로 잃은 액수) ≤ 스테이지1 총액 ${s1Total} — 총액 항등식이 안 깨졌다는 직접 증거. ` +
+        '⚠ 여유가 0인 것이 정상이다(이 팔들은 매 판 40칸을 다 턴다). 넘으면 그건 밸런스가 아니라 **엔진 버그**다',
+      `최대 ${maxHaul} / ${s1Total} · 판당 배달 ${f(per(gatherArms, (r) => r.gatherGold), 1)} + 손실 ${f(per(gatherArms, (r) => r.gatherLostGold), 1)}`),
+  ];
+
+  const parts: string[] = [];
+  for (const b of branches) {
+    const d = duel(b.rs, tower, nb(prof));
+    const ratio = avgWave(b.rs) / avgWave(tower);
+    parts.push(`${b.key} ${wins(b.rs)}/${b.rs.length} 웨평비 ${f(ratio, 3)}`);
+    legs.push(
+      precondition(`18.${b.key}.waveRatio`, ratio >= BRANCH_WAVE_RATIO,
+        `${b.name}의 평균 도달 웨이브 비 ≥ ${BRANCH_WAVE_RATIO} — 갈래가 살아 있다 ([7] 의 문턱을 그대로 빌린다)`,
+        f(ratio, 4)),
+      contract(`18.${b.key}.rateCap`, rate(b.rs) <= rate(tower) + TRIBE_RATE_MARGIN + 1e-9,
+        `${b.name} 승률 ≤ 타워 + ${TRIBE_RATE_MARGIN} ([6][7] 의 +5%p 가 아니라 [10] 의 **더 엄한** +2.5%p 를 쓴다 — ` +
+          '신설 다리라 느슨한 쪽을 빌릴 이유가 없다)',
+        `${pct(rate(b.rs))} 대 ${pct(rate(tower))}`),
+      guard(`18.${b.key}.notDominant`, b.name, d,
+        `${b.name}가 짝 부호검정에서 승수·여유 모두 유의하게 앞서지 않는다 ([7]·[10] 과 같은 술어·같은 α)`),
+    );
+  }
+
+  legs.push(
+    contract('18.allIn', rate(allIn) < GATHER_ALLIN_RATIO * rate(tower),
+      `채집 몰빵(예비비 2400 · 채집꾼 2명) 완주율 < 타워 벤치의 ${GATHER_ALLIN_RATIO}배 ` +
+        '([13] `allIn` 의 형태와 문턱을 그대로 빌린다 — 신설 숫자를 만들지 않으려고)',
+      `${pct(rate(allIn))} (${wins(allIn)}/${allIn.length}) 대 벤치 ${pct(rate(tower))} · 비 ${f(rate(allIn) / Math.max(1e-9, rate(tower)), 4)}`),
+    contract('18.strongGather', slack(strongG) <= STRONG_SLACK,
+      `**이 안의 최악 팔** — 정원을 원래 안 쓰던 최강 봇에 채집을 붙여도 난이도 상한 ` +
+        `여유 ≤ ${STRONG_SLACK} 가 유지된다 ([1-b] 의 문턱을 한 자리도 안 바꿔 그대로 쓴다)`,
+      `${pct(slack(strongG))} (채집 없는 같은 팔 ${pct(slack(strong))})`),
+    monitor('18.strongGather.duel',
+      '같은 두 팔의 짝 지배검정 — **계약이 아니라 기록이다.** 그 팔은 정원을 원래 안 써서 채집의 대가가 골드뿐이라, ' +
+        '이 검정은 "지배인가"가 아니라 "값을 하는가"를 잰다(judge18 주석의 유도). 값이 커지는 것을 감시만 한다',
+      `${duelMsg('최강+채집 대 최강', sd)} · dominant=${dominant(sd, ALPHA_GUARD)}`),
+    monitor('18.share',
+      '채집 골드가 판당 총수입에서 차지하는 몫 — 총액 식이 안 깨졌으면 구조적 천장 아래에 머문다',
+      `갈래 ${pct(per(branches[1]!.rs, (r) => r.gatherGold) / per(branches[1]!.rs, (r) => r.goldEarned))} · ` +
+        `최강 ${pct(per(strongG, (r) => r.gatherGold) / per(strongG, (r) => r.goldEarned))}`),
+    monitor('18.band',
+      '웨이브대별 배달 골드 [w1-10 w11-20 w21-30 w31-40 w41-50] — §8-3 소비 곡선의 실측판. ' +
+        '⚠ 봉투는 모양을 못 본다(§1-5-A). 이건 게임 느낌의 자료이지 계약의 자료가 아니다',
+      [0, 1, 2, 3, 4].map((i) => f(mean(branches[1]!.rs.map((r) => r.gatherGoldByBand[i] ?? 0)), 1)).join(' ')),
+    monitor('18.cost',
+      '채집의 진짜 비용 — 판당 뽑은/죽은 채집꾼, 시체와 함께 사라진 골드, 전투에서 빠져 있던 인원×틱',
+      `갈래 뽑음 ${f(per(branches[1]!.rs, (r) => r.alliesTrained), 2)} · 짐진채 사망 ${f(per(branches[1]!.rs, (r) => r.gatherDeaths), 2)} · ` +
+        `사망손실 ${f(per(branches[1]!.rs, (r) => r.gatherLostGold), 1)} · 이탈틱 ${Math.round(per(branches[1]!.rs, (r) => r.allyGatherTicks))}`),
+  );
+
+  return {
+    legs,
+    msg: `타워 ${wins(tower)}/${tower.length} · ${parts.join(' · ')} · 몰빵 ${wins(allIn)}/${allIn.length} · ` +
+      `최강+채집 여유 ${pct(slack(strongG))} · 채집골드/판 ${f(per(gatherArms, (r) => r.gatherGold), 1)}`,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 전체 목록 — 봉투와 대조군 스위트가 같은 표를 읽는다
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1342,6 +1555,7 @@ export const ITEMS: readonly Item[] = [
   { id: '13', title: '무한 모드: 정원이 늘어도 아군이 무한 방벽이 되지 않는다', judge: judge13, timeout: 600_000 },
   { id: '14', title: '아군의 한계 가치 — 마을을 양 팔에 고정해도 진짜가 위약을 이긴다', judge: judge14, timeout: 900_000 },
   { id: '17', title: '불도저 봇도 스테이지6 은 클리어 불가', judge: judge17, timeout: 300_000 },
+  { id: '18', title: '채집 축 — 캐는 갈래가 지배 전략이 아니다 (신설)', judge: judge18, timeout: 900_000 },
 ];
 
 /**
@@ -1374,4 +1588,5 @@ export const WINDOW_USE: Readonly<Record<string, readonly WinName[]>> = {
   '13': ['endless'],
   '14': ['marginal'],
   '17': ['s6'],
+  '18': ['l2', 'allIn', 'strong', 'idle'],
 };

@@ -1326,6 +1326,138 @@ test('채집: 영구 그림 값은 +1 (버스트와 갈라 잰다) · 전 구간
   expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
 });
 
+/*
+ * 채집이 **실제 빌드에서 돈다**는 것을 잠근다 — 여기까지 와야 기능이 산다.
+ *
+ * 왜 지금 생겼나: T6 이전에는 `GATHER_BASE_VALUE = 0` 이라 "골드가 늘었다"를 재는 어떤
+ * 어서션도 **0과 0을 비교하는 실패 불가능한 계약**이었다. 값이 8로 켜진 지금이 이 계약이
+ * 처음으로 뜻을 갖는 시점이다. 그 전까지 e2e 의 채집 항목은 드로우콜만 쟀다.
+ *
+ * 잠그는 것 넷 — 각각이 다른 것을 지킨다:
+ *  ① **한 사이클이 실제로 돈다** — 보내면 걸어가 캐고 지고 와서 **골드가 는다**.
+ *     단위 테스트는 목 스테이지에서 이걸 잠그지만, 실제 스테이지·실제 렌더·실제 번들에서
+ *     같은 일이 나는지는 여기서만 안다.
+ *  ② **탭이 없으면 코인도 없다** — 부족원을 뽑아만 두고 방치하면 골드가 한 톨도 안 는다.
+ *     "방치하면 진다"(봉투 [5])의 e2e 쪽 거울이다. sim 테스트가 이미 잠그지만, 그 계약은
+ *     **UI 가 자동 명령을 내지 않는다**까지는 못 본다 — 그건 실제 화면에서만 드러난다.
+ *  ③ **다 캔 칸은 여전히 건설 불가**(D1) — 이 한 줄이 밸런스 전체를 떠받친다. 칸이 열리면
+ *     `SCENERY_DENSITY 0.3` 이 정하는 건설 가능 칸 수가 바뀌어 봉투가 통째로 흔들린다.
+ *  ④ **유료 제거 비용이 안 변한다** — 채집과 `clearScenery` 는 같은 칸에 붙는 별개의 동사다.
+ */
+test('채집: 한 사이클이 실제로 돈다 · 탭 없으면 0 · 텄어도 건설 불가(D1)', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/?test=1', { waitUntil: 'networkidle' });
+  await page.mouse.click(100, 300);
+  await page.getByRole('button', { name: /전투/ }).first().click();
+  await page.waitForFunction(() => window.__wgd !== undefined);
+  await page.waitForTimeout(900);
+
+  // 자원 칸이 실제 스테이지에 있는가 (없으면 이 계약 전체가 무의미하다)
+  const nRes = await page.evaluate(() => window.__wgd!.sim.state.resources.length);
+  expect(nRes, '실제 스테이지에 자원 칸이 하나도 없다').toBeGreaterThan(0);
+
+  // ── ② 먼저: 뽑아만 두고 방치하면 골드가 안 는다 ─────────────────────────────
+  /*
+   * ⚠ **골드 총액으로 재면 안 된다.** 60초를 굴리면 웨이브가 돌아 처치·웨이브 클리어
+   * 수입이 들어온다 — 그건 채집과 무관한 돈이고, 실제로 처음 이 어서션을 총액으로 썼다가
+   * +78 을 채집으로 오인했다. 채집만 골라 재는 관측량은 **텄음 칸 수**다:
+   * 한 칸이 텄다는 것은 누군가 거기서 한 짐을 캤다는 것과 정확히 같고(gather.ts 의 유일한
+   * `taken = true` 자리), 명령이 없으면 그 자리에 절대 도달할 수 없다.
+   */
+  const idle = await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.setGold(5_000);
+    g.trainAlly('gatherer');
+    g.trainAlly('gatherer');
+    // ⚠ **prep 을 얼려 웨이브를 안 돌린다.** 적이 없으면 처치·웨이브 클리어 수입이 0이라
+    // 골드 변화가 **오직 채집에서만** 온다 = 아래 ①의 어서션이 판별력을 갖는다.
+    // (같은 수법을 '아군 이동 명령' 계약이 이미 쓴다)
+    g.sim.state.prepTicksLeft = 1e9;
+    // 기준점은 **뽑은 직후**다 — setGold 값이 아니다. 채집꾼 둘의 실비용(70 + 70×1.05)이
+    // 이미 빠져 있고, 그건 채집 수입이 아니라 지출이라 이 어서션이 재는 것이 아니다.
+    const start = g.sim.state.gold;
+    g.ff(1_800); // 60초 — 왕복(22초)이 두 번 넘게 들어가는 시간
+    return {
+      start,
+      gold: g.sim.state.gold,
+      allies: g.sim.state.allies.length,
+      taken: g.sim.state.resources.filter((r) => r.taken).length,
+      claimed: g.sim.state.allies.filter((a) => a.gatherKey >= 0).length,
+      carried: g.sim.state.allies.reduce((n, a) => n + a.carryCount, 0),
+    };
+  });
+  expect(idle.allies, '채집꾼이 안 뽑혔다').toBeGreaterThan(0);
+  expect(idle.taken, `탭 없이 ${idle.taken}칸이 텄다 — 자동 채집 경로가 있다`).toBe(0);
+  expect(idle.claimed, `탭 없이 ${idle.claimed}명이 칸을 예약했다`).toBe(0);
+  expect(idle.carried, `탭 없이 짐 ${idle.carried}개가 생겼다`).toBe(0);
+  expect(idle.gold, `웨이브를 얼렸는데 골드가 움직였다: ${idle.start} → ${idle.gold}` + ' — 채집 말고 다른 수입원이 샌다').toBe(idle.start);
+
+  // ── ① 보내면 한 사이클이 돈다 ──────────────────────────────────────────────
+  const cycle = await page.evaluate(() => {
+    const g = window.__wgd!;
+    const cells = g.sim.state.resources.filter((r) => !r.taken);
+    const before = g.sim.state.gold;
+    // 채집꾼 전원을 서로 다른 칸으로. carryCap 2 라 각자 두 칸을 채워야 귀환한다.
+    const sent: { x: number; z: number }[] = [];
+    g.sim.state.allies.forEach((a, i) => {
+      const c = cells[i]!;
+      sent.push({ x: c.cellX, z: c.cellZ });
+      g.sim.applyCommand({ type: 'moveAlly', allyId: a.id, cellX: c.cellX, cellZ: c.cellZ });
+    });
+    g.ff(1_200);
+    // 짐을 채우러 두 번째 칸으로
+    const rest = g.sim.state.resources.filter((r) => !r.taken);
+    g.sim.state.allies.forEach((a, i) => {
+      const c = rest[i];
+      if (!c) return;
+      sent.push({ x: c.cellX, z: c.cellZ });
+      g.sim.applyCommand({ type: 'moveAlly', allyId: a.id, cellX: c.cellX, cellZ: c.cellZ });
+    });
+    g.ff(2_400);
+    const taken = g.sim.state.resources.filter((r) => r.taken);
+    return {
+      before,
+      after: g.sim.state.gold,
+      taken: taken.map((r) => ({ x: r.cellX, z: r.cellZ })),
+      takenValue: taken.reduce((n, r) => n + r.value, 0),
+      carriedLeft: g.sim.state.allies.reduce((n, a) => n + a.carryCount, 0),
+      sent,
+    };
+  });
+  expect(cycle.taken.length, `아무 칸도 안 텄다 (보낸 칸 ${JSON.stringify(cycle.sent)})`).toBeGreaterThan(0);
+  // 웨이브가 얼어 있으므로 골드 변화는 **전액 채집**이다 — 값까지 맞는지 본다.
+  const paid = cycle.after - cycle.before;
+  expect(cycle.takenValue, '짐값이 0이다 — GATHER_BASE_VALUE 가 안 켜졌다').toBeGreaterThan(0);
+  expect(cycle.carriedLeft, `아직 ${cycle.carriedLeft}개를 지고 있다 (배달이 안 끝났다)`).toBe(0);
+  expect(
+    paid,
+    `텄음 ${cycle.taken.length}칸 값 ${cycle.takenValue} 인데 지급은 ${paid}` +
+      ` (${cycle.before} → ${cycle.after}) — 캔 만큼 정확히 지급돼야 한다`,
+  ).toBe(cycle.takenValue);
+
+  // ── ③④ 텄어도 건설 불가이고 제거 비용도 그대로 ─────────────────────────────
+  const after = await page.evaluate((taken) => {
+    const g = window.__wgd!;
+    const c = taken[0]!;
+    return {
+      canPlace: g.sim.canPlaceAt(c.x, c.z),
+      hasScenery: g.sim.hasScenery(c.x, c.z),
+      clearCost: g.clearSceneryCost(c.x, c.z),
+      cell: c,
+    };
+  }, cycle.taken);
+  expect(after.canPlace, `D1 위반 — 텄는데 건설 가능해졌다 (${JSON.stringify(after.cell)})`).toBe(false);
+  expect(after.hasScenery, '텄는데 소품이 사라졌다 — 그루터기로 남아야 한다').toBe(true);
+  expect(after.clearCost, '텄더니 유료 제거 비용이 사라졌다').not.toBeNull();
+
+  expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
+});
+
 test('홈타운: 기지가 쏜다 · 레벨업 2단 확인 · 골드/최대레벨 거부 · HP 정책', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => {

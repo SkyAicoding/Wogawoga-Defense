@@ -6,9 +6,11 @@
  * (`resource:${id}:${key}`)라 **시드와 무관**하므로, 6스테이지의 짐값 합은 모든 판에서
  * 같은 한 숫자다. 그 숫자를 어서션 한 줄로 박아 두는 것이 D9(손잡이 하나)의 감사 가능성 전부다.
  *
- * ⚠ **`GATHER_BASE_VALUE`는 착수 기간 동안 0이다**(T6이 켠다). 그래서 여기서는 상수를 읽지
- *   않고 `gatherValueFor(6, …)`로 **기준값을 인자로 넣어** B = 6에서의 총액을 검증한다.
- *   곧 이 파일은 지금도, 값을 켠 뒤에도, 같은 숫자를 잠근다.
+ * ⚠ **T6이 `GATHER_BASE_VALUE`를 8로 켰다** (착수 기간에는 0이었다). 이 파일은 상수를
+ *   직접 읽지 않고 `gatherValueFor(B, …)`로 **기준값을 인자로 넣어** 총액을 검증하되,
+ *   아래 `B`가 배포본 상수와 같다는 것을 **어서션으로 묶는다** — 그래야 "여기서 잠근 745"와
+ *   "게임이 실제로 내는 745"가 갈라질 수 없다. 곧 이 파일은 상수를 켜기 전에도 켠 뒤에도
+ *   같은 절차로 같은 숫자를 잠근다.
  *
  * ⚠ 아직 없는 것 둘 (T2가 `sim/gather.ts`의 ResourceField를 만든 뒤에 붙인다):
  *   · §9-1 ④ `sim.state.resources[i].kind === resourceKindOf(stage, key_i)`
@@ -22,7 +24,12 @@ import type { BiomeId, ResourceId, StageDef } from '@/data/types';
 import { STAGES, stageById } from '@/data/stages';
 import { rasterizePathCells, sceneryCells } from '@/data/grid';
 import { ALLY_DEFS, ALL_ALLY_IDS } from '@/data/allies';
-import { gatherValueFor, GATHER_DIST_GAIN, GATHER_DELIVER_RANGE } from '@/data/balance';
+import {
+  GATHER_BASE_VALUE,
+  GATHER_DIST_GAIN,
+  GATHER_DELIVER_RANGE,
+  gatherValueFor,
+} from '@/data/balance';
 import {
   RESOURCE_DEFS,
   RESOURCE_WEIGHTS,
@@ -31,8 +38,12 @@ import {
   resourceKindOf,
 } from '@/data/resources';
 
-/** T6이 켤 값. 상수가 0인 동안에도 총액 표를 검증할 수 있게 여기서 못 박는다 (gather-spec §1-5-C) */
-const B = 6;
+/**
+ * **배포본 짐값 기준값.** T6이 6(착수값)에서 걸어 올려 확정한 값이고(gather-spec §1-5-D의
+ * 정정대로 실측으로 유도했다 — balance.ts 의 상수 주석에 유도 전문이 있다), 이 파일의
+ * 총액 표 전부가 여기에 걸려 있다. 아래 첫 어서션이 이 값과 배포본 상수를 묶는다.
+ */
+const B = 8;
 
 const ALL_RESOURCE_IDS: readonly ResourceId[] = [
   'berry',
@@ -239,9 +250,11 @@ describe('분포 충실도 (§9-1 ⑥ — ±20%p · 모든 종 1개 이상)', ()
 });
 
 describe('총액 (§9-1 ⑦) — 이 한 줄이 D9의 감사 가능성 전부다', () => {
-  it('6스테이지 총액을 인쇄하고 **스테이지1 === 559**를 잠근다', () => {
+  it('6스테이지 총액을 인쇄하고 **스테이지1 === 745**를 잠근다', () => {
     const totals: number[] = [];
-    console.log('[resources] 스테이지별 채집 총액 (GATHER_BASE_VALUE = 6 기준)');
+    // ⚠ 이 한 줄이 "여기서 잠근 총액"과 "게임이 실제로 내는 총액"을 갈라지지 못하게 한다.
+    expect(GATHER_BASE_VALUE, 'balance.GATHER_BASE_VALUE 와 이 파일의 B 가 어긋났다 — 총액 표가 거짓이 된다').toBe(B);
+    console.log(`[resources] 스테이지별 채집 총액 (GATHER_BASE_VALUE = ${B} 기준)`);
     for (const stage of STAGES) {
       const field = fieldOf(stage, B);
       const total = field.reduce((n, c) => n + c.value, 0);
@@ -257,22 +270,24 @@ describe('총액 (§9-1 ⑦) — 이 한 줄이 D9의 감사 가능성 전부다
       );
     }
 
-    // 스테이지1 = 559골드. 부록 A의 검산 상수와 함께 잠근다.
+    // 스테이지1 = 745골드 (B = 8). 부록 A의 검산 상수와 함께 잠근다.
     const s1 = fieldOf(STAGES[0] as StageDef, B);
     expect((STAGES[0] as StageDef).id).toBe(1);
     expect(s1.length).toBe(40);
     expect(s1.reduce((n, c) => n + c.dist, 0)).toBeCloseTo(306.4476, 4);
-    expect(totals[0]).toBe(559);
+    expect(totals[0]).toBe(745);
     // 종류 배정도 사실이다 — wood 15 · berry 11 · stone 8 · fruit 4 · honey 2
     const s1kinds: Record<string, number> = {};
     for (const c of s1) s1kinds[c.kind] = (s1kinds[c.kind] ?? 0) + 1;
     expect(s1kinds).toEqual({ wood: 15, berry: 11, stone: 8, fruit: 4, honey: 2 });
     const s1vals = s1.map((c) => c.value).sort((a, b) => a - b);
-    expect([s1vals[0], median(s1vals), s1vals[s1vals.length - 1]]).toEqual([5, 14, 25]);
+    expect([s1vals[0], median(s1vals), s1vals[s1vals.length - 1]]).toEqual([7, 18, 34]);
 
     // ⚠ 아래 벽 (§1-5-B): 조기 호출 완벽 연타가 13.66골드/탭이다. 채집의 탭당 값은 짐값
     //   그 자체이므로(1탭 = 짐 하나), 평균이 그 아래로 내려가면 **아무도 안 누른다**.
-    expect(559 / 40).toBeGreaterThan(13.66);
+    //   B = 6(착수값)에서는 13.97로 벽에서 0.31골드밖에 안 떠 있었다. B = 8이면 18.63 =
+    //   조기 호출의 1.36배이고, 그 여유가 T6이 8을 고른 두 번째 이유다(§1-5-D ④).
+    expect(745 / 40).toBeGreaterThan(13.66);
   });
 
   it('`resources.stageSpread` — 나머지 다섯이 s1의 **1.5배 이하**다', () => {
@@ -280,6 +295,9 @@ describe('총액 (§9-1 ⑦) — 이 한 줄이 D9의 감사 가능성 전부다
     //   결함이다 — 손잡이 하나(D9)가 s1만 맞추면 나머지 다섯은 아무도 안 잠근다.
     //   처방은 상수를 늘리는 것이 아니라 **다리를 늘리는 것**이고, 이 다리가 그것이다.
     //   현재 최악이 s3 = 1.474배라 여유가 0.026배뿐이다 — 실측에 붙인 문턱이라는 뜻이다.
+    //   ⚠ 이 비는 **B에 사실상 불변**이다(실측: B 4~24 전 구간에서 s3/s1 = 1.473~1.486).
+    //   곧 짐값을 올려도 이 다리는 한 톨도 안 움직인다 — 그것이 "손잡이 하나가 s1만
+    //   맞춘다"는 §1-7의 설계 결함이 B로는 안 낫고 안 나빠진다는 뜻이다.
     const totals = STAGES.map((s) => fieldOf(s, B).reduce((n, c) => n + c.value, 0));
     const s1 = totals[0] as number;
     let worst = 0;
@@ -309,8 +327,9 @@ describe('총액 (§9-1 ⑦) — 이 한 줄이 D9의 감사 가능성 전부다
   });
 
   it('B가 0이면 총액도 0이다 — 착수 기간의 사실', () => {
-    // GATHER_BASE_VALUE = 0으로 시작한다(T6이 켠다). 그동안 채집은 코드로는 돌지만
-    // **한 푼도 안 낸다** — 봉투가 재는 것이 카드 자체의 몫뿐이 되게 하려는 것이다.
+    // 착수 기간에는 GATHER_BASE_VALUE = 0이었다(T6이 8로 켰다). 그동안 채집은 코드로는
+    // 돌지만 **한 푼도 안 냈다** — 봉투가 재는 것이 카드 자체의 몫뿐이 되게 하려는 것이었다.
+    // 그 성질은 지금도 식으로 남아 있어야 한다(대조군 `gather-off`가 밟는 자리와 같은 축).
     for (const stage of STAGES) {
       expect(fieldOf(stage, 0).reduce((n, c) => n + c.value, 0)).toBe(0);
     }
@@ -319,8 +338,8 @@ describe('총액 (§9-1 ⑦) — 이 한 줄이 D9의 감사 가능성 전부다
 
 describe('gatherValueFor — round는 정확히 한 번만 닿는다', () => {
   it('마을 셀(거리 0)의 값은 기준값 × 배수의 반올림이다', () => {
-    expect(gatherValueFor(B, 1, 0)).toBe(6);
-    expect(gatherValueFor(B, RESOURCE_DEFS.berry.kindMul, 0)).toBe(Math.round(6 * 0.73));
+    expect(gatherValueFor(B, 1, 0)).toBe(8);
+    expect(gatherValueFor(B, RESOURCE_DEFS.berry.kindMul, 0)).toBe(Math.round(8 * 0.73));
   });
 
   it('거리 이득이 1타일당 정확히 GATHER_DIST_GAIN이다', () => {
@@ -330,9 +349,24 @@ describe('gatherValueFor — round는 정확히 한 번만 닿는다', () => {
     expect(gatherValueFor(100, 1, 10)).toBe(280); // 100 × (1 + 0.18 × 10)
   });
 
-  it('명령당 값의 폭이 5.0배다 (s1 최소 5 → 최대 25)', () => {
+  it('명령당 값의 폭이 4.5배를 넘는다 (s1 최소 7 → 최대 34, B = 8)', () => {
+    /**
+     * ⚠ 한때 여기 `toBe(5)`가 박혀 있었다(B = 6에서 5 → 25). **그 5.0은 설계가 아니라
+     * 반올림의 우연이었다** — 폭을 만드는 것은 B가 아니라 두 끝 칸의 `kindMul × 거리이득`
+     * 비이고, 그 비는 **B와 무관하게** 다음과 같이 고정이다:
+     *     stone(1.21) × (1 + 0.18 × 13.93)   4.2439
+     *     ─────────────────────────────── = ────── = 4.637
+     *     berry(0.73) × (1 + 0.18 × 1.41)    0.9153
+     * 반올림이 그 위에 얹혀 B = 6 이면 25/5 = 5.000, B = 8 이면 34/7 = 4.857로 흔들린다.
+     * 그래서 문턱을 **반올림 전 값(4.637) 아래**인 4.5로 잡는다 — 이건 완화가 아니라
+     * B에 안 흔들리는 자리로 옮긴 것이고, 실제 폭은 값과 함께 인쇄한다.
+     */
     const vals = fieldOf(STAGES[0] as StageDef, B).map((c) => c.value);
-    expect(Math.max(...vals) / Math.min(...vals)).toBe(5);
+    const lo = Math.min(...vals);
+    const hi = Math.max(...vals);
+    expect([lo, hi]).toEqual([7, 34]);
+    expect(hi / lo).toBeGreaterThan(4.5);
+    console.log(`[resources] 명령당 값의 폭 = ${(hi / lo).toFixed(3)}배 (${lo} → ${hi}) · 반올림 전 4.637배`);
   });
 });
 
