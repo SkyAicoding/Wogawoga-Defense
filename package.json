@@ -1,8 +1,8 @@
 {
-  "name": "wogawoga-defense",
+  "name": "age-of-dinosaurs",
   "private": true,
   "version": "0.1.0",
-  "description": "와가와가 디펜스 — 원시시대 로우폴리 3D 타워 디펜스 (무료 웹게임)",
+  "description": "Age of Dinosaurs (공룡의 시대) — 원시시대 로우폴리 3D 채집·디펜스 (무료 웹게임)",
   "type": "module",
   "scripts": {
     "dev": "vite",
