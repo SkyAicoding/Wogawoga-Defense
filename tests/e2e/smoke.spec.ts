@@ -1129,6 +1129,8 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
    *   아군 0명   11콜 / 30,497삼각형
    *   모여 있음  12콜 / 38,285      ← 아군의 몫은 1콜 (자기 InstancedMesh 하나)
    *   흩어짐     12콜 / 38,441      ← **흩어짐의 몫은 0콜 · +156삼각형**
+   * 10단계 재실측: 모임 12 → 흩어짐 14. 늘어난 둘은 아래 어서션이 이름 대서 받는다
+   * (목표 표식 1 + 대기 말뚝이 켠 오버레이 메시 1). 흩어짐의 몫은 그대로 0콜이다.
    * 곧 자유 이동은 예산을 사지 않는다. 인스턴스는 위치만 바뀌고 개수가 그대로이며,
    * 아군은 애초에 절두체 컬링을 끄고 언제나 그린다(render/views/enemyview.ts).
    * 종마다·개체마다 메시를 만드는 회귀가 들어오면 여기서 5콜씩 튄다.
@@ -1220,7 +1222,19 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
   });
   const msg = `모임 ${JSON.stringify(clustered)} → 흩어짐 ${JSON.stringify(scattered)} (최대 간격 ${spread.toFixed(1)}타일)`;
   expect(spread, '흩어지지 않았다 (통제가 성립하지 않는다)').toBeGreaterThan(6);
-  expect(scattered.calls - clustered.calls, msg).toBeLessThanOrEqual(1);
+  /*
+   * 델타의 정체를 **이름 대서 적는다** — 둘 다 '흩어짐'의 값이 아니다.
+   *  (1) 목표 표식 메시 (decals의 봉수대) — ②의 우클릭이 세웠고 표본 A에는 없었다.
+   *      9단계에도 이 몫이 있었고 그래서 문턱이 0이 아니라 1이었다.
+   *  (2) 오버레이 인스턴스 메시 (views/healthbars) — 10단계에 **대기 말뚝**(kind 8)이
+   *      얹히면서 켜졌다. ④는 부족원 전원을 빈 칸으로 보내므로 여섯이 전부
+   *      `autoHold = true`가 된다(sim/allies.ts 규칙 8-b: 빈 칸 = "여기 지켜").
+   *      곧 이 +1은 **새 메시가 아니라 count 0 → 6**이고, 말뚝을 따로 그렸다면
+   *      여기서 +1이 아니라 +6이 떴을 것이다 — 그 사실이 이 숫자로 잠긴다.
+   * 실측(desktop 1280×800 · swiftshader): 모임 12콜 → 흩어짐 14콜 / 삼각형 +240.
+   * 흩어짐 자체의 몫은 여전히 **0콜**이다.
+   */
+  expect(scattered.calls - clustered.calls, msg).toBeLessThanOrEqual(2);
   expect(scattered.tris - clustered.tris, msg).toBeLessThanOrEqual(2_000);
   await page.evaluate(() => window.__wgd!.pause(false));
 
@@ -1259,6 +1273,9 @@ test('터치 조작: 탭으로 고르고 탭으로 보낸다 · 명령 뒤 선�
       window.__wgd!.sim.state.prepTicksLeft = 1e9;
     });
   await holdPrep();
+  // 화면 전환(커튼/인트로 카메라)이 끝날 때까지 기다린다 — 그 전에는 캔버스 위에
+  // 오버레이가 덮여 있어 pickBoardCell의 elementFromPoint가 판을 못 찾는다(실측).
+  await page.waitForTimeout(1_200);
 
   /*
    * 부족원을 **판이 보이는 칸에 미리 세운다.** 집결 지점은 마을 앞이라 390×844에서는
@@ -1274,11 +1291,41 @@ test('터치 조작: 탭으로 고르고 탭으로 보낸다 · 명령 뒤 선�
   });
   expect(staged, '몽둥이꾼을 못 뽑았다 (이 계약이 성립하지 않는다)').toBeGreaterThan(0);
 
-  const from = await page.evaluate(() => {
-    const a = window.__wgd!.allies()[0]!;
-    return { x: a.x, z: a.z };
-  });
-  const stand = await pickBoardCell(page, from);
+  /*
+   * 탭할 칸을 **탭 직전에** 고른다. `pickBoardCell`을 쓰지 않는 이유는 그것이 '기준점에서
+   * 가장 먼 칸'을 고르기 때문이다 — 390×664에서 가장 먼 칸은 판 가장자리이고, 거기는
+   * HUD 사이드 버튼이 나중에 떠올라 덮을 수 있다(실측: elementFromPoint는 캔버스라고
+   * 답했는데 300ms 뒤 탭은 `.side-btn`이 먹었다). 여기서는 **캔버스가 확실히 보이는 칸들**을
+   * 모아 두고, 설 곳은 그 한가운데를, 보낼 곳은 거기서 가장 먼 곳을 쓴다.
+   */
+  const visibleCells = (): Promise<{ x: number; z: number; px: number; py: number }[]> =>
+    page.evaluate(() => {
+      const g = window.__wgd!;
+      const out: { x: number; z: number; px: number; py: number }[] = [];
+      for (let z = 0; z < 40; z++) {
+        for (let x = 0; x < 40; x++) {
+          if (!g.sim.canPlaceAt(x, z)) continue;
+          const p = g.cellToScreen(x, z);
+          // 가장자리 24px은 버린다 — HUD 버튼이 붙는 띠다
+          if (p.x < 24 || p.y < 24 || p.x > window.innerWidth - 24 || p.y > window.innerHeight - 24) {
+            continue;
+          }
+          const el = document.elementFromPoint(p.x, p.y);
+          if (!el || el.tagName !== 'CANVAS') continue;
+          out.push({ x, z, px: p.x, py: p.y });
+        }
+      }
+      return out;
+    });
+  const cells = await visibleCells();
+  expect(cells.length, '판 위에서 탭할 수 있는 칸이 없다').toBeGreaterThan(4);
+  const cx = cells.reduce((n, c) => n + c.x, 0) / cells.length;
+  const cz = cells.reduce((n, c) => n + c.z, 0) / cells.length;
+  const near = (ax: number, az: number): (typeof cells)[number] =>
+    cells.reduce((b, c) =>
+      Math.hypot(c.x - ax, c.z - az) < Math.hypot(b.x - ax, b.z - az) ? c : b,
+    );
+  const stand = near(cx, cz);
   await page.evaluate((c) => {
     const g = window.__wgd!;
     for (const a of g.sim.state.allies) {
@@ -1289,7 +1336,12 @@ test('터치 조작: 탭으로 고르고 탭으로 보낸다 · 명령 뒤 선�
   }, { x: stand.x, z: stand.z });
   await page.waitForTimeout(200);
 
+  /** 탭 직전 확인 — 그 점이 아직 판인가. 없으면 "터치가 안 먹는다"와 "HUD가 먹었다"가 안 갈린다 */
+  const onCanvas = (px: number, py: number): Promise<string> =>
+    page.evaluate((p) => document.elementFromPoint(p.x, p.y)?.tagName ?? 'NONE', { x: px, y: py });
+
   // ① 탭 = 선택 (그 종족 전체)
+  expect(await onCanvas(stand.px, stand.py), '설 칸이 HUD에 덮였다').toBe('CANVAS');
   await page.touchscreen.tap(stand.px, stand.py);
   await page.waitForTimeout(250);
   expect(
@@ -1299,8 +1351,14 @@ test('터치 조작: 탭으로 고르고 탭으로 보낸다 · 명령 뒤 선�
 
   // ② 선택 중의 탭 = 명령. 그리고 **선택이 풀린다** — 안 풀리면 폰에서는 빈 곳 탭이
   //    전부 명령이라 선택을 풀 방법이 사라진다(placement.ts onCommand).
-  const target = await pickBoardCell(page, { x: stand.x, z: stand.z });
-  expect(target.d, '지금 서 있는 칸과 너무 가깝다 (명령을 관찰할 수 없다)').toBeGreaterThan(3);
+  const target = cells.reduce((b, c) =>
+    Math.hypot(c.x - stand.x, c.z - stand.z) > Math.hypot(b.x - stand.x, b.z - stand.z) ? c : b,
+  );
+  expect(
+    Math.hypot(target.x - stand.x, target.z - stand.z),
+    '지금 서 있는 칸과 너무 가깝다 (명령을 관찰할 수 없다)',
+  ).toBeGreaterThan(3);
+  expect(await onCanvas(target.px, target.py), '보낼 칸이 HUD에 덮였다').toBe('CANVAS');
   await page.touchscreen.tap(target.px, target.py);
   await page.waitForTimeout(250);
   const after = await page.evaluate(() => ({

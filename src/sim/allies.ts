@@ -246,6 +246,21 @@ export function trainAlly(ctx: SimCtx, defId: AllyId): boolean {
 }
 
 /**
+ * 규칙 8-b) 지금 이 셀 위에 **살아 있는 적이 서 있는가** — 명령 시점에 **한 번만** 본다.
+ *
+ * 반올림한 셀끼리의 정수 비교다(부동소수 동점 없음). 멤버십 검사뿐이라 `items` 순회
+ * 순서에 결과가 안 걸린다(계약 B). 격자 밖/소수 좌표면 `Math.round(e.x)`가 정수라
+ * 구조적으로 false다 — 따로 가드가 필요 없다.
+ */
+function enemyOnCell(ctx: SimCtx, cellX: number, cellZ: number): boolean {
+  for (const e of ctx.world.enemies.items) {
+    if (!e.alive) continue;
+    if (Math.round(e.x) === cellX && Math.round(e.z) === cellZ) return true;
+  }
+  return false;
+}
+
+/**
  * 규칙 2) 이동 명령 — 찍은 셀 중심을 목표로 박는다.
  * 대상: allyId >= 0이면 그 한 명, 아니면 defId가 있으면 **그 종족 전원**, 없으면 전원.
  * 대상이 하나도 없으면 false(연출도 안 난다).
@@ -273,21 +288,6 @@ export function trainAlly(ctx: SimCtx, defId: AllyId): boolean {
  * 여기서 정하는 것은 "이 명령이 일감이었나"(= 끝나면 자동으로 돌아가나)뿐이고,
  * 누구를 치느냐는 규칙 6이 이미 정한다(그 칸에 도착하면 사거리 안의 적을 친다).
  */
-/**
- * 규칙 8-b) 지금 이 셀 위에 **살아 있는 적이 서 있는가** — 명령 시점에 **한 번만** 본다.
- *
- * 반올림한 셀끼리의 정수 비교다(부동소수 동점 없음). 멤버십 검사뿐이라 `items` 순회
- * 순서에 결과가 안 걸린다(계약 B). 격자 밖/소수 좌표면 `Math.round(e.x)`가 정수라
- * 구조적으로 false다 — 따로 가드가 필요 없다.
- */
-function enemyOnCell(ctx: SimCtx, cellX: number, cellZ: number): boolean {
-  for (const e of ctx.world.enemies.items) {
-    if (!e.alive) continue;
-    if (Math.round(e.x) === cellX && Math.round(e.z) === cellZ) return true;
-  }
-  return false;
-}
-
 export function moveAlly(
   ctx: SimCtx,
   allyId: number,
@@ -695,7 +695,7 @@ function claimedByAnother(ctx: SimCtx, a: AllySim, key: number): boolean {
  * ⚠ `Math.round`는 셀 기준 반올림이고 `Math.hypot`을 안 쓴다 — 이 파일의 기존 규약 그대로다.
  * ⚠ **예약 검사는 거리 검사 뒤**에 둔다(멤버십 검사라 O(n)이다). 결과는 안 바뀌고 비용만 준다.
  */
-function pickAutoCell(ctx: SimCtx, a: AllySim): ResourceCellState | null {
+function pickAutoCell(ctx: SimCtx, a: AllySim, gridW: number): ResourceCellState | null {
   const ax = Math.round(a.x);
   const az = Math.round(a.z);
   let best: ResourceCellState | null = null;
@@ -706,7 +706,7 @@ function pickAutoCell(ctx: SimCtx, a: AllySim): ResourceCellState | null {
     const dz = c.cellZ - az;
     const d2 = dx * dx + dz * dz;
     if (d2 >= bestD2) continue; // 동점이면 앞사람(= 작은 셀 키)이 이긴다
-    if (claimedByAnother(ctx, a, c.cellZ * ctx.opts.stage.gridW + c.cellX)) continue;
+    if (claimedByAnother(ctx, a, c.cellZ * gridW + c.cellX)) continue;
     best = c;
     bestD2 = d2;
   }
@@ -737,7 +737,8 @@ function pickAutoCell(ctx: SimCtx, a: AllySim): ResourceCellState | null {
  * 스톨도 없다: 자동은 어떤 완료 조건도 막지 않는다(봉쇄를 안 걸고, 웨이브 완료는 적 쪽 조건이다).
  */
 export function updateAllyAuto(ctx: SimCtx): void {
-  const base = ctx.opts.stage.baseCell;
+  const stage = ctx.opts.stage;
+  const base = stage.baseCell;
   fillAliveAllyIds(ctx.world.allies.items, autoOrder); // 시체 불필요 — 자동은 산 사람만
   for (const a of autoOrder) {
     // ① "여기 지켜" — 자동이 꺼져 있다 (규칙 8-b).
@@ -771,7 +772,7 @@ export function updateAllyAuto(ctx: SimCtx): void {
     //      진행분 폐기와 gatherLost{'moved'}가 초당 여러 건 뿜어진다. 위험한 칸의 벌금은
     //      **D5가 이미 물린다**(맞으면 손이 멈춘다 — s1 40칸 중 22칸이 그 사거리 안이다).
     //      곧 전선 옆 칸은 **느릴 뿐 금지가 아니고**, 그것이 이 게임이 이미 고른 규칙이다.
-    const cell = pickAutoCell(ctx, a);
+    const cell = pickAutoCell(ctx, a, stage.gridW);
     if (cell === null) {
       // ⑦ **자원이 전부 텄다 / 남은 칸을 남이 다 들고 있다** — 무한 배회 금지.
       //    짐이 있으면 마을로(E-18의 "짐 하나 들고 서 있기"를 자동이 대신 끝낸다),
@@ -785,7 +786,7 @@ export function updateAllyAuto(ctx: SimCtx): void {
     // ⑧ 예약을 먼저 붙이고, **붙었을 때만** 목표를 바꾼다.
     //    순서가 반대면(목표 먼저) 예약이 거부된 틱에 유닛이 그 칸으로 걸어갔다가
     //    도착 → 다시 선택 → 또 거부의 진동 루프가 선다.
-    const key = cell.cellZ * ctx.opts.stage.gridW + cell.cellX;
+    const key = cell.cellZ * stage.gridW + cell.cellX;
     setGatherTarget(ctx, a, key);
     if (a.gatherKey !== key) continue; // 예약이 안 붙었다 → 목표도 안 바꾼다
     a.tgtX = cell.cellX;

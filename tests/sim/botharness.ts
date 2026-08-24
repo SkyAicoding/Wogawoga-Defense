@@ -92,8 +92,7 @@
 import { createBattle, type BattleTuning } from '@/sim/battle';
 import { buildPath, buildStraight } from '@/sim/path';
 import { ALLY_DEFS, BASE_LEVELS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
-import { GATHER_BASE_VALUE, SIEGE_ENGAGE_RANGE, gatherValueFor } from '@/data/balance';
-import { ARRIVE_EPS2, RESOURCE_DEFS, resourceKindOf } from '@/data/resources';
+import { SIEGE_ENGAGE_RANGE } from '@/data/balance';
 import type {
   AllyDef,
   AllyId,
@@ -102,7 +101,6 @@ import type {
   BattleSim,
   EnemyDef,
   EnemyId,
-  ResourceCellState,
   SimEvent,
   StageDef,
   TowerDef,
@@ -238,37 +236,45 @@ const REFRESH_MAX_PER_DECISION = 6;
  * 에서 이미 한 번 겪은 함정이다 — 하네스 전체에 그 두 문자열이 **하나도 없었다**(grep 0건).
  * 곧 그 두 축에 대해 봉투는 "초록"이 아니라 **무측정**이었다.
  *
- * ── 정책 (§9-3 그대로. 봇의 기존 커맨드 주기 120틱에 얹는다) ────────────────
- *  1) 살아 있는 `defId` 인원이 `count` 미만이고 살 수 있으면 `trainAlly` 한 번.
+ * ── ⚠⚠ **규칙 8(sim 자동 채집)이 들어오면서 이 팔의 절반이 사라졌다** ────────
+ * 이제 **누가 어느 칸을 캘지는 sim이 정한다**(`src/sim/allies.ts updateAllyAuto`).
+ * 명령 없는 일꾼은 **매 틱** 스스로 가장 가까운 미예약·미채취 칸을 잡고, 짐이 차면
+ * 마을에 놓고 같은 틱에 다시 나간다. 하네스의 개체 지시 루프는 그 순간 **도달 불가 코드**가
+ * 됐다 — 외곽 루프는 120틱마다 깨어나는데 `busyOf(a) = gatherKey >= 0`가 이미 참이라
+ * 한 줄도 안 돌기 때문이다. 그래서 **지웠다.** 남기면 다음 사람이 `18.*` 값을 없는 정책 탓으로
+ * 읽는다(옛 `stepGatherStub`이 T2 이후 한 줄도 안 돌면서도 남아 있던 것과 같은 형태다).
+ *
+ * **어느 쪽이 이겨야 하는가 — sim이다. 근거 셋:**
+ *  ① [18]이 재야 하는 것은 **배포본 게임**이고, 그 게임은 자동이 켜진 게임이다.
+ *     하네스가 이기면 [18]은 존재하지 않는 게임을 잰다.
+ *  ② 규칙은 sim에 있어야 `hash()`와 `determinism.test.ts` 안으로 들어온다. UI/하네스에 두면
+ *     **사람과 봇이 다른 게임을 한다**(gather-spec §7-1이 정렬을 UI에 안 둔 그 논거 그대로).
+ *  ③ 하네스가 이기려면 매 틱 `moveAlly`를 쏴야 하는데, 그건 사람이 못 하는 조작이라
+ *     그 봇으로 잰 난이도는 게임의 난이도가 아니다.
+ *
+ * ── 남은 정책 (봇의 기존 커맨드 주기 120틱에 얹는다) ────────────────────────
+ *  1) 살아 있는 `defId` 인원이 `count` 미만이고 살 수 있으면 `trainAlly` 한 번. **끝이다.**
  *     ⚠ `trainAlly`가 false면 **재시도하지 않는다** — 정원(`canTrainAlly`)이 막은 것이라
  *       같은 루프에서 다시 눌러도 같은 false가 온다.
- *  2) 그 종 개체를 **id 오름차순**으로 훑어, 놀고 있는 사람에게 **마을에서 가장 가까운**
- *     아직 안 텄고 아무도 예약 안 한 칸을 준다(동점이면 셀 키 오름차순).
- *  3) 짐이 남았는데 더 캘 칸이 없으면 마을로 보낸다 (§4-8 E-18 — 안 그러면 마지막 한 짐이
- *     영영 안 들어와 총액 항등식이 어긋난다).
- * 이 정책은 **불도저를 피하지 않는다**(§9-3 못 2). `minValue` 기본이 0인 것도 같은 이유다 —
- * 봉투가 재야 하는 것은 사람이 할 법한 선택이 아니라 **최대 수입**이다(§9-3 못 3).
+ * 곧 이 팔이 재는 것은 이제 **"채집꾼을 n명 사는 갈래가 같은 예산의 타워 벤치를 지배하는가"**
+ * 이고, 하네스와 sim이 목표를 놓고 다투지 않으므로 **정책 편향이 정확히 0**이다
+ * (judge18의 [C-5] 문단이 다른 항목들에 대해 말한 그 성질이 [18] 안에서도 성립한다).
  *
- * **정책이 하지 않는 것 — T6-A가 명시로 못 박는다.** 넷 다 "안 넣는 것"이 결정이다:
+ * **정책이 하지 않는 것** — 셋 다 "안 넣는 것"이 결정이다:
  *  · **위험 회피 없음.** 캐는 중·짐 진 중은 전투 불능(D5)인데도 이 팔은 전선이 무너져도
  *    채집꾼을 **부르지 않는다.** 근거: 비상 소집을 넣으면 봇이 사람보다 똑똑해져 봉투가
- *    상한을 못 잰다(§9-3 못 2와 같은 논지). 그 대가는 실측에 그대로 찍혀 있다 —
- *    판당 10.50명 사망 · 총액의 8~9%가 시체와 함께 사라진다. **그 손실을 포함한 507골드가
- *    이 팔이 잰 최대 수입**이고, 그래서 T6-C의 "위로 걸어 올리기"가 보수적인 자가 된다.
- *  · **칸 고르기에 위험도 안 본다.** 마을 유클리드 거리 하나로 고른다(§9-3 그대로).
- *    `BRAWL_BRUSH_RANGE` 안인지, 경로에서 몇 타일인지 따지지 않는다 — 그것도 사람의 지식이다.
- *  · **짐값(`value`)도 안 본다** (`minValue` 기본 0). 가까운 칸부터 턴다 = 탭당 값은 최악,
- *    시간당 값은 최선. 봉투가 겨냥하는 것은 후자다.
- *  · **웨이브 국면을 안 본다** — `prep`/`wave` 둘 다에서 돈다(E-15). prep은 90틱(3.0초)이라
- *    채집꾼의 최단 캐기(4.0초)보다도 짧아서, phase로 자르면 채집이 통째로 안 돈다.
- * ⚠ **결정론**: 이 팔에 `Math.random`도 시드 rng도 없다. 순서를 정하는 비교는 셋뿐이고
- *   전부 정수/열거다 — 개체는 `id` 오름차순, 칸은 `d2`(정수 제곱합) 오름차순 → `key` 오름차순.
- *   `Array.prototype.sort`가 불안정해도 결과가 같다(둘 다 전순서다).
+ *    상한을 못 잰다. 그 대가는 실측에 그대로 찍혀 있다 — 판당 10.50명 사망 ·
+ *    총액의 8~9%가 시체와 함께 사라진다.
+ *  · **칸 고르기에 손대지 않는다.** sim의 규칙(아군 기준 최근접 → 셀 키)이 전부다.
+ *    위험도, 짐값도, 웨이브 국면도 보지 않는다 — 그것들은 전부 사람의 지식이다.
+ *  · **`minValue` 손잡이를 지웠다.** 아무 일도 안 하는 손잡이를 남기면 다음 사람이
+ *    그것으로 실험한다.
+ * ⚠ **결정론**: 이 팔에 `Math.random`도 시드 rng도 없다. 남은 판정은 인원수 비교 하나다.
  *
  * ── ✅ **T6-A: 스텁은 끝났다 — 이 팔은 이제 진짜로 캔다** ─────────────────────
- * `src/sim/gather.ts`(T2)가 들어온 뒤 `sim.state.resources`가 40칸을 들고 오므로
- * `gatherStub === false`다 = `stepGatherStub`은 **한 줄도 안 돈다**. 아래 "지금은 스텁이다"
- * 문단은 **T0 시점의 기록**으로만 읽어라(값은 그때 잰 것이라 아직 맞다).
+ * `src/sim/gather.ts`(T2)가 들어온 뒤 `sim.state.resources`가 40칸을 들고 오므로 스텁
+ * (하네스가 짐·왕복을 위치로 흉내내던 코드)은 한 줄도 안 돌게 됐고, **규칙 8과 함께 지웠다.**
+ * 아래 표는 T6-A 시점의 실측이다.
  *
  * **T6-A 실측** (스테이지1 · 창 `base1` 블록1 20시드 · 별0 · 덱 spear+catapult+frost ·
  *  `DataPatch.gather = { baseValue: 6 }` 주입. 배포본 상수는 아직 0이다):
@@ -291,19 +297,18 @@ const REFRESH_MAX_PER_DECISION = 6;
  *    ⇒ 채집 수입의 **96%가 w1-20에 들어온다** — §0이 겨냥한 무일푼 구간과 같은 자리다.
  *  · 여유가 +0.6%p(기본) / +1.2%p(최강) 움직였다. T6-C의 걸어 올리기는 이 자를 쓴다.
  *
- * **T6-A가 고친 결함 하나** — `syncClaims`. 아래 함수 주석에 전문이 있다. 요지: 짐을 안 진
- * 채집꾼이 죽으면 `gather.ts`가 이벤트를 안 내므로 하네스의 예약 장부가 샜고, 그 칸이
- * 판 끝까지 좌초했다(텄음 **36.60/40** · 채집골드 456.70). 장부를 `AllyState.gatherKey`에서
- * 매번 다시 세우자 40.00/40 · 507.00이 됐다. **정책이 아니라 계측기의 버그였다.**
+ * ⚠ **위 표는 하네스가 개체를 직접 지시하던 시절(T6-A)의 값이다.** 규칙 8이 들어온 뒤로는
+ *   같은 팔이라도 sim 자동이 더 빠르게 돈다(외곽 루프 120틱 지연이 0이 되고, 배달 직후
+ *   **같은 틱**에 다시 나간다). 곧 배달/판·이탈틱은 위 값보다 커지는 쪽으로 움직인다 —
+ *   총액 상한(559.00 = s1 총액)만은 구조적으로 안 넘는다(`taken`이 단조라 한 칸 한 짐).
+ *   **다시 잰 값은 원장(`tests/sim/autoplay.test.ts`)이 들고 있다. 이 표는 기록이다.**
  *
- * ── ⚠⚠ (T0 시점의 기록) 그때는 **스텁**이었다 — 이 팔이 재는 것과 못 재는 것 ──
- * `src/sim/gather.ts`(T2)가 아직 없으므로 sim은 골드를 한 푼도 안 낸다. 그러므로:
- *  · **`gatherGold`는 구조적으로 0이다.** 0이 나오는 것이 정상이고, 그 사실 자체가
- *    "채집 팔이 켜졌는데도 수입이 0"이라는 T0의 확인 대상이다.
- *  · 짐/텄음/왕복은 **하네스가 위치로 흉내낸다**(`gatherStub === true`). 파는 시간(§1-2의
- *    8초 저울)은 모형에 **없다** — 도착 = 짐을 졌다로 친다. 곧 스텁의 왕복은 진짜보다
- *    **빠르다**. T2가 오면 `state.resources` · `AllyState.gatherKey/carryCount`가 그대로
- *    진실이 되고 이 흉내는 한 줄도 안 돈다(`gatherStub === false`).
+ * **T6-A가 고쳤던 결함 하나** — 옛 `syncClaims`. 짐을 안 진 채집꾼이 죽으면 `gather.ts`가
+ * 이벤트를 안 내므로 하네스의 예약 장부가 샜고, 그 칸이 판 끝까지 좌초했다
+ * (텄음 **36.60/40** · 채집골드 456.70). 장부를 `AllyState.gatherKey`에서 매번 다시 세우자
+ * 40.00/40 · 507.00이 됐다. **정책이 아니라 계측기의 버그였다.**
+ * ⇒ 규칙 8 뒤로는 그 장부 자체가 없다(예약은 전적으로 sim의 것이다). 같은 사고의 재발
+ *   여지가 **구조적으로 사라졌다** — 이 팔이 지운 코드가 산 것 중 가장 큰 것이 이것이다.
  *
  * ── ⚠⚠⚠ **주입 실험(§1-5-A)의 벽 600을 "상한"으로 읽지 마라** (§1-5-D 방법론 정정) ──
  * 수입 주입 실험은 **웨이브 경계마다 골드를 공짜로 꽂을 뿐이다.**
@@ -406,17 +411,11 @@ export interface GatherPolicy {
    *   그 팔에서 3 이상을 적으면 `trainAlly`가 조용히 false를 돌려줄 뿐이다.
    */
   count: number;
-  /** 이 값 미만인 칸은 무시 (기본 0 = 앞칸도 턴다. §9-3 못 3) */
-  minValue?: number;
-}
-
-/** 채집 후보 칸 하나 — `d2`는 마을까지의 **제곱** 거리(순위에만 쓰므로 제곱근이 필요 없다) */
-interface GatherCell {
-  readonly key: number;
-  readonly x: number;
-  readonly z: number;
-  readonly value: number;
-  readonly d2: number;
+  /**
+   * ⚠ **`minValue`는 지웠다** (규칙 8). 어느 칸을 캘지는 이제 sim이 정하므로 그 손잡이는
+   * 아무 일도 안 한다 — 남기면 다음 사람이 그것으로 실험하고, 안 움직이는 값을
+   * 정책 탓으로 읽는다. 같은 이유로 후보 칸 목록(`GatherCell`)도 통째로 사라졌다.
+   */
 }
 
 export interface BotOptions {
@@ -660,8 +659,8 @@ export interface BotResult {
   // ══ 채집 계측 (T0 신설. gather-spec §9-3 "하네스가 새로 인쇄해야 하는 계측") ══
   /**
    * 판당 **배달 골드** — 채집이 실제로 낸 수입. `gatherDelivered.gold` 의 합이다.
-   * ⚠ T2 전에는 **구조적으로 0**이다(sim이 지급하지 않는다). 0이 나오는 것이 정상이고,
-   *   그것을 확인하는 것이 T0의 산출물 하나다. `gatherStub`를 함께 읽어라.
+   * ⚠ 규칙 8 뒤로는 **명령 없이도** 이 값이 오른다(일꾼이 스스로 캔다). 그래도 아군이
+   *   0명인 판은 여전히 정확히 0이다 — 자동은 살아 있는 아군에게만 붙는다.
    */
   gatherGold: number;
   /** 등에 진 짐의 수 (칸을 텄다 = 짐 하나). 배달과 다르다 — 지고 죽으면 배달이 안 된다 */
@@ -672,7 +671,11 @@ export interface BotResult {
   gatherLostGold: number;
   /** 짐을 진 채 죽은 채집꾼 수 */
   gatherDeaths: number;
-  /** 이 판에서 **텄음**이 된 칸 수 (스테이지1은 40칸이 상한) */
+  /**
+   * 이 판에서 **텄음**이 된 칸 수 (스테이지1은 40칸이 상한).
+   * 규칙 8 뒤로는 `sim.state.resources`를 판 끝에 그대로 세어 온다 — `taken`이 단조라
+   * 최종 개수가 곧 누적 개수이고, 하네스가 장부를 따로 들 이유가 없다.
+   */
   takenCells: number;
   /**
    * 웨이브대별 배달 골드 — `[w1-10, w11-20, w21-30, w31-40, w41-50]`.
@@ -689,14 +692,12 @@ export interface BotResult {
   allyGatherTicks: number;
   /** sim이 낸 채집 이벤트 수 (`gatherStarted`/`gathered`/`gatherDelivered`/`gatherLost` 합) */
   gatherEvents: number;
-  /** 채집 정책이 실제로 낸 커맨드 수 (`trainAlly` + `moveAlly`) */
-  gatherCmds: number;
-  /**
-   * **이 판의 채집이 스텁이었는가.** `state.resources`가 비어 있으면 true =
-   * 짐·텄음·왕복을 하네스가 위치로 흉내낸 것이고 골드는 0이다.
-   * ⚠ 이 플래그가 true인 판의 `gatherGold`를 "채집 수입"으로 읽으면 **거짓말이 된다.**
+  /*
+   * ⚠ `gatherCmds`(정책이 낸 커맨드 수)와 `gatherStub`(스텁이었는가)는 **지웠다**(규칙 8).
+   *   전자는 이제 `trainAlly` 하나만 세므로 이름이 거짓말이 되고 `alliesTrained`가 이미
+   *   그 수다. 후자는 T2 이후 언제나 false였고 그 코드 경로가 통째로 사라졌다.
+   *   둘 다 원장 키가 아니라 지워도 봉투가 안 흔들린다(judge18은 이 둘을 안 읽는다).
    */
-  gatherStub: boolean;
 
   // ══ 커맨드/수입/무일푼 계측 (T0 신설. 전부 래핑뿐 — sim 동작을 한 줄도 안 바꾼다) ══
   /**
@@ -1246,7 +1247,6 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
   let gatherLostGold = 0;
   let gatherDeaths = 0;
   let gatherEvents = 0;
-  let gatherCmds = 0;
   let allyGatherTicks = 0;
   /** 웨이브대 5칸 — [w1-10, w11-20, w21-30, w31-40, w41-50] */
   const gatherGoldByBand = [0, 0, 0, 0, 0];
@@ -1354,7 +1354,14 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
   const allyAntiAir: AllyId[] = allyOrder.filter((id) => ALLY_DEFS[id].canTargetAir);
   let allyTurn = 0;
 
-  // ══ 채집 팔 (T0) — 정책 전문과 **스텁의 한계**는 GatherPolicy 주석에 있다 ══
+  // ══ 채집 팔 — 정책 전문은 GatherPolicy 주석에 있다 ══
+  //  ⚠ 규칙 8(sim 자동 채집)이 들어오면서 **이 블록의 8할이 사라졌다.** 지운 것:
+  //    후보 칸 목록(gatherCells) · 예약 장부(gatherClaim/gatherClaimed/gatherTaken) ·
+  //    귀환 장부(gatherHoming) · 스텁(gatherCarry/gatherCarryGold/stepGatherStub) ·
+  //    개체 지시 루프(nextGatherCell/sendHome/busyOf/carryOf/syncTaken/syncClaims).
+  //    전부 **도달 불가 코드**였다 — 외곽 루프가 120틱마다 깨어날 때 sim 자동이 이미
+  //    그 사람에게 일감을 붙여 놨기 때문이다(busyOf가 언제나 true). 남기면 다음 사람이
+  //    `18.*` 값을 없는 정책 탓으로 읽는다.
   const gatherPolicy = opts.gather;
   const gatherDefId: AllyId = gatherPolicy?.defId ?? 'gatherer';
   /**
@@ -1364,123 +1371,20 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
    */
   const gatherDef: AllyDef | undefined = ALLY_DEFS[gatherDefId];
   const gatherOn = gatherPolicy !== undefined && gatherDef !== undefined;
-  const gatherMinValue = gatherPolicy?.minValue ?? 0;
-  /** 짐 상한 (생략 = 1, 채집꾼 2. gather-spec D6) */
-  const gatherCarryCap = Math.max(1, gatherDef?.carryCap ?? 1);
-  /**
-   * sim이 자원 칸을 들고 있는가 (T2 이후). 비어 있으면 **스텁**이다 —
-   * 칸 목록은 `hasScenery`로, 짐값은 `gatherValueFor`로 하네스가 직접 만든다.
-   */
-  const liveResources: readonly ResourceCellState[] | undefined = sim.state.resources;
-  const gatherStub = !(liveResources !== undefined && liveResources.length > 0);
-  const gatherCells: GatherCell[] = [];
-  if (gatherOn) {
-    const bx = stage.baseCell.x;
-    const bz = stage.baseCell.z;
-    const push = (x: number, z: number, value: number): void => {
-      const dx = x - bx;
-      const dz = z - bz;
-      gatherCells.push({ key: z * stage.gridW + x, x, z, value, d2: dx * dx + dz * dz });
-    };
-    if (liveResources !== undefined && liveResources.length > 0) {
-      for (const c of liveResources) push(c.cellX, c.cellZ, c.value);
-    } else {
-      for (let z = 0; z < stage.gridH; z++) {
-        for (let x = 0; x < stage.gridW; x++) {
-          if (!sim.hasScenery(x, z)) continue;
-          const key = z * stage.gridW + x;
-          const kind = resourceKindOf(stage, key);
-          const dx = x - bx;
-          const dz = z - bz;
-          // ⚠ Math.hypot을 쓰지 않는다 — 짐값을 만드는 식이라 balance.gatherValueFor
-          //   주석의 규약(정밀도가 구현 정의인 함수는 골드 식에 안 쓴다)을 그대로 따른다.
-          push(x, z, gatherValueFor(GATHER_BASE_VALUE, RESOURCE_DEFS[kind].kindMul, Math.sqrt(dx * dx + dz * dz)));
-        }
-      }
-    }
-    // 마을에서 가까운 순, 동점이면 셀 키 오름차순 (§9-3의 고르는 법 그대로)
-    gatherCells.sort((a, b) => a.d2 - b.d2 || a.key - b.key);
-  }
-  /** allyId → 예약한 칸 */
-  const gatherClaim = new Map<number, GatherCell>();
-  /** 예약된 셀 키 — 예약은 **배타적**이다(둘을 같은 칸에 보내면 한 명이 헛걸음한다) */
-  const gatherClaimed = new Set<number>();
-  /** 텄음 셀 키 */
-  const gatherTaken = new Set<number>();
-  /** 마을로 보낸 사람 */
-  const gatherHoming = new Set<number>();
-  /** allyId → 진 짐 수 (스텁 전용) */
-  const gatherCarry = new Map<number, number>();
-  /** allyId → 진 짐값 합 (스텁 전용) */
-  const gatherCarryGold = new Map<number, number>();
-  /** 이 팔이 한 번이라도 명령을 낸 사람들 — 스텁의 한 걸음이 훑는 대상 */
-  const gatherIds = new Set<number>();
-
-  /** sim이 진짜 자원 칸을 들고 있으면 텄음을 그쪽에서 받아 온다 */
-  const syncTaken = (): void => {
-    if (gatherStub || liveResources === undefined) return;
-    for (const c of liveResources) if (c.taken) gatherTaken.add(c.cellZ * stage.gridW + c.cellX);
-  };
-  /**
-   * **예약 장부를 진실에서 다시 세운다** (진짜 sim 전용. T6-A 신설).
-   *
-   * 왜 지우고 다시 채우는가 — 누적 장부는 **새는 것이 정상이기 때문이다.** 짐을 안 진
-   * 채집꾼이 칸으로 걸어가다(또는 캐다) 죽으면 `gather.ts`의 ①은 `gatherLost`를 **안 낸다**:
-   * 그 이벤트 가드가 `carryCount > 0`이다. 그러면 죽은 사람이 들고 있던 칸이 하네스의
-   * `gatherClaimed`에 영영 남고, `nextGatherCell`이 그 칸을 **판이 끝날 때까지 건너뛴다.**
-   * 실측(T6-A 전): 스테이지1 40칸 중 판당 **3.4칸**이 그렇게 좌초했다(텄음 36.60/40).
-   * 이 팔이 재야 하는 것은 사람이 할 법한 선택이 아니라 **최대 수입**이므로(§9-3 못 3)
-   * 좌초분은 게임의 성질이 아니라 **계측기의 손실**이다.
-   *
-   * 진실은 `AllyState.gatherKey` 하나뿐이다(gather.ts 계약 A: 그 필드를 0 이상으로 만드는
-   * 코드가 `setGatherTarget` 하나뿐이라 sim의 장부가 언제나 옳다). 그래서 판정마다 거기서
-   * 다시 만든다 — 사망·취소·`cmdClearScenery`가 무엇을 하든 장부가 저절로 맞는다.
-   * 한 판정 **안에서** 방금 낸 명령은 루프가 직접 더한다(같은 칸에 둘을 안 보내려고).
-   */
-  const syncClaims = (st: typeof sim.state): void => {
-    if (gatherStub) return;
-    gatherClaimed.clear();
-    for (const a of st.allies) {
-      const k = a.gatherKey ?? -1;
-      if (a.alive && k >= 0) gatherClaimed.add(k);
-    }
-  };
-  const carryOf = (a: { id: number; carryCount: number }): number =>
-    gatherStub ? (gatherCarry.get(a.id) ?? 0) : (a.carryCount ?? 0);
-  /** 지금 채집 심부름 중인가 — 스텁은 예약으로, 진짜는 `gatherKey`로 판정한다 */
-  const busyOf = (a: { id: number; gatherKey: number }): boolean =>
-    gatherStub ? gatherClaim.has(a.id) || gatherHoming.has(a.id) : (a.gatherKey ?? -1) >= 0;
-  const nextGatherCell = (): GatherCell | undefined => {
-    for (const c of gatherCells) {
-      if (c.value < gatherMinValue) continue;
-      if (gatherTaken.has(c.key) || gatherClaimed.has(c.key)) continue;
-      return c;
-    }
-    return undefined;
-  };
-  const sendHome = (id: number): void => {
-    if (gatherHoming.has(id)) return; // 이미 보냈다 — 같은 명령을 반복하면 이벤트만 쌓인다
-    gatherHoming.add(id);
-    if (cmd({ type: 'moveAlly', allyId: id, cellX: stage.baseCell.x, cellZ: stage.baseCell.z })) {
-      gatherCmds++;
-      gatherIds.add(id);
-    } else {
-      gatherHoming.delete(id);
-    }
-  };
 
   /**
    * 채집 판정 — **외곽 루프(120틱)에 얹는다**(§9-3). prep 전용이 아니다:
    * prep은 90틱(3.0초)이라 채집꾼의 최단 캐기(4.0초)보다도 짧아서, phase를 보면
    * 채집이 통째로 웨이브 길이에 결합된다(§4-8 E-15).
+   *
+   * 규칙 8 뒤로 이 함수가 하는 일은 **인원 유지 하나뿐**이다. 캘 칸을 고르고 마을로
+   * 돌려보내는 것은 전부 sim이 한다 — 그리고 그것이 배포본 게임이다.
    */
   const stepGather = (): void => {
     if (!gatherOn || gatherPolicy === undefined) return;
     const st = sim.state;
     if (st.phase !== 'wave' && st.phase !== 'prep') return;
-    syncTaken();
-    syncClaims(st);
-    // 1) 인원 유지. ⚠ `trainAlly`가 false면 **재시도하지 않는다** — 정원이 막은 것이고
+    // 인원 유지. ⚠ `trainAlly`가 false면 **재시도하지 않는다** — 정원이 막은 것이고
     //    (STRONG_BOT 팔은 Lv1이라 정원 2다) 같은 루프에서 다시 눌러도 같은 false가 온다.
     let alive = 0;
     for (const a of st.allies) if (a.alive && a.defId === gatherDefId) alive++;
@@ -1490,98 +1394,11 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
         // 채집꾼도 부족원이다 — goldAllies에 안 넣으면 goldEarned 항등식이 어긋난다
         goldAllies += cost;
         alliesTrained++;
-        gatherCmds++;
-      }
-    }
-    // 2) 개체별 지시 — **id 오름차순**(§9-3). 순서를 정하지 않으면 같은 판이 두 번 다르게 돈다
-    const mine = st.allies.filter((a) => a.alive && a.defId === gatherDefId).sort((a, b) => a.id - b.id);
-    for (const a of mine) {
-      if (busyOf(a)) continue;
-      if (carryOf(a) >= gatherCarryCap) {
-        sendHome(a.id); // 가득 찼다 (D6: sim이 자동 귀환시킨다 — 봇은 그 뜻을 따라간다)
-        continue;
-      }
-      const c = nextGatherCell();
-      if (c === undefined) {
-        // 3) 더 캘 칸이 없다 — 짐이 남았으면 마을로 (§4-8 E-18. 안 그러면 마지막 한 짐이
-        //    영영 안 들어와 총액 항등식 `18.rateCap`이 어긋난다)
-        if (carryOf(a) > 0) sendHome(a.id);
-        continue;
-      }
-      gatherClaimed.add(c.key);
-      gatherClaim.set(a.id, c);
-      gatherHoming.delete(a.id);
-      if (cmd({ type: 'moveAlly', allyId: a.id, cellX: c.x, cellZ: c.z })) {
-        gatherCmds++;
-        gatherIds.add(a.id);
-      } else {
-        gatherClaimed.delete(c.key);
-        gatherClaim.delete(a.id);
       }
     }
   };
 
-  /**
-   * **스텁의 한 걸음** — sim이 채집을 모르는 동안 짐·텄음·왕복을 **위치로** 흉내낸다.
-   * ⚠ 파는 시간(§1-2의 8초 저울)이 모형에 **없다**: 도착 = 짐을 졌다로 친다. 곧 스텁의
-   *   왕복은 진짜보다 빠르고, 이 팔이 실제로 재는 것은 "채집이 봉투를 얼마나 미는가"가
-   *   아니라 **"봇이 채집 명령을 정말로 내고 있는가"** 뿐이다.
-   *   T2가 오면 `gatherStub`가 false가 되어 이 함수는 **한 줄도 안 돈다**.
-   */
-  const stepGatherStub = (): void => {
-    if (gatherIds.size === 0) return;
-    const st = sim.state;
-    for (const id of gatherIds) {
-      let me: (typeof st.allies)[number] | undefined;
-      for (const x of st.allies) {
-        if (x.id === id) {
-          me = x;
-          break;
-        }
-      }
-      if (me === undefined || !me.alive) {
-        // 짐을 진 채 죽었다 — 지고 있던 짐값이 그대로 손실이다 (§8-4 ③)
-        if ((gatherCarry.get(id) ?? 0) > 0) {
-          gatherDeaths++;
-          gatherLostGold += gatherCarryGold.get(id) ?? 0;
-        }
-        const held = gatherClaim.get(id);
-        if (held) gatherClaimed.delete(held.key);
-        gatherClaim.delete(id);
-        gatherCarry.delete(id);
-        gatherCarryGold.delete(id);
-        gatherHoming.delete(id);
-        gatherIds.delete(id);
-        continue;
-      }
-      if (gatherClaim.has(id) || gatherHoming.has(id)) allyGatherTicks++;
-      const dx = me.x - me.tgtX;
-      const dz = me.z - me.tgtZ;
-      if (dx * dx + dz * dz > ARRIVE_EPS2) continue; // 아직 걷는 중
-      const c = gatherClaim.get(id);
-      if (c !== undefined && Math.round(me.tgtX) === c.x && Math.round(me.tgtZ) === c.z) {
-        gatherTaken.add(c.key);
-        gatherClaimed.delete(c.key);
-        gatherClaim.delete(id);
-        gatherLoads++;
-        gatherCarry.set(id, (gatherCarry.get(id) ?? 0) + 1);
-        gatherCarryGold.set(id, (gatherCarryGold.get(id) ?? 0) + c.value);
-      } else if (gatherHoming.has(id)) {
-        gatherHoming.delete(id);
-        if ((gatherCarry.get(id) ?? 0) > 0) {
-          const g = gatherCarryGold.get(id) ?? 0;
-          gatherDeliveries++;
-          gatherGold += g; // ⚠ 스텁에서 이 값은 **언제나 0**이다 (sim이 지급하지 않는다)
-          const b = bandOf(st.waveIndex);
-          gatherGoldByBand[b] = (gatherGoldByBand[b] ?? 0) + g;
-        }
-        gatherCarry.set(id, 0);
-        gatherCarryGold.set(id, 0);
-      }
-    }
-  };
-
-  /** 진짜 sim이 채집을 아는 경우의 틱 계측 — 상태는 sim이 들고 있으므로 세기만 한다 */
+  /** 채집 이탈 시간 계측 — 상태는 sim이 들고 있으므로 **세기만 한다** */
   const stepGatherTicks = (): void => {
     for (const a of sim.state.allies) {
       if (!a.alive || a.defId !== gatherDefId) continue;
@@ -1787,14 +1604,13 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       gatherGold += ev.gold;
       const b = bandOf(waveNow);
       gatherGoldByBand[b] = (gatherGoldByBand[b] ?? 0) + ev.gold;
-      gatherHoming.delete(ev.allyId);
       return;
     }
     if (ev.type === 'gathered') {
       gatherEvents++;
       gatherLoads++;
-      gatherTaken.add(ev.cellZ * stage.gridW + ev.cellX);
-      gatherClaimed.delete(ev.cellZ * stage.gridW + ev.cellX);
+      // ⚠ 텄음 칸은 여기서 안 센다 — 판 끝에 `sim.state.resources`를 세면 그만이다
+      //   (`taken`이 단조라 최종 개수 = 누적 개수. 하네스가 장부를 들면 그것이 또 샌다).
       return;
     }
     if (ev.type === 'gatherStarted') {
@@ -1806,9 +1622,6 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       if (ev.reason === 'died') {
         gatherDeaths++;
         gatherLostGold += ev.gold;
-      }
-      if (ev.reason === 'moved' || ev.reason === 'cleared' || ev.reason === 'died') {
-        gatherClaimed.delete(ev.cellZ * stage.gridW + ev.cellX);
       }
       return;
     }
@@ -1909,12 +1722,8 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       // 아군만 외곽 루프가 아니라 틱 루프 안에서 본다 — 한 판정이 한 명만 뽑으므로
       // 4초마다 보면 정원을 채우는 데 여러 웨이브가 걸린다 (ALLY_DECIDE_INTERVAL 주석)
       if (allyPolicy && i % ALLY_DECIDE_INTERVAL === 0) stepAllies();
-      // 채집의 틱 쪽 — 스텁이면 짐/왕복을 흉내내고, 진짜 sim이면 세기만 한다.
-      // 어느 쪽도 sim을 **한 번도 부르지 않는다**(읽기만 한다).
-      if (gatherOn) {
-        if (gatherStub) stepGatherStub();
-        else stepGatherTicks();
-      }
+      // 채집의 틱 쪽 — **세기만 한다.** sim을 한 번도 부르지 않는다(읽기만 한다).
+      if (gatherOn) stepGatherTicks();
       // 계측 훅이 있을 때만 **매 틱** 비운다 — 웨이브 번호를 사건과 같은 틱에서 읽어야
       // "몇 번째 웨이브에서 맞았나"가 성립하기 때문이다. 훅이 없으면 한 줄도 안 돈다.
       if (onEvent) {
@@ -1961,12 +1770,10 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     gatherDeliveries,
     gatherLostGold,
     gatherDeaths,
-    takenCells: gatherTaken.size,
+    takenCells: sim.state.resources.filter((c) => c.taken).length,
     gatherGoldByBand,
     allyGatherTicks,
     gatherEvents,
-    gatherCmds,
-    gatherStub: gatherOn ? gatherStub : false,
     cmdCounts: Object.fromEntries([...cmdCounts.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))),
     cmdTotal,
     goldFromCommands,

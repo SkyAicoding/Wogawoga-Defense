@@ -290,7 +290,11 @@ export class BattleController {
     input.events.on('dragStart', (i) => {
       lastDragX = i.x;
       lastDragY = i.y;
-      // 버튼/수정키는 pointerdown 시점에 래치된 값 — 드래그 도중 모드가 바뀌지 않는다
+      // 버튼/수정키는 pointerdown 시점에 래치된 값 — 드래그 도중 모드가 바뀌지 않는다.
+      // ⚠ **우클릭이 명령이 된 뒤에도 이 줄은 그대로다**(10단계). 우버튼의 두 뜻은
+      //   `core/input.ts onUp`이 분기 하나로 갈라 놓는다: 임계값을 넘겼으면 dragEnd(=여기,
+      //   궤도 회전)이고, 안 넘겼으면 contextTap(= placement의 명령)이다. 곧 한 제스처가
+      //   양쪽으로 가는 일이 없다 — 여기서 `button === 2`를 빼면 화면을 못 돌리게 된다.
       orbitDrag = i.button === 2 || i.shiftKey;
     });
     input.events.on('drag', (i) => {

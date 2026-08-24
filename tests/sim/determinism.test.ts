@@ -215,6 +215,16 @@ function runRaid(seed: number): { hashes: number[]; destroyed: number; silenced:
  *  · 전원 이동(allyId −1)과 개별 지정(allyId ≥ 0)은 **다른 분기**다. 둘 다 밟는다.
  *  · 앞으로 보냈다 뒤로 물리면 좌표는 왕복하지만 walked는 단조 증가한다 — 그 비대칭이
  *    해시에 남는지가 여기서 갈린다(렌더의 보행 위상이 그 값에 걸려 있다).
+ *
+ * ── 규칙 8: `autoHold`도 이 스크립트가 밟는다 ───────────────────────────────
+ * 자동 행동 스위치는 **위치에서 유도되지 않는 비트**라 hash()가 따로 접어야 한다.
+ * 이 스크립트는 세 값을 다 지나간다:
+ *  · t=20·150 — **빈 칸**(3,2)·(5,2) 명령 = `autoHold` **true**("여기 지켜")
+ *  · t=1000   — **기지 셀** 명령 = 다시 **false**(자동 켜짐). 이 한 줄이 없으면 스크립트가
+ *    비트를 한 방향으로만 밀어 "true로 굳는 회귀"를 못 잡는다
+ *  · t=300 이후에 뽑힌 부족원 — 명령을 한 번도 안 받아 기본값 **false**
+ * (이 판의 아군 셋은 전부 `gatherPct` 기본값 100이라 **일꾼이 아니다** — 곧 비트만 갈리고
+ *  행동은 한 글자도 안 바뀐다. 해시가 그 비트를 정말 접는지만 순수하게 잰다.)
  */
 const ALLY_SCRIPT: [number, BattleCommand][] = [
   [2, { type: 'placeTower', handIndex: 0, cellX: 4, cellZ: 1 }],
@@ -227,6 +237,9 @@ const ALLY_SCRIPT: [number, BattleCommand][] = [
   [300, { type: 'trainAlly', defId: 'clubber' }],
   [560, { type: 'trainAlly', defId: 'clubber' }], // 앞선 유닛이 빠진 자리에 보충
   [900, { type: 'trainAlly', defId: 'guardian' }],
+  // 규칙 8-b) 기지 셀 = "돌아와서 내려놓고 다시 일해" — autoHold를 false로 되돌리는 유일한
+  // 칸이다. 비트가 한 방향으로만 움직이면 해시 커버리지가 반쪽이다 (위 머리말 참조).
+  [1000, { type: 'moveAlly', allyId: -1, cellX: 9, cellZ: 2 }],
 ];
 
 /**
@@ -850,6 +863,32 @@ describe('결정론', () => {
       obj[f] = (obj[f] ?? 0) + 1;
       expect(sim.hash(), `${f}가 해시에 없다`).not.toBe(h0);
     }
+  });
+
+  /**
+   * 규칙 8) 자동 행동 스위치가 hash()에 들어가는지.
+   *
+   * **위치로 유도되지 않는 유일한 비트**다: 같은 자리에 같은 짐으로 서 있어도 이 값이
+   * 다르면 다음 틱에 일하러 가느냐 서 있느냐가 갈린다. 그리고 `entities.resetAlly`가
+   * 이 필드를 안 지우는 회귀는 **여기가 접혀 있을 때만** 결정론 검사에 걸린다.
+   */
+  it('자동 행동 스위치(autoHold)가 hash()에 들어간다', () => {
+    const sim = createBattle(
+      options({
+        seed: 5,
+        deck: ['spear'],
+        stage: stageDef({ startGold: 100000 }),
+        allyDefs: allyDefs({ gatherer: { speed: 1.3, blocks: false, gatherPct: 300, carryCap: 2 } }),
+        waves: [wave([{ count: 0 }])],
+      }),
+      { gatherBaseValue: 6 },
+    );
+    expect(sim.applyCommand({ type: 'trainAlly', defId: 'gatherer' })).toBe(true);
+    const a = sim.state.allies[0];
+    expect(a, '관측할 아군이 있다').toBeDefined();
+    const h0 = sim.hash();
+    (a as { autoHold: boolean }).autoHold = true;
+    expect(sim.hash(), 'autoHold가 해시에 없다').not.toBe(h0);
   });
 
   /**
