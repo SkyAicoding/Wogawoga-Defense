@@ -481,6 +481,8 @@ describe('isGathering — 상태를 저장하지 않고 유도한다 (§3-4)', (
     gatherTicks: 0,
     carryGold: 0,
     carryCount: 0,
+    // 규칙 8) 자동 행동 — false = 자동 켜짐(기본). 이 파일은 흔들 일이 없다
+    autoHold: false,
     alive: true,
   };
 

@@ -26,6 +26,7 @@ import {
 } from '@/data';
 import { gatherTicksFor, isGathering } from '@/data/resources';
 import type { Screen } from '@/core/fsm';
+import { isCoarsePointer } from '@/core/device';
 import { h, cls, fmt, mount, unmount, uiRoot, setText } from '../dom';
 import { t } from '../i18n';
 import {
@@ -284,11 +285,16 @@ export function createBattleHud(): Screen<GameFacade> {
     Math.round(((ALLY_DEFS[defId].gatherPct ?? 100) / 100) * 10) / 10;
 
   /**
-   * 세 종이 공유하는 규칙 한 줄 (이동 명령·영구·정원).
+   * 네 종이 공유하는 규칙 한 줄 (조작·자동 행동·정원).
    * 9단계: 수명과 환급이 사라져 문구 셋 중 둘이 통째로 바뀌었다. 정원은 이제 상수가
    * 아니라 **지금 마을 레벨의 값**이라 sim에서 읽는다 — 레벨을 올리면 이 줄이 따라 바뀐다.
+   *
+   * 10단계: 조작이 기기마다 갈려(마우스 = 좌 선택·우 명령 / 터치 = 탭 하나) 앞 조각을
+   * `isCoarsePointer`로 고른다. 뒤 조각(자동 행동)은 **양쪽이 같다** — 규칙은 sim에 있고
+   * 입력 기기와 무관하기 때문이다. 그래서 문자열도 갈라 두고 여기서 잇는다.
    */
-  const allyRules = (cap: number = ALLY_MAX_ACTIVE): string => t('battle.ally.rules', { m: cap });
+  const allyRules = (cap: number = ALLY_MAX_ACTIVE): string =>
+    `${t(isCoarsePointer ? 'battle.ally.rulesTouch' : 'battle.ally.rulesMouse', { m: cap })} · ${t('battle.ally.rulesAuto')}`;
   /** 규칙 줄 DOM — 정원이 마을 레벨을 따라 바뀌므로 update()가 다시 쓴다 */
   let allyRulesEl!: HTMLElement;
   let lastAllyRulesCap = -1;
@@ -766,7 +772,9 @@ export function createBattleHud(): Screen<GameFacade> {
         s.waveIndex === 1 &&
         facade.profile.data.stats.wavesCleared === 0
       ) {
-        hintShown = showHintBanner(t('battle.hint.gather'));
+        hintShown = showHintBanner(
+          t(isCoarsePointer ? 'battle.hint.gatherTouch' : 'battle.hint.gatherMouse'),
+        );
       }
 
       // 상단 숫자
@@ -1037,13 +1045,17 @@ export function createBattleHud(): Screen<GameFacade> {
         // 채집 인원·짐도 같은 서명에 접는다 — 셋 중 하나라도 바뀌면 줄을 다시 쓴다
         let gathering = 0;
         let carrying = 0;
+        // 대기 인원 — 자동이 꺼진 사람 수. 판 위의 말뚝(healthbars kind 8)과 같은 사실을
+        // 숫자로도 말한다: 표식을 놓치면 "왜 다들 노나"의 답이 화면 어디에도 없다.
+        let holding = 0;
         for (const a of s.allies) {
           if (!a.alive) continue;
           if (a.gatherKey >= 0) gathering++;
+          if (a.autoHold) holding++;
           carrying += a.carryCount;
         }
         const headCount = `${s.allies.length}/${s.allyCap}`;
-        const allySig = `${headCount}|${gathering}|${carrying}`;
+        const allySig = `${headCount}|${gathering}|${carrying}|${holding}`;
         if (allySig !== lastAllySig) {
           lastAllySig = allySig;
           setText(allyCountEl, headCount);
@@ -1057,6 +1069,7 @@ export function createBattleHud(): Screen<GameFacade> {
           const parts: string[] = [];
           if (gathering > 0) parts.push(t('battle.ally.gathering', { n: gathering }));
           if (carrying > 0) parts.push(t('battle.ally.carrying', { c: carrying }));
+          if (holding > 0) parts.push(t('battle.ally.holding', { n: holding }));
           setText(allyGatherEl, parts.join(' · '));
           for (const btn of allyBtns) setText(btn.costLabel, fmt(b.sim.allyCost(btn.defId)));
         }

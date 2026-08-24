@@ -48,6 +48,7 @@ import {
   sweepDeadAllies,
   trainAlly,
   updateAllies,
+  updateAllyAuto,
 } from './allies';
 import { recomputeBuffs, updateProjectiles, updateTowers } from './attack';
 import { addGold, leakEnemy } from './combat';
@@ -243,6 +244,13 @@ class Battle implements BattleSim {
     //  대가 하나: 여기는 updateTowers(7)·updateProjectiles(8) **뒤**라 배달 골드는
     //  **다음 틱**부터 쓸 수 있다. 커맨드는 틱 경계에 적용되므로 손에는 차이가 없다(1/30초).
     updateGather(ctx);
+    // 8-c) 자동 행동 — 명령 없는 일꾼이 다음 칸/마을을 스스로 잡는다 (allies.ts 규칙 8).
+    //   8-b 뒤인 이유: 같은 틱의 배달을 읽어 "마을에 들어와 놓고 다시 나간다"가 지연 없이
+    //   일어난다(updateGather ③이 배달 직후 tgt를 지금 위치로 박으므로 여기서는
+    //   "도착해 있고 빈손"으로 읽힌다). 9 앞인 이유: 자동은 산 사람만 보므로 시체가 배열에
+    //   있어도 상관없고, 읽는 순서가 채집 바로 옆인 편이 규칙을 읽는 순서와 같다.
+    //   ⚠ 이 단계는 이벤트를 한 건도 안 낸다 — 자동은 연출이 아니다.
+    updateAllyAuto(ctx);
     // 9) 사망 처리 (이벤트는 피해/귀환 시점에 발생, 여기서는 회수만)
     for (let i = enemies.length - 1; i >= 0; i--) {
       if (!(enemies[i] as EnemySim).alive) ctx.world.removeEnemyAt(i);
@@ -543,6 +551,9 @@ class Battle implements BattleSim {
       h = mix(h, a.carryGold);
       h = mix(h, a.carryCount);
       h = mix(h, a.gatherHpMark);
+      // 자동 행동 — **유도되지 않는다.** 같은 자리에 같은 짐으로 서 있어도 이 비트가
+      // 다르면 다음 틱에 일하러 가느냐 서 있느냐가 갈린다. resetAlly 누락도 여기서 드러난다.
+      h = mix(h, a.autoHold ? 1 : 0);
     }
     for (const t of ctx.world.towers.items) {
       h = mix(h, t.id);

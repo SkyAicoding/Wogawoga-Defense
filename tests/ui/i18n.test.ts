@@ -57,7 +57,14 @@ describe('i18n 문자열', () => {
     }
     // (6단계에서 '출동 안내 패널'이 마을 패널에 흡수돼 battle.ally.infoTitle은 사라졌다 —
     //  같은 정보는 마을 패널의 ally-info-row 세 줄이 그대로 띄운다)
-    for (const k of ['battle.ally.title', 'battle.ally.rules']) {
+    // 10단계: 조작이 기기마다 갈려(마우스 = 좌 선택·우 명령 / 터치 = 탭 하나)
+    // 규칙 줄이 셋으로 나뉘었다 — **세 개가 다 있어야** 어느 기기에서도 안내가 빈칸이 아니다.
+    for (const k of [
+      'battle.ally.title',
+      'battle.ally.rulesMouse',
+      'battle.ally.rulesTouch',
+      'battle.ally.rulesAuto',
+    ]) {
       expect(ko[k], `ko.${k}`).toBeTruthy();
       expect(en[k], `en.${k}`).toBeTruthy();
     }

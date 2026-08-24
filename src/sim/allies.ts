@@ -90,6 +90,36 @@
  * 7) **아군에게는 상태이상이 없다.** 적에게 상태 부여 능력이 없으므로 받을 일이 없고,
  *    없는 쪽이 규칙이 하나 적다. 아군은 타워 스플래시/오라에도 맞지 않는다(아군 오사 없음).
  *
+ * 8) **자동 행동 — 일꾼만 스스로 일하러 간다.** (사용자 항목 2·4)
+ *    명령이 없는 **일꾼**(gatherPct ≥ ALLY_WORKER_GATHER_PCT = 채집꾼 하나)은 매 틱
+ *    `updateAllyAuto`에서 **가장 가까운 안 텄고 미예약인 자원 칸**을 스스로 잡는다.
+ *    짐이 차면 마을로 가 내려놓고 **같은 틱에 다시 다음 칸을 잡는다**("들어와 놓고 다시 나간다").
+ *
+ *    ⚠ **전투 3종에게는 자동 이동이 없다. 한 글자도 안 바뀐다.**
+ *    "명령이 없으면 주변의 적과 교전한다"는 규칙 6이 **이미 하고 있는 일**이고,
+ *    교전 반경은 이미 `def.range`다. 여기에 접근 리시를 더하지 않는 근거 넷:
+ *      ① **적이 알아서 온다.** 이 게임의 적은 예외 없이 마을로 걷는다(규칙 6 마지막 문단이
+ *         "적이 아군을 찾아다니는 행동"을 금지한 것과 대칭이다) — 찾아 나설 대상이
+ *         구조적으로 없다. 서 있으면 전선이 자기 발밑으로 온다.
+ *      ② **돌아올 자리를 저장할 데가 없다.** 앵커는 `tgtX/tgtZ`이거나 새 float 둘인데,
+ *         자동이 tgt를 덮어쓰면 **화면의 목표 표식이 거짓말을 시작한다**(gather-spec E-11이
+ *         자동 후퇴를 금지한 것과 같은 이유).
+ *      ③ **리시 0이면 아군은 절대 스폰 쪽으로 걷지 않는다** — 봉투 [12]("입구 요격은
+ *         봇이 명령해야만 일어난다")의 전제가 코드 수준에서 유지된다.
+ *      ④ 자동 접근은 아군을 일방적으로 강화해 [7][10][13][12] 문턱을 전부 위험한 쪽으로
+ *         민다. 문턱을 어느 방향으로도 못 내리는 이 저장소에서 그건 기능이 아니라 부채다.
+ *    ⇒ 채집꾼도 자동으로 싸우러 가지 않는다(dmg 3 · blocks false — 전력이 아니다).
+ *
+ * 8-b) **수동 우선 + "여기 지켜".** 사람이 찍은 칸의 뜻이 자동의 온오프를 겸한다:
+ *    자원 칸 · 살아 있는 적이 선 칸 · **기지 셀**은 "일감"이라 자동을 **켠 채로 둔다**
+ *    (그 일이 끝나면 다음 일을 스스로 찾는다 = 사용자 항목 4).
+ *    그 밖의 **빈 칸**을 찍으면 `autoHold = true` — 거기 서서 대기한다. "여기 지켜"를
+ *    표현할 수 있는 유일한 방법이라 빈 칸에 그 뜻을 준다. 다시 자동을 켜려면
+ *    **기지 셀을 찍는다**("돌아와서 내려놓고 다시 일해" = 사용자 항목 4 그 문장이다).
+ *    대가: "기지 셀에 세워 두고 지키기"는 표현할 수 없게 된다 — 그 칸은 홈타운이 스스로
+ *    쏘고 집결 지점이 이미 그 앞이라, 잃는 것이 가장 작은 칸이라서 여기를 골랐다
+ *    (마을 앞을 지키고 싶으면 **인접 칸**을 찍으면 된다 = 빈 칸 = HOLD).
+ *
  * ── 교착(스톨) 안전성 ──────────────────────────────────────────────────────
  * 봉쇄는 웨이브 완료 조건(전원 스폰 + 생존 0)을 막을 수 있다. **수명이 사라져 근거가
  * 하나 바뀌었다** — 8단계에는 "아군의 수명은 유한하다"가 근거였다. 지금의 근거:
@@ -103,12 +133,13 @@
  * three/DOM 임포트 금지.
  */
 import { TICK_DT } from '@/data/types';
-import type { AllyDef, AllyId } from '@/data/types';
+import type { AllyDef, AllyId, ResourceCellState } from '@/data/types';
 import {
   ALLY_BLOCK_CAPACITY,
   ALLY_MUSTER_COLS,
   ALLY_MUSTER_FORWARD,
   ALLY_MUSTER_SPACING,
+  ALLY_WORKER_GATHER_PCT,
   BRAWL_BRUSH_RANGE,
   BRAWL_COOLDOWN_TICKS,
   allyCostFor,
@@ -228,10 +259,35 @@ export function trainAlly(ctx: SimCtx, defId: AllyId): boolean {
  * 한 글자도 안 바뀌었고 **도착지에 뜻이 하나 붙었을 뿐**이다. 그래서 새 커맨드를
  * 만들지 않았다 — 커맨드 유니온이 안 늘어 determinism SCRIPT와 e2e 훅이 그대로다.
  *
- * ⚠ **이 함수 안의 `setGatherTarget` 한 줄이 `gatherKey`를 0 이상으로 만드는 유일한
- *   코드 경로다**(계약 A: "탭이 없으면 코인도 없다"). `trainAlly`의 집결 이동은
- *   `a.tgtX/tgtZ`를 직접 대입하므로 이 통로를 안 탄다 — 그것이 방치 수입 0의 방벽이다.
+ * ⚠ `gatherKey`를 0 이상으로 만드는 코드 경로는 **둘이다** — 여기와 `updateAllyAuto`
+ *   (규칙 8). 계약 A("탭이 없으면 코인도 없다")는 규칙 8과 함께 **철회됐고**, 방치 수입
+ *   0의 근거는 이제 **"사람이 없으면"** 이다: 두 통로 모두 살아 있는 아군을 순회하므로
+ *   `trainAlly`를 한 번도 안 낸 판은 순회가 0번 돈다. `trainAlly`의 집결 이동이
+ *   `a.tgtX/tgtZ`를 직접 대입해 이 통로를 안 타는 것은 그대로다.
+ *
+ * ── 자동 온오프 (규칙 8-b) ─────────────────────────────────────────────────
+ * **명령이 곧 자동의 온오프다.** 찍은 칸이 일감(자원 칸 · 살아 있는 적이 선 칸 ·
+ * 기지 셀)이면 `autoHold = false`로 두고, 그 밖의 빈 칸이면 `true`("여기 지켜")다.
+ * 판정은 **명령 시점에 한 번만** 하고 표적을 저장하지 않는다 — 저장하면 sim이 매 틱
+ * tgt를 적에게 다시 박아야 하고 그러면 화면의 목표 표식이 거짓말을 시작한다(E-11).
+ * 여기서 정하는 것은 "이 명령이 일감이었나"(= 끝나면 자동으로 돌아가나)뿐이고,
+ * 누구를 치느냐는 규칙 6이 이미 정한다(그 칸에 도착하면 사거리 안의 적을 친다).
  */
+/**
+ * 규칙 8-b) 지금 이 셀 위에 **살아 있는 적이 서 있는가** — 명령 시점에 **한 번만** 본다.
+ *
+ * 반올림한 셀끼리의 정수 비교다(부동소수 동점 없음). 멤버십 검사뿐이라 `items` 순회
+ * 순서에 결과가 안 걸린다(계약 B). 격자 밖/소수 좌표면 `Math.round(e.x)`가 정수라
+ * 구조적으로 false다 — 따로 가드가 필요 없다.
+ */
+function enemyOnCell(ctx: SimCtx, cellX: number, cellZ: number): boolean {
+  for (const e of ctx.world.enemies.items) {
+    if (!e.alive) continue;
+    if (Math.round(e.x) === cellX && Math.round(e.z) === cellZ) return true;
+  }
+  return false;
+}
+
 export function moveAlly(
   ctx: SimCtx,
   allyId: number,
@@ -255,6 +311,13 @@ export function moveAlly(
   const key = onCell ? cellZ * stage.gridW + cellX : -1;
   const cell = key >= 0 ? ctx.resources.at(key) : null;
   const isResource = cell !== null && !cell.taken;
+
+  // ── ①-b 자동 행동 스위치 (규칙 8-b) — 판정은 대상과 무관하므로 루프 밖에서 한 번 ──
+  //  일감이면 자동을 켠 채로 둔다("끝나면 다음 일" — 사용자 항목 4).
+  //  일감이 아니면(= 빈 칸) 그것이 "여기 지켜"이고, 그 표현 수단은 이것 하나뿐이다.
+  const base = stage.baseCell;
+  const isBase = onCell && cellX === base.x && cellZ === base.z;
+  const hold = !(isResource || isBase || enemyOnCell(ctx, cellX, cellZ));
 
   // ── ② 대상 목록 — id 오름차순 (풀 순서 의존 금지, 계약 B) ───────────────────
   fillAliveAllyIds(ctx.world.allies.items, orderOrder);
@@ -327,6 +390,9 @@ export function moveAlly(
     } else if (defId !== undefined && a.defId !== defId) continue;
     a.tgtX = cellX;
     a.tgtZ = cellZ;
+    // 규칙 8-b) 자동 온오프. **명령을 받은 사람에게만 걸린다** — 자원 칸에서 `only`가
+    // 정해지면 나머지는 이 루프에 들어오지 않으므로 그들의 자동 상태도 안 바뀐다(E-9).
+    a.autoHold = hold;
     // 채집 — 자원이 없거나 이미 텄거나 남이 예약했거나 짐이 가득 찼으면
     // 조용히 기존 명령만 푼다(E-2 ~ E-7). 바깥 계약은 안 바뀐다.
     setGatherTarget(ctx, a, key);
@@ -418,7 +484,7 @@ function claimBlockade(ctx: SimCtx, a: AllySim, r2: number): void {
  * 고르게 두면 결정론은 유지되지만(같은 시드면 같은 순서) 규칙을 말로 적을 수 없다.
  * 정렬 자체는 `entities.fillAliveAllyIds`가 한다(`updateGather`와 **같은 구현**을 쓰기 위해).
  *
- * ⚠ **버퍼는 셋이고 서로 공유하지 않는다** — 각 버퍼 위에 어느 함수 전용인지 박아 둔다.
+ * ⚠ **버퍼는 넷이고 서로 공유하지 않는다** — 각 버퍼 위에 어느 함수 전용인지 박아 둔다.
  *   `moveAlly`는 루프 **안에서** `setGatherTarget`을 부르므로, `updateAllies`와 버퍼를
  *   빌려 쓰면 "루프 도중에 같은 버퍼를 다시 채우는" 재진입 지뢰가 선다. 지금은
  *   `applyCommand`가 `tick()` 밖에서 도는 덕에 충돌이 없지만 그 성질은 언제든 깨진다.
@@ -426,6 +492,8 @@ function claimBlockade(ctx: SimCtx, a: AllySim, r2: number): void {
  */
 const pickOrder: AllySim[] = []; // updateAllies 전용
 const orderOrder: AllySim[] = []; // moveAlly 전용
+/** 규칙 8) 자동 행동 전용 — **넷째다.** 앞의 셋과 절대 공유하지 않는다 */
+const autoOrder: AllySim[] = [];
 
 /**
  * 매 틱 — 아군 조준/타격 + 봉쇄 지정 + 적의 난투 반격.
@@ -598,5 +666,129 @@ export function sweepDeadAllies(ctx: SimCtx): void {
   const items = ctx.world.allies.items;
   for (let i = items.length - 1; i >= 0; i--) {
     if (!(items[i] as AllySim).alive) ctx.world.removeAllyAt(i);
+  }
+}
+
+/** 규칙 8) 이 종은 일꾼인가 — 판정선의 유도는 balance.ALLY_WORKER_GATHER_PCT 주석 */
+function isWorker(def: AllyDef): boolean {
+  return (def.gatherPct ?? 100) >= ALLY_WORKER_GATHER_PCT;
+}
+
+/** 규칙 8) 살아 있는 **다른** 아군이 이 칸을 들고 있는가. 멤버십 검사뿐이라 순서 무관(계약 B) */
+function claimedByAnother(ctx: SimCtx, a: AllySim, key: number): boolean {
+  for (const o of ctx.world.allies.items) {
+    if (o.alive && o !== a && o.gatherKey === key) return true;
+  }
+  return false;
+}
+
+/**
+ * 규칙 8-a) **자동 목표 선택** — 안 텄고, 아무도 예약하지 않은, 가장 가까운 자원 칸.
+ *
+ * 전순서(부동소수 동점 없음):
+ *   ① 아군이 선 셀(반올림)에서 **격자 거리 제곱**이 작은 것 — 좌표가 전부 정수라 **정수 비교**다
+ *   ② 동점이면 **셀 키 오름차순** — `ResourceField.list`가 셀 키 오름차순으로 굳어 있고
+ *      비교가 엄격 부등호(`>=` continue)라 동점에서는 언제나 먼저 만난 것(= 최소 키)이 이긴다
+ *
+ * ⚠ 거리를 **마을 기준이 아니라 아군 기준**으로 재는 이유: 사용자 항목 2가 "근처에서부터"다.
+ *   마을 기준으로 재면 배달 뒤 다음 칸이 언제나 같은 순서로 정해져 여섯이 한 줄로 몰린다.
+ * ⚠ `Math.round`는 셀 기준 반올림이고 `Math.hypot`을 안 쓴다 — 이 파일의 기존 규약 그대로다.
+ * ⚠ **예약 검사는 거리 검사 뒤**에 둔다(멤버십 검사라 O(n)이다). 결과는 안 바뀌고 비용만 준다.
+ */
+function pickAutoCell(ctx: SimCtx, a: AllySim): ResourceCellState | null {
+  const ax = Math.round(a.x);
+  const az = Math.round(a.z);
+  let best: ResourceCellState | null = null;
+  let bestD2 = Infinity; // 센티널. 실제 비교에 들어오는 값은 전부 정수다
+  for (const c of ctx.resources.list) {
+    if (c.taken) continue;
+    const dx = c.cellX - ax;
+    const dz = c.cellZ - az;
+    const d2 = dx * dx + dz * dz;
+    if (d2 >= bestD2) continue; // 동점이면 앞사람(= 작은 셀 키)이 이긴다
+    if (claimedByAnother(ctx, a, c.cellZ * ctx.opts.stage.gridW + c.cellX)) continue;
+    best = c;
+    bestD2 = d2;
+  }
+  return best;
+}
+
+/**
+ * 규칙 8) **자동 행동** — 명령이 없는 일꾼이 스스로 할 일을 찾는다 (사용자 항목 2·4).
+ * 틱 순서 **8-c**: `updateGather`(8-b) 바로 뒤 · `sweepDeadAllies`(9) 앞.
+ *
+ * 왜 8-b 뒤인가: 같은 틱의 **배달**을 읽어야 "마을에 들어와 놓고 **다시 나간다**"(항목 4)가
+ * 한 틱 지연 없이 일어난다. `updateGather` ③이 배달 직후 `tgt = 지금 위치`를 박으므로
+ * 여기서는 "도착해 있고 빈손"으로 읽히고, 그 자리에서 다음 칸이 정해진다.
+ *
+ * ⚠ **이 함수는 이벤트를 한 건도 안 낸다.** ②가 `gatherKey < 0`을 이미 걸러 내므로
+ *   `setGatherTarget`의 `cancelGather` 가지에 절대 안 들어가고, `allyOrdered`는
+ *   커맨드의 이벤트지 자동의 이벤트가 아니다(내면 fx와 e2e가 초당 수십 건을 받는다).
+ *
+ * ── 무한 배회는 불가능하다 (종료 증명) ─────────────────────────────────────
+ * 후보 집합 = { 안 텄고 아무도 예약 안 한 자원 칸 }.
+ *  1. `taken`은 단조 증가한다(false → true, 되돌리는 코드가 없다 — gather.ts D1·D2).
+ *  2. 자동이 목표를 잡으면 `gatherKey`가 붙고 ②가 다음 틱부터 재조준을 막는다. 그 예약이
+ *     풀리는 길은 셋뿐이다: 짐 완성(칸이 taken = 후보에서 영구 제거) · clearScenery(같음) ·
+ *     사망(그 사람이 사라진다 — 정원 유한, 부활 없음).
+ *  3. ⇒ 자동 사이클 수 ≤ 자원 칸 수 + 판 전체의 아군 사망 수. 각 사이클도 유한하다
+ *     (gatherTicksFor는 유한 — gatherPct 0은 애초에 일꾼이 아니다).
+ *  4. 후보가 비면 ⑦이 **정지**시킨다(짐 있으면 마을 한 번, 없으면 제자리).
+ * 스톨도 없다: 자동은 어떤 완료 조건도 막지 않는다(봉쇄를 안 걸고, 웨이브 완료는 적 쪽 조건이다).
+ */
+export function updateAllyAuto(ctx: SimCtx): void {
+  const base = ctx.opts.stage.baseCell;
+  fillAliveAllyIds(ctx.world.allies.items, autoOrder); // 시체 불필요 — 자동은 산 사람만
+  for (const a of autoOrder) {
+    // ① "여기 지켜" — 자동이 꺼져 있다 (규칙 8-b).
+    //    ⚠ `!a.autoHold`가 아니라 `a.autoHold`로 쓴다: 초기화가 빠져 undefined가 와도
+    //      **일을 안 하는 유닛**이 아니라 **일하는 유닛**이 되어 화면에서 즉시 보인다
+    //      (`isGathering`이 안전한 쪽으로 닫은 것과 같은 이유).
+    if (a.autoHold) continue;
+    // ② 이미 예약이 있다 — 자동은 **살아 있는 명령을 절대 안 덮어쓴다**.
+    //    수동이든 자동이든 예약이 붙은 순간 그 칸이 끝날 때까지 재조준하지 않는다
+    //    (타워·습격대의 lockedTarget 규약과 같다). 이것이 "적이 가까울 때"의 답이기도 하다 —
+    //    아래 ⑥ 주석 참조.
+    if (a.gatherKey >= 0) continue;
+    // ③ 일꾼이 아니면 자동으로 할 일이 없다. 전투 3종은 **제자리 교전**이다(규칙 6·8)
+    if (!isWorker(a.def)) continue;
+    // ④ 아직 걷는 중이면 목표를 덮어쓰지 않는다 — **도착해 있을 때만** 결정한다.
+    //    이 가드가 없으면 매 틱 목표가 다시 정해져 유닛이 두 칸 사이에서 진동한다.
+    const dx0 = a.x - a.tgtX;
+    const dz0 = a.z - a.tgtZ;
+    if (dx0 * dx0 + dz0 * dz0 > ARRIVE_EPS2) continue;
+    // ⑤ 짐이 가득 찼다 → 마을로. (gather.ts D6이 이미 박아 두지만, 배달 반경 밖에서
+    //    멈춰 선 뒤 다시 집으로 보내는 것은 여기다)
+    const cap = a.def.carryCap ?? 1;
+    if (a.carryCount >= cap) {
+      a.tgtX = base.x;
+      a.tgtZ = base.z;
+      continue;
+    }
+    // ⑥ 가장 가까운 미예약·미채취 칸.
+    //    ⚠ **적이 가까운 칸을 피하지 않는다.** 적은 매 틱 움직이므로 "적이 없는 칸"은
+    //      한 틱짜리 사실이고, 그것을 선택에 넣으면 적이 지나갈 때마다 목표가 갈려
+    //      진행분 폐기와 gatherLost{'moved'}가 초당 여러 건 뿜어진다. 위험한 칸의 벌금은
+    //      **D5가 이미 물린다**(맞으면 손이 멈춘다 — s1 40칸 중 22칸이 그 사거리 안이다).
+    //      곧 전선 옆 칸은 **느릴 뿐 금지가 아니고**, 그것이 이 게임이 이미 고른 규칙이다.
+    const cell = pickAutoCell(ctx, a);
+    if (cell === null) {
+      // ⑦ **자원이 전부 텄다 / 남은 칸을 남이 다 들고 있다** — 무한 배회 금지.
+      //    짐이 있으면 마을로(E-18의 "짐 하나 들고 서 있기"를 자동이 대신 끝낸다),
+      //    빈손이면 **그 자리에 선다.** 걸어다닐 이유가 없다.
+      if (a.carryCount > 0) {
+        a.tgtX = base.x;
+        a.tgtZ = base.z;
+      }
+      continue;
+    }
+    // ⑧ 예약을 먼저 붙이고, **붙었을 때만** 목표를 바꾼다.
+    //    순서가 반대면(목표 먼저) 예약이 거부된 틱에 유닛이 그 칸으로 걸어갔다가
+    //    도착 → 다시 선택 → 또 거부의 진동 루프가 선다.
+    const key = cell.cellZ * ctx.opts.stage.gridW + cell.cellX;
+    setGatherTarget(ctx, a, key);
+    if (a.gatherKey !== key) continue; // 예약이 안 붙었다 → 목표도 안 바꾼다
+    a.tgtX = cell.cellX;
+    a.tgtZ = cell.cellZ;
   }
 }

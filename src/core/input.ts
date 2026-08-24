@@ -1,6 +1,13 @@
 /**
  * 통합 입력 — 터치+마우스를 하나의 포인터 스트림으로, 탭/드래그 판별 포함.
  * 좌표는 캔버스 CSS 픽셀 기준. 3D 레이캐스트 변환은 render/game 쪽 책임.
+ *
+ * ── 버튼이 뜻을 갖는 자리는 여기가 아니다 ───────────────────────────────────
+ * 이 파일이 하는 일은 **제스처를 셋으로 가르는 것**뿐이다:
+ *   좌클릭/터치 탭 → `tap` · 우클릭 탭 → `contextTap` · 임계값 넘은 이동 → `dragEnd`.
+ * "탭이 선택인가 명령인가"는 game/placement.ts가 `pointerType`을 보고 정한다.
+ * 규칙을 여기 두면 카메라(궤도 회전)와 게임(명령)이 같은 상수를 공유하게 되고,
+ * 한쪽을 고칠 때 다른 쪽이 조용히 따라 바뀐다.
  */
 import { Emitter } from './events';
 
@@ -17,6 +24,15 @@ export interface PointerInfo {
   button: number;
   /** pointerdown 시점의 Shift 상태 */
   shiftKey: boolean;
+  /**
+   * pointerdown 시점의 포인터 종류 (`'mouse' | 'touch' | 'pen' | ''`). 제스처 도중 고정.
+   *
+   * **입력 모델을 데스크톱과 터치로 가르는 유일한 값이다** — 버튼이 둘인 기기와 하나뿐인
+   * 기기는 같은 규칙을 쓸 수 없다(마우스는 좌=선택·우=명령, 터치는 좌탭 하나가 둘을 겸한다).
+   * 값 자체를 그대로 넘기고 **해석은 소비자(placement)가 한다** — 이 파일은 포인터
+   * 스트림을 정규화할 뿐 게임 규칙을 모른다.
+   */
+  pointerType: string;
 }
 
 type InputEvents = {
@@ -25,6 +41,17 @@ type InputEvents = {
   up: PointerInfo;
   /** 이동이 임계값 미만인 up */
   tap: PointerInfo;
+  /**
+   * 이동이 임계값 미만인 **보조 버튼** up (`button === 2` = 우클릭) = **명령**.
+   *
+   * ⚠ **우드래그는 여기 안 온다.** 아래 `onUp`의 `dragging` 분기가 먼저 잡아 `dragEnd`로
+   *   나가고, 그것이 카메라 궤도 회전이다(placement.ts의 dragEnd 구독 ·
+   *   battlecontroller.ts의 `orbitDrag = i.button === 2 || i.shiftKey`).
+   *   곧 "우클릭했는데 드래그가 아니었을 때"만 이 이벤트다 — 두 뜻이 분기 하나로 배타다.
+   * ⚠ **터치는 여기 안 온다.** 터치의 primary contact는 `button === 0`이라 구조적으로
+   *   `tap`으로만 나간다. 폰의 흐름은 한 글자도 안 바뀐다.
+   */
+  contextTap: PointerInfo;
   /** 드래그 시작 (임계값 초과 시 1회) */
   dragStart: PointerInfo;
   drag: PointerInfo;
@@ -66,7 +93,9 @@ export class InputManager {
   private downY = 0;
   private isDown = false;
   private dragging = false;
-  private info: PointerInfo = { x: 0, y: 0, dragDx: 0, dragDy: 0, button: 0, shiftKey: false };
+  private info: PointerInfo = {
+    x: 0, y: 0, dragDx: 0, dragDy: 0, button: 0, shiftKey: false, pointerType: '',
+  };
   /** 활성 포인터들 (멀티터치 핀치 판정) */
   private pointers = new Map<number, { x: number; y: number }>();
   private pinching = false;
@@ -164,6 +193,9 @@ export class InputManager {
     this.setInfo(e);
     this.info.button = e.button;
     this.info.shiftKey = e.shiftKey;
+    // button/shiftKey와 같은 규약으로 **down 시점에 래치**한다 — 한 제스처 도중
+    // 종류가 바뀔 일은 없지만, 소비자가 up에서 읽으므로 값의 수명이 같아야 한다.
+    this.info.pointerType = e.pointerType;
     this.downX = this.info.x;
     this.downY = this.info.y;
     this.info.dragDx = 0;
@@ -255,8 +287,14 @@ export class InputManager {
       this.dragging = false;
       this.events.emit('dragEnd', this.info);
     } else if (this.info.button === 0) {
-      // 우클릭(궤도 회전용)은 탭으로 치지 않는다 — 실수로 타워가 배치된다
+      // 좌클릭/터치 = **선택**(그리고 터치에서는 명령까지 겸한다 — placement가 가른다).
+      // 우클릭은 여기로 안 온다: 궤도 회전으로 오해돼 타워가 실수로 배치되던 자리다.
       this.events.emit('tap', this.info);
+    } else if (this.info.button === 2) {
+      // 우클릭인데 드래그가 아니었다 = **명령**이다. 궤도 회전은 바로 위 분기가 이미
+      // 통째로 가져갔으므로 한 제스처가 두 뜻을 갖지 않는다.
+      // 휠 버튼(1)은 지금도 앞으로도 어디로도 안 간다.
+      this.events.emit('contextTap', this.info);
     }
   };
 

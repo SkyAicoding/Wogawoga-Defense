@@ -6,6 +6,7 @@
  *   2 = 파괴 잔해, 3 = 침묵 룬     (지면/지붕에 눕는 원형 표식, towerstatus.ts가 상태 소유)
  *   4 = 기지(홈타운) 체력바        (빌보드 — 1과 같은 팔레트, 크기와 저체력 경보만 다르다)
  *   5 = 캐기 진행 게이지 · 6 = 짐 칩 · 7 = 자원 배지   (채집, gather-spec §6-1 — 전부 빌보드)
+ *   8 = 대기(HOLD) 말뚝                                (자동 행동 off — 빌보드)
  * 만피는 숨긴다 — 바가 보인다 = 지금 뭔가 깎이고 있다는 신호다.
  *
  * ── 채집 표시가 왜 **여기** 얹혔는가 (드로우콜 0) ──────────────────────────
@@ -148,6 +149,19 @@ const LOAD_CHIP_GAP = 0.21;
  */
 const RES_BADGE = 0.32;
 const RES_BADGE_Y = 1.08;
+/**
+ * ── 대기(HOLD) 표식 — 자동 행동이 꺼진 부족원 (kind 8) ─────────────────────
+ * "빈 칸을 지정받아 그 자리를 지키는 중"은 **위치로 구별할 수 없다**(sim의 autoHold
+ * 주석과 같은 사실이다 — 서 있는 사람과 명령이 없어 서 있는 사람은 좌표가 같다).
+ * 그래서 화면에도 그 한 비트를 그릴 자리가 필요하다. 없으면 플레이어가 "왜 얘만
+ * 일하러 안 가지"를 영영 알 수 없다.
+ *
+ * **드로우콜 Δ 0** — 이 파일의 인스턴스 메시에 얹는다(헤더의 채집 표시와 같은 논거).
+ * 자리는 짐 칩(1.22)보다 위다: 짐과 대기는 **동시에** 참일 수 있고(짐을 진 채 대기),
+ * 겹치면 둘 다 안 읽힌다. 최대 여섯 개라 CAPACITY(160)에 주는 압력은 무시할 수 있다.
+ */
+const HOLD_PIN = 0.2;
+const HOLD_PIN_Y = 1.66;
 const _pos = new THREE.Vector3();
 const _quat = new THREE.Quaternion();
 /** 지면 표식용 — 쿼드를 눕힌다 (빌보드 분기를 타지 않는다) */
@@ -304,6 +318,19 @@ if (vKind > 4.5) {
     vec3 col = mix(vec3(0.96, 0.75, 0.31), vec3(0.68, 0.46, 0.19), strap);
     diffuseColor.rgb = col * (0.88 + 0.12 * sin(uTime * 3.0 + vFill * 6.283));
     diffuseColor.a *= box;
+  } else if (vKind > 7.5) {
+    // 8) 대기(HOLD) 말뚝 — **자동 행동이 꺼진 사람**의 머리 위 (사용자 지시 ③ "사용자 지정 우선").
+    //    땅에 박은 말뚝 + 고리. 모양이 '멈춤'을 말하고 색이 '일하는 중이 아님'을 말한다:
+    //    금색(캔다)·한랭색 배지(예약됨)와 채도가 갈리는 **회청색**이라 난전에서도 안 섞인다.
+    //    ⚠ **맥동시키지 않는다.** 이 표식은 경보가 아니라 상태이고, 여섯 명이 동시에
+    //      깜빡이면 그것만 눈에 들어온다. 채집 배지가 텄음 칩을 안 깜빡이는 것과 같은 규칙이다.
+    vec2 q = (vBarUv - 0.5) * 2.0;
+    float r = length(q);
+    float ring = smoothstep(0.15, 0.0, abs(r - 0.74));
+    float post = step(abs(q.x), 0.17) * step(abs(q.y), 0.46);
+    float ink = clamp(ring + post, 0.0, 1.0);
+    diffuseColor.rgb = mix(vec3(0.05, 0.06, 0.08), vec3(0.74, 0.82, 0.94), ink);
+    diffuseColor.a *= ink * 0.94;
   } else {
     // 7) 자원 배지 — 마름모 칩. vFill 하나가 세 상태를 나른다:
     //      1 = 아직 안 텄다 (금색 · 부족원을 고르고 있을 때만 뜬다)
@@ -467,6 +494,25 @@ if (vKind > 4.5) {
       this.mesh.setMatrixAt(n, _mat);
       this.fillAttr.setX(n, Math.max(0, a.hp) / Math.max(1, a.maxHp));
       this.kindAttr.setX(n, 1);
+      n++;
+    }
+    /*
+     * 대기(HOLD) 말뚝 — **자동 행동이 꺼진 부족원**. 체력바와 달리 조건이 "깎였는가"가
+     * 아니라 "명령을 받고 그 자리를 지키는가"라 만피여도 뜬다: 이 표식이 말하는 것은
+     * 손상이 아니라 **상태**이고, 그 상태는 화면 어디에도 다른 단서가 없다
+     * (서 있는 사람과 명령 없이 서 있는 사람은 좌표가 같다).
+     * 체력바 **바로 뒤**에 쌓는 이유는 이것도 '사람에 붙은 표시'이기 때문이다 —
+     * CAPACITY를 넘겨 잘리는 것은 여전히 판에 깔리는 자원 배지 쪽이어야 한다(헤더).
+     * 최대 여섯 개다(정원).
+     */
+    for (const a of allies) {
+      if (!a.alive || !a.autoHold || n >= CAPACITY) continue;
+      cellToWorld(lerp(a.prevX, a.x, alpha), lerp(a.prevZ, a.z, alpha), _pos);
+      _pos.y = HOLD_PIN_Y;
+      _mat.compose(_pos, _quat, _scl.set(HOLD_PIN, HOLD_PIN, 1));
+      this.mesh.setMatrixAt(n, _mat);
+      this.fillAttr.setX(n, 1);
+      this.kindAttr.setX(n, 8);
       n++;
     }
     // 지속 상태 표식 — 눕힌 쿼드라 빌보드 분기를 타지 않는다

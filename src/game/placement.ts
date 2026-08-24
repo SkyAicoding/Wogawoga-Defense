@@ -1,7 +1,7 @@
 /**
  * 배치/선택 입력 — 탭·호버를 셀 좌표로 변환해 시뮬레이션 커맨드로.
  * 카드 선택 → 슬롯 발광 + 고스트 프리뷰 → 탭 배치.
- * 부족원 탭 → 그 **종족 전체** 선택 + 각자의 공격 사거리 바운더리 → 셀 탭 → 이동 명령.
+ * 부족원 탭 → 그 **종족 전체** 선택 + 각자의 공격 사거리 바운더리 → 명령으로 이동/채집/공격.
  * 타워 탭 → 선택 + 사거리 링.
  * 홈타운(기지 셀) 탭 → 선택 + 사거리 링 + 아군 출격 한계선 봉수대 (마을 패널: 레벨업 + 출동).
  * 소품(나무·바위) 탭 → 선택 + 링(제거 패널).
@@ -9,6 +9,23 @@
  *
  * 셋(타워·홈타운·소품)은 상호배타다. 기지 셀은 경로 셀이라 타워가 설 수 없으므로
  * 타워와 겹칠 일이 없고, 소품도 건설 가능 셀에만 놓이므로 겹치지 않는다.
+ *
+ * ── 선택과 명령을 가른다 (사용자 지시 ①) ───────────────────────────────────
+ * "좌 마우스로 부족 선택 → 우 마우스로 위치 이동 및 채집, 공격 (기존 좌 선택·좌 이동은
+ * 일관성이 없어서 불편함)". 그래서 **기기별로 규칙이 갈린다** — 버튼이 둘인 기기와
+ * 하나뿐인 기기에 같은 규칙을 쓸 수 없기 때문이다:
+ *
+ *  · **마우스**: 좌클릭 = 선택 전용, **우클릭 = 명령**(이동/채집/공격).
+ *    명령을 내려도 선택이 **안 풀린다** — 골라 놓고 여러 번 시키는 것이 이 모델의 전부다.
+ *    우클릭 **드래그는 여전히 카메라 궤도 회전**이고(core/input.ts), 명령은 드래그가
+ *    아니었을 때만 나간다.
+ *  · **터치·펜**: 버튼이 하나뿐이라 좌탭이 선택과 명령을 겸한다 — **9단계까지의 흐름
+ *    그대로**다(부족원을 탭해 고르고, 다음 탭이 명령이며, 명령이 나가면 선택이 풀린다).
+ *    폰에서 선택을 유지하면 "빈 곳 탭 = 명령"이 선택 해제를 잡아먹어 선택을 풀 방법이
+ *    사라진다.
+ *
+ * 카드 배치는 **양쪽 다 좌탭 그대로** 둔다. 카드는 '짓는 손'이고, 우클릭으로 옮기면
+ * 모바일 드래그 배치(onDragEnd)와 갈라져 같은 동사가 기기마다 다른 버튼이 된다.
  */
 import * as THREE from 'three';
 import type { AllyId, AllyState, BattleSim, StageDef, TowerId, Vec2 } from '@/data/types';
@@ -21,12 +38,26 @@ import { ALLY_DEFS, TOWER_DEFS } from '@/data';
  * 선택되는데, 선택 단위가 어차피 종족이라(사용자 지시) 그건 문제가 되지 않는다.
  */
 const ALLY_PICK_RADIUS = 0.7;
-import { InputManager } from '@/core/input';
+import { InputManager, type PointerInfo } from '@/core/input';
 import { audio } from '@/audio';
 import type { Stage3D } from '@/render/stage3d';
 import type { DioramaCamera } from '@/render/camera';
 
 const GROUND = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
+/**
+ * 이 포인터는 **버튼이 하나뿐인가** — 그렇다면 좌탭이 선택과 명령을 겸한다(헤더 참조).
+ *
+ * `=== 'touch'`가 아니라 `!== 'mouse'`인 이유: 알 수 없는 값('')과 펜은 **버튼이 하나라고
+ * 가정하는 쪽이 안전하다.** 틀렸을 때 잃는 것이 서로 다르기 때문이다 —
+ *  · 이쪽으로 틀리면: 마우스에서 좌탭도 명령이 된다(9단계까지의 동작). 불편할 뿐이다.
+ *  · 반대로 틀리면: **그 기기에서 아군을 움직일 방법이 아예 사라진다.**
+ * 합성 이벤트·구형 브라우저·자동화 도구가 pointerType을 안 채우는 경우가 실제로 있고,
+ * 그때 게임이 조작 불능이 되는 것보다는 마우스가 한 걸음 관대한 편이 낫다.
+ */
+function oneButton(p: PointerInfo): boolean {
+  return p.pointerType !== 'mouse';
+}
 
 export class PlacementController {
   /** 전투 컨트롤러가 카메라 제스처(핀치/휠/드래그 팬)를 함께 구독한다 */
@@ -62,8 +93,11 @@ export class PlacementController {
     private stars: Partial<Record<TowerId, number>>,
   ) {
     this.input = new InputManager(canvas);
-    this.input.events.on('tap', (p) => this.onTap(p.x, p.y));
+    this.input.events.on('tap', (p) => this.onTap(p.x, p.y, oneButton(p)));
     this.input.events.on('move', (p) => this.onMove(p.x, p.y));
+    // 데스크톱의 명령 경로. **우드래그는 여기 안 온다** — 드래그면 input이 dragEnd로
+    // 내보내고 그것이 카메라 궤도 회전이다(바로 아래 구독 + battlecontroller).
+    this.input.events.on('contextTap', (p) => this.onCommand(p.x, p.y, false));
     // 모바일 드래그 배치: 카드 선택 중 드래그는 조준(고스트는 move로 갱신),
     // 릴리즈 지점에 배치. battlecontroller는 카드 선택 중 카메라 팬을 스킵한다.
     // 우드래그/Shift+드래그는 카메라 궤도 회전 — 배치로 소비하면 안 된다
@@ -157,19 +191,15 @@ export class PlacementController {
     // 불가 셀이면 배치 모드 유지 — 다시 조준할 수 있게 취소하지 않는다
   }
 
-  private onTap(px: number, py: number): void {
+  private onTap(px: number, py: number, oneBtn: boolean): void {
     const cell = this.cellAt(px, py);
     /*
-     * 규칙 2) 부족 선택/이동 — 카드 배치 **다음**, 나머지 선택보다 **먼저**.
+     * 규칙 2) 부족 선택 — 카드 배치 **다음**, 나머지 선택보다 **먼저**.
      *
      * 순서가 이런 이유: 카드를 든 채로는 짓는 것이 먼저다(손에 카드가 있으면 그게
      * 지금 하려는 일이다). 카드가 없으면 판 위의 사람이 타워·소품·기지보다 앞선다 —
      * 부족원은 움직이는 물건이라 "지금 저기 있는 저 사람"을 겨냥한 탭일 가능성이 높고,
      * 잘못 집어도 되돌리는 값이 0이다(선택만 바뀐다).
-     *
-     * 두 갈래:
-     *  (a) 부족원을 탭했다 → **그 종족 전체**를 고른다 (다른 종을 고르고 있었어도 갈아탄다)
-     *  (b) 이미 고른 종족이 있고 판의 다른 곳을 탭했다 → 그 칸으로 **이동 명령**
      */
     if (this.selectedCardIndex === null) {
       const picked = this.pickAllyAt(px, py);
@@ -177,19 +207,13 @@ export class PlacementController {
         this.selectAllyDef(picked.defId);
         return;
       }
-      if (this.selectedAllyDef !== null) {
-        const defId = this.selectedAllyDef;
-        if (cell && this.sim.applyCommand({ type: 'moveAlly', allyId: -1, cellX: cell.x, cellZ: cell.z, defId })) {
-          // 순서가 중요하다: **먼저** 선택을 풀어 사거리 바운더리를 내리고, 그 자리에
-          // 목표 표식을 세운다. 예전에는 둘이 같은 메시라 showAllyOrder가 덮어썼지만
-          // 이제는 서로 다른 메시다 — 안 내리면 명령을 내린 뒤에도 원이 그 자리에
-          // 얼어붙은 채 남고(유닛은 떠난다) 드로우콜도 하나 더 먹는다.
-          this.clearAllySelection();
-          this.showAllyOrder(cell.x, cell.z);
-          return;
-        }
-        // 판 밖 탭 → 선택만 푼다 (카드 모드가 슬롯 밖 탭을 다루는 것과 같은 규약)
-        this.clearAllySelection();
+      /*
+       * 터치 경로 — **9단계의 갈래 (b)가 한 글자도 안 바뀐 채 여기 들어왔다**(헤더 참조).
+       * 이미 고른 종족이 있고 판의 다른 곳을 탭했다 → 그 칸으로 명령.
+       * **마우스는 이 갈래에 절대 안 들어온다**: 마우스의 명령은 우클릭이다.
+       */
+      if (oneBtn && this.selectedAllyDef !== null) {
+        this.onCommand(px, py, true);
         return;
       }
     }
@@ -210,6 +234,50 @@ export class PlacementController {
       return;
     }
     this.selectAt(cell);
+    /*
+     * 데스크톱: 좌클릭은 **선택 전용**이므로 빈 곳이나 다른 대상을 찍으면 부대 선택도
+     * 함께 풀린다 — 좌클릭이 "지금 무엇을 고르고 있는가"의 유일한 주인이기 때문이다.
+     * (터치는 위에서 이미 명령으로 소비했으므로 선택 중이면 여기 오지 않는다)
+     */
+    if (!oneBtn) this.clearAllySelection();
+  }
+
+  /**
+   * **명령** — 데스크톱은 우클릭, 터치는 선택 상태의 좌탭 (헤더 참조).
+   * 찍은 칸이 자원이면 캐고, 적이 서 있으면 거기까지 가서 싸우고, 빈 칸이면 가서 선다 —
+   * 그 판정은 전부 sim의 `moveAlly`가 한다. 여기가 정하는 것은 **누구에게 가는가**뿐이다
+   * (`allyId: -1` + `defId` = 그 종족 전체. 자원 칸에서 한 사람만 고르는 것도 sim이 한다).
+   *
+   * 선택된 종족이 없으면 아무 일도 안 한다: **우클릭은 선택을 만들지 않는다.**
+   * 한 버튼이 '고르기'와 '시키기'를 겸하는 것이 사용자가 지적한 그 불편이라,
+   * 나눠 놓고 다시 겹치면 고친 것이 없다.
+   */
+  private onCommand(px: number, py: number, oneBtn: boolean): void {
+    if (this.selectedAllyDef === null) return;
+    const defId = this.selectedAllyDef;
+    const cell = this.cellAt(px, py);
+    if (!cell) {
+      // 판 밖.
+      //  · 터치: 기존 규약대로 선택을 푼다(카드 모드가 슬롯 밖 탭을 다루는 것과 같다).
+      //  · 마우스: **아무 일도 안 한다** — 실패한 명령이 선택을 지우면 손이 화면 밖으로
+      //    나갈 때마다 부대를 다시 골라야 한다. 명령과 선택은 이제 다른 버튼의 일이다.
+      if (oneBtn) this.clearAllySelection();
+      return;
+    }
+    if (!this.sim.applyCommand({ type: 'moveAlly', allyId: -1, cellX: cell.x, cellZ: cell.z, defId })) return;
+    /*
+     * 터치만 선택을 푼다.
+     *  · 폰에서 선택을 유지하면 "빈 곳 탭 = 명령"이 선택 해제를 잡아먹어 **선택을 풀
+     *    방법이 사라진다.** 그리고 순서가 중요하다: 먼저 선택을 풀어 사거리 바운더리를
+     *    내리고 그 자리에 목표 표식을 세운다(둘은 서로 다른 메시다 — 안 내리면 유닛은
+     *    떠났는데 원만 남고 드로우콜도 하나 더 먹는다).
+     *  · 데스크톱은 유지한다 — 골라 놓고 여러 번 시키는 것이 우클릭 모델의 전부이고,
+     *    선택 원은 refreshAllySelection이 매 프레임 유닛을 따라간다.
+     *    대가는 알고 받는다: 이때만 선택 원과 목표 표식이 **동시에** 켜져 드로우콜 +1이다
+     *    (여유 15 중 1). 표식을 끄면 아끼지만 그러면 "명령이 먹혔는가"의 피드백이 사라진다.
+     */
+    if (oneBtn) this.clearAllySelection();
+    this.showAllyOrder(cell.x, cell.z);
   }
 
   /** 셀 하나에 대한 선택 규칙 — 타워 > 홈타운 > 소품 > 해제 (셋은 상호배타) */

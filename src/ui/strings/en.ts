@@ -117,7 +117,10 @@ export const en: Record<string, string> = {
   'battle.home.maxed': 'Fully grown (max level)',
   'battle.ally.title': 'Rally',
   'battle.ally.pillHint': 'Tribesmen out — tap to open the village (rally & upgrade)',
-  'battle.ally.rules': 'Tap one on the board to select all of that kind → tap a tile to send them · they stay until they fall · up to {m}',
+  // ⚠ 조작이 기기마다 갈리므로 줄도 둘이다 (ko 주석 참조)
+  'battle.ally.rulesMouse': 'Left-click one to select all of that kind → right-click to move, gather or attack · up to {m}',
+  'battle.ally.rulesTouch': 'Tap one on the board to select all of that kind → tap a tile to move, gather or attack · up to {m}',
+  'battle.ally.rulesAuto': 'Left alone they gather the nearest resource · point at an empty tile and they hold it · point at the village and they go back to working on their own',
   'battle.ally.sunder': 'Opens hide',
   'battle.ally.sunderHint': 'Enemies this one pins lose their hide cap — a big hit lands in full',
   'ally.clubber.name': 'Clubber',
@@ -172,11 +175,14 @@ export const en: Record<string, string> = {
   // ko 와 같이 두 조각으로 가른다 — 아무도 안 캐는데 '0 gathering' 이 뜨면 거짓말이다.
   'battle.ally.gathering': '⛏ {n} gathering',
   'battle.ally.carrying': '{c} carried',
+  // 머리 위 말뚝(healthbars kind 8)과 같은 사실을 숫자로도 말한다
+  'battle.ally.holding': '📍 {n} holding',
   // 형제 문자열 battle.ally.sunder('Opens hide')와 같은 자리에 붙으므로 대문자로 시작한다.
-  'battle.ally.rulesGather': 'Tap a resource tile and they gather it and carry it home',
+  'battle.ally.rulesGather': 'Gathers the nearest resource on its own · point at a tile to take that one first',
 
   // --- First-run hint (one banner) ------------------------------------------
-  'battle.hint.gather': '🍓 Tap a tribesman, then tap a tree — they gather it and carry it home for coins',
+  'battle.hint.gatherMouse': '🍓 Left-click a tribesman, then right-click a tree — they gather it and carry it home for coins',
+  'battle.hint.gatherTouch': '🍓 Tap a tribesman, then tap a tree — they gather it and carry it home for coins',
 
   // --- Wave preview band (prep only) ---------------------------------------
   'battle.preview.title': 'Next wave',

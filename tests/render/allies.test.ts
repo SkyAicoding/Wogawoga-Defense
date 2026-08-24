@@ -108,6 +108,8 @@ function ally(o: Partial<AllyState> = {}): AllyState {
     gatherTicks: 0,
     carryGold: 0,
     carryCount: 0,
+    // 규칙 8) 자동 행동 — false = 자동 켜짐(기본). 렌더는 이 값을 읽지 않는다
+    autoHold: false,
     alive: true,
     ...o,
   };

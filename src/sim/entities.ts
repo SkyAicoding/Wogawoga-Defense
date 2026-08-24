@@ -209,6 +209,8 @@ function makeAlly(): AllySim {
     carryGold: 0,
     carryCount: 0,
     gatherHpMark: 0,
+    // ── 자동 행동 하나 (규칙 8) — false = 자동 켜짐
+    autoHold: false,
   };
 }
 
@@ -236,6 +238,11 @@ function resetAlly(a: AllySim): void {
   a.carryGold = 0;
   a.carryCount = 0;
   a.gatherHpMark = 0;
+  // ── 자동 행동 (규칙 8) — **false 가 기본이다.** 앞사람이 "여기 지켜"를 받은 채 죽으면
+  //   그 비트가 풀에 남고, 새로 뽑은 부족원이 태어나자마자 자동이 꺼진 채로 선다.
+  //   화면에서는 "왜 얘만 안 움직이지"이고, 코드에서는 풀 재사용 순서가 곧 시드라
+  //   같은 시드가 아니면 hash()가 갈린다 — 위 carryGold 문단과 같은 사고다.
+  a.autoHold = false;
 }
 
 /**
