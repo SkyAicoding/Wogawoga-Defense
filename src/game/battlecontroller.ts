@@ -79,8 +79,30 @@ const ORBIT_PITCH_PER_PX = 0.18 * DEG;
 /** 두 손가락 트위스트 → 요. 1 = 손가락 회전각과 1:1 */
 const PINCH_TWIST_GAIN = 1;
 
+/**
+ * `BattleUiApi`에 없는 **채집 보내기** 한 줄 (gather-spec §7-1 보조 입구).
+ *
+ * 계약(`data/types.ts BattleUiApi`)에 안 넣은 이유: 그 파일은 이 트랙이 손대지 않는
+ * `src/data/**`이고, HUD 쪽은 이미 "계약에 없는 것은 **선택 확장 인터페이스로 기능
+ * 감지**한다"는 규약을 갖고 있다(battlehud.ts 헤더의 selectedTower/requestSetTargeting).
+ * 그래서 여기서도 같은 규약을 쓴다 — 목 UI(debug/labs/uilab)는 이 메서드가 없어도 돈다.
+ *
+ * ⚠ **새 커맨드가 아니다.** 보내는 것은 판 위 탭과 **완전히 같은** `moveAlly`이고
+ *   `defId`를 안 실어 후보를 전 종족으로 연다. 누구를 보낼지는 sim이 고른다(D7).
+ */
+export interface BattleGatherApi {
+  requestGatherAt(cellX: number, cellZ: number): void;
+  /**
+   * 자원 패널의 계산에만 쓰는 판 상수 둘 — 마을 셀(짐을 지고 갈 거리)과 격자 폭
+   * (셀 키 = cellZ * gridW + cellX, `AllyState.gatherKey`와 맞춰 보는 데 필요하다).
+   * `BattleStateView`에 둘 다 없고 그 파일은 이 트랙이 안 건드리므로 여기로 낸다.
+   * **게임 규칙은 하나도 안 실린다** — 화면에 적을 숫자의 재료일 뿐이다.
+   */
+  gatherRefs(): { baseX: number; baseZ: number; gridW: number };
+}
+
 export class BattleController {
-  readonly api: BattleUiApi;
+  readonly api: BattleUiApi & BattleGatherApi;
   readonly sim: BattleSim;
   readonly stage3d: Stage3D;
   readonly camera = new DioramaCamera();
@@ -193,6 +215,23 @@ export class BattleController {
         if (!c) return;
         // 성공 시 sceneryCleared 이벤트가 연출/선택 해제를 처리한다
         self.sim.applyCommand({ type: 'clearScenery', cellX: c.x, cellZ: c.z });
+      },
+      gatherRefs: () => ({
+        baseX: self.stage.baseCell.x,
+        baseZ: self.stage.baseCell.z,
+        gridW: self.stage.gridW,
+      }),
+      requestGatherAt: (cellX: number, cellZ: number) => {
+        // 자원 패널의 [채집 보내기] — 웨이브 중의 주 경로다(§7-1 보조 입구, 1탭).
+        // **판 위 탭과 같은 커맨드**를 쓰고 `defId`를 안 싣는다 = 후보가 전 종족이고,
+        // 그중 누구를 보낼지는 sim이 고른다(gatherPct 내림차순 → id 오름차순).
+        if (!self.sim.applyCommand({ type: 'moveAlly', allyId: -1, cellX, cellZ })) return;
+        audio.play('uiTap');
+        // 탭한 그 칸의 선택 링이 **금색 목표 표식으로 갈아 끼워진다** — 같은 메시라
+        // 드로우콜이 안 늘고(§7-2), 손가락 밑에서 색이 바뀌는 것이 "먹혔다"의 신호가 된다.
+        self.stage3d.decals.showGatherOrder(cellX, cellZ);
+        // 커맨드가 tick() 밖에서 돌았으므로 이벤트를 지금 흘려보낸다 (e2e 훅과 같은 규약)
+        self.processEvents();
       },
       clearSelection: () => {
         self.placement.clearScenerySelection();
@@ -345,6 +384,14 @@ export class BattleController {
         hp: st.baseHp,
         maxHp: st.baseHpMax,
         level: st.baseLevel,
+      },
+      // 채집 표시(게이지·짐 칩·자원 배지)도 **같은 인스턴스 메시**에 얹힌다 —
+      // 새 메시가 0개라 드로우콜이 안 는다(views/healthbars.ts 헤더).
+      // 금색 배지를 언제 켜는지는 placement가 안다(무엇을 고르고 있는가).
+      {
+        cells: st.resources,
+        gridW: this.stage.gridW,
+        selecting: this.placement.showingResourceBadges(),
       },
     );
     s3.projectiles.update(st.projectiles, alpha, dt);

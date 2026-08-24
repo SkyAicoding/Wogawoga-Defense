@@ -13,6 +13,7 @@ import type {
   TowerState,
   WavePreview,
 } from '@/data/types';
+import type { AllyState, ResourceId } from '@/data/types';
 import { TICK_RATE } from '@/data/types';
 import {
   ALL_ALLY_IDS,
@@ -23,6 +24,7 @@ import {
   counteredBy,
   favoredAgainst,
 } from '@/data';
+import { gatherTicksFor, isGathering } from '@/data/resources';
 import type { Screen } from '@/core/fsm';
 import { h, cls, fmt, mount, unmount, uiRoot, setText } from '../dom';
 import { t } from '../i18n';
@@ -43,22 +45,58 @@ import type { ModalHandle } from '../widgets/modal';
 import { createWavePreview } from '../widgets/wavepreview';
 import type { WavePreviewBand } from '../widgets/wavepreview';
 
-/** selectedTower/requestSetTargeting이 계약(BattleUiApi)에 편입됨 — 별칭만 유지 */
-type BattleUiApiExt = BattleUiApi;
+/**
+ * selectedTower/requestSetTargeting은 계약(BattleUiApi)에 편입됐고, **채집 둘만** 아직
+ * 확장이다 — 계약이 사는 `src/data/types.ts`는 이 트랙이 손대지 않는 파일이라
+ * (docs/gather-spec.md T5) 이 파일 헤더의 규약대로 **기능 감지**로 붙인다.
+ * 구현은 `game/battlecontroller.ts`의 `BattleGatherApi`이고, 없으면 자원 패널은
+ * [채집 보내기] 없이 예전 그대로의 제거 패널로 돈다(목 UI가 그 경우다).
+ */
+type BattleUiApiExt = BattleUiApi & {
+  /** 자원 칸에 채집을 보낸다 (누구를 보낼지는 sim이 고른다 — gather-spec D7) */
+  requestGatherAt?(cellX: number, cellZ: number): void;
+  /**
+   * 자원 패널의 계산에만 쓰는 판 상수 둘 — 마을 셀(마을까지 몇 초)과 격자 폭
+   * (셀 키 = cellZ * gridW + cellX, `AllyState.gatherKey`와 맞춰 보려면 필요하다).
+   * `BattleStateView`에 없어서 여기로 받는다. **게임 규칙은 하나도 안 실린다.**
+   */
+  gatherRefs?(): { baseX: number; baseZ: number; gridW: number };
+};
 
 const TARGETING_ORDER: readonly TargetingMode[] = ['first', 'last', 'strongest', 'nearest'];
 
 /** 제거 확인 무장이 자동으로 풀리는 시간 (ms) — 무장 상태가 잊힌 채 남지 않게 */
 const ARM_TIMEOUT_MS = 4000;
 
+/**
+ * 자원 종류의 얼굴 — **이모지 하나**다. 새 SVG 자산을 만들지 않은 이유가 둘:
+ *  ① 이 자리는 34px 아이콘 하나이고 여덟 종이 **형태로** 갈려야 하는데, 그건
+ *     이모지가 이미 아주 잘 하는 일이다(딸기·버섯·꿀·나무·돌은 실루엣이 전부 다르다).
+ *  ② 자산을 늘리면 card.ts의 아이콘 표가 여덟 개 커지고, 그 표는 이 트랙 소유가 아니다.
+ * ⚠ **판 위의 소품과 짝이 맞아야 한다** — 판에서는 종류가 곧 1층 실루엣이므로
+ *   (gather-spec §6-2) 이 이모지는 그 실루엣의 축약이지 새 정보가 아니다.
+ */
+const RES_EMOJI: Readonly<Record<ResourceId, string>> = {
+  berry: '🍓',
+  mushroom: '🍄',
+  honey: '🍯',
+  fruit: '🌳',
+  flint: '⚡',
+  wood: '🪵',
+  stone: '🪨',
+  obsidian: '🌋',
+};
+
 // --- 배너 (모듈 스코프 — HUD 장착 중에만 동작) -------------------------------
 let bannerHost: HTMLElement | null = null;
 
-function pushBanner(className: string, text: string): void {
-  if (!bannerHost || !bannerHost.isConnected) return;
+/** @returns 실제로 띄웠는가 (HUD가 아직 안 붙었으면 false) */
+function pushBanner(className: string, text: string): boolean {
+  if (!bannerHost || !bannerHost.isConnected) return false;
   const b = h('div', { class: `banner ${className}`, text });
   b.addEventListener('animationend', () => b.remove());
   bannerHost.appendChild(b);
+  return true;
 }
 
 /** 웨이브 시작 배너. final=true면 '마지막 웨이브!' 문구 */
@@ -69,6 +107,20 @@ export function showWaveBanner(wave: number, final = false): void {
 /** 보스 경고 배너 */
 export function showBossBanner(): void {
   pushBanner('banner--boss', t('battle.bossBanner'));
+}
+
+/**
+ * 첫 사용자 안내 배너 (gather-spec §7 마지막 항목) — **최소 개입**이다.
+ *
+ * 이 기능은 발견되지 않으면 없는 것과 같다: 자원 칸은 지금까지 "치우는 방해물"이었고,
+ * 채집을 켜도 화면에 새 버튼이 하나도 안 생긴다(명령이 기존 탭 두 번 그대로이기 때문이다).
+ * 그래서 **판을 가르치지 않고 한 문장만** 띄운다 — 튜토리얼도, 강제 진행도, 화살표도 없다.
+ * `.banner-host`는 pointer-events: none이라 탭을 하나도 안 먹는다.
+ * 띄웠는지 여부를 돌려주는 이유는 호출부가 "HUD가 아직 안 붙었다"와 "띄웠다"를
+ * 구분해야 하기 때문이다(안 그러면 한 프레임 차이로 안내가 영영 사라진다).
+ */
+export function showHintBanner(text: string): boolean {
+  return pushBanner('banner--hint', text);
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +175,8 @@ export function createBattleHud(): Screen<GameFacade> {
   }
   let allyBtns: AllyButton[] = [];
   let allyCountEl!: HTMLElement;
+  /** ⛏ n명 채집 중 · 짐 c — 마을 패널의 인원 줄 뒤에 붙는다 */
+  let allyGatherEl!: HTMLElement;
   /*
    * ── '이동 명령' 버튼은 삭제됐다 (사용자 지시) ──────────────────────────────
    * "그럼 안되고, 그냥 생산한 다음 마을 부족을 아무나 선택하면 같은 종류는 모두
@@ -132,6 +186,12 @@ export function createBattleHud(): Screen<GameFacade> {
    * 상태와 입력은 game/placement.ts가 갖는다(selectedAlly / clearAllySelection).
    */
   let lastAllySig = '';
+  /**
+   * 첫 사용자 안내 배너를 이 판에서 이미 띄웠는가 (gather-spec §7-3 (f)).
+   * **프로필에 새 플래그를 만들지 않는다** — `ProfileData`를 늘리면 세이브 스키마가 바뀌고
+   * 마이그레이션이 따라온다. 대가는 "웨이브를 한 번도 못 깬 사람에게 다시 보인다"뿐이다.
+   */
+  let hintShown = false;
 
   // 참조 요소 (enter에서 채움)
   let waveNum!: HTMLElement;
@@ -161,6 +221,12 @@ export function createBattleHud(): Screen<GameFacade> {
   // 소품(방해 지형지물) 제거 패널 — 선택 타워 패널과 같은 자리/같은 톤
   let scPanel!: HTMLElement;
   let scDesc!: HTMLElement;
+  /** 자원 칸의 숫자 줄 — 짐값 · 캐기 초 · 마을까지 초 (텄으면 그 사실 한 줄) */
+  let scInfo!: HTMLElement;
+  /** 패널 머리 — 자원 종류에 따라 아이콘과 이름이 바뀐다 (소품 일반은 예전 그대로) */
+  let scIco!: HTMLElement;
+  let scName!: HTMLElement;
+  let scGatherBtn!: HTMLElement;
   let scClearLabel!: HTMLElement;
   let scClearBtn!: HTMLElement;
   let scCloseBtn!: HTMLElement;
@@ -204,7 +270,18 @@ export function createBattleHud(): Screen<GameFacade> {
    * "한 놈"으로 남아 사실과 어긋났다. 값을 주입하면 규칙이 바뀔 때 문구가 따라온다.
    */
   const allyDesc = (defId: AllyId): string =>
-    t(`ally.${defId}.desc`, { n: ALLY_BLOCK_CAPACITY });
+    t(`ally.${defId}.desc`, {
+      n: ALLY_BLOCK_CAPACITY,
+      // 채집꾼 문구의 {g}·{c}도 같은 이유로 **정의에서** 온다 — 값을 문장에 박으면
+      // gatherPct/carryCap을 튜닝할 때(T6이 그 일을 한다) 화면만 옛말을 하게 된다.
+      // 나머지 세 종의 문구에는 이 자리표시자가 없어 그냥 무시된다.
+      g: gatherMul(defId),
+      c: ALLY_DEFS[defId].carryCap ?? 1,
+    });
+
+  /** 채집 배수 (gatherPct 300 → 3). 문구와 배지가 같은 값을 본다 */
+  const gatherMul = (defId: AllyId): number =>
+    Math.round(((ALLY_DEFS[defId].gatherPct ?? 100) / 100) * 10) / 10;
 
   /**
    * 세 종이 공유하는 규칙 한 줄 (이동 명령·영구·정원).
@@ -371,6 +448,32 @@ export function createBattleHud(): Screen<GameFacade> {
       // 경로가 있었다(가로 실측: 1탭 선택 → 2탭 결제). 그래서 **두 번 눌러야**
       // 실제로 나간다 — 첫 탭은 확인 상태로 무장만 하고 골드는 건드리지 않는다.
       scDesc = h('span', { class: 'tp-sub' });
+      scInfo = h('span', { class: 'tp-sub tp-sub--stats' });
+      scIco = h('span', { class: 'tp-ico tp-ico--scenery', html: sceneryIconSvg });
+      scName = h('span', { class: 'tp-name', text: t('battle.scenery.title') });
+      /*
+       * [채집 보내기] — **1탭, 확인 없음**이다(골드를 안 쓴다). 제거(2단 확인)와 나란히
+       * 서지만 성격이 정반대라 색으로도 갈린다: 이쪽은 초록(버는 일), 저쪽은 흙색(쓰는 일).
+       *
+       * ⚠ 이 버튼은 **누구를 보낼지 안 고른다.** 보내는 커맨드는 판 위 탭과 같은
+       *   `moveAlly`이고 `defId`를 안 실어 후보를 전 종족으로 연다 — 그중 한 사람을
+       *   고르는 것은 sim의 규칙이다(gather-spec D7 · sim/allies.ts moveAlly ③).
+       *   UI가 아는 것은 "보낼 수 있나/없나"뿐이고, 그 판정도 아래 update()가 sim의
+       *   후보 조건(못 캐는 종 · 짐 가득)을 그대로 되짚어 **사유를 화면에 적기 위해서**다.
+       */
+      scGatherBtn = h('button', {
+        class: 'tp-btn tp-btn--gather hud-item',
+        attrs: { type: 'button' },
+        onClick: () => {
+          const bb = api(facade);
+          const sc = bb?.selectedScenery?.() ?? null;
+          if (!bb || !sc) return;
+          const r = bb.sim.resourceAt(sc.x, sc.z);
+          // ⚠ resourceAt은 taken을 안 걸러낸다 — 다 턴 칸으로 사람을 보내면 헛걸음이다
+          if (!r || r.taken) return;
+          bb.requestGatherAt?.(sc.x, sc.z);
+        },
+      }, h('span', { class: 'tp-btn-label', text: `🧺 ${t('battle.res.send')}` }));
       scClearLabel = h('span', { class: 'tp-btn-label' });
       scClearBtn = h('button', {
         class: 'tp-btn tp-btn--clear hud-item',
@@ -408,12 +511,13 @@ export function createBattleHud(): Screen<GameFacade> {
       // 패널 자체에는 hud-item을 주지 않는다 — 배경이 포인터를 삼키면 그 밑의
       // 소품/타워 셀 탭이 아무 피드백 없이 죽는다 (실측: 세로 9/40, 가로 13/40 셀)
       scPanel = h('div', { class: 'tower-panel tower-panel--scenery', attrs: { style: 'display:none' } },
-        h('div', { class: 'tp-head' },
-          h('span', { class: 'tp-ico tp-ico--scenery', html: sceneryIconSvg }),
-          h('span', { class: 'tp-name', text: t('battle.scenery.title') }),
-        ),
+        h('div', { class: 'tp-head' }, scIco, scName),
+        // 숫자 줄이 **먼저**다 — 이 패널에서 결정을 바꾸는 것은 문장이 아니라 세 숫자
+        // (짐값 · 캐기 초 · 마을까지 초)이고, 그 셋이 "채집꾼이면 4초, 파수꾼이면 20초"를
+        // 버튼 하나 위에서 가른다(gather-spec §7-3 (e)).
+        scInfo,
         scDesc,
-        h('div', { class: 'tp-btns' }, scClearBtn, scCloseBtn),
+        h('div', { class: 'tp-btns' }, scGatherBtn, scClearBtn, scCloseBtn),
       );
 
       // --- 마을 패널: 레벨업 + 아군 출동 ------------------------------------
@@ -462,10 +566,28 @@ export function createBattleHud(): Screen<GameFacade> {
         // (title은 데스크톱 호버, aria-label은 보조기기 — 둘 다 같은 문장을 쓴다)
         // 가죽을 여는 카드(파수꾼)만 배지를 단다 — 데이터가 정하므로 종 이름을
         // 여기 박지 않는다. `sunder`를 끄면 배지도 같이 사라진다.
+        /*
+         * 배지는 **데이터가 정한다** — 종 이름을 여기 박지 않는다.
+         * 지금 배지가 붙는 축은 둘이고 서로 배타다(한 종이 둘 다는 아니다):
+         *   sunder(파수꾼) = 타워 화력의 곱셈 인자 · gather(채집꾼) = 유일한 벌이 수단.
+         * `sunder`를 끄거나 `gatherPct`를 100으로 내리면 배지도 같이 사라진다.
+         */
         const opensHide = ALLY_DEFS[defId].sunder === true;
+        const gathers = (ALLY_DEFS[defId].gatherPct ?? 100) > 100;
+        const badge: 'sunder' | 'gather' | null = opensHide
+          ? 'sunder'
+          : gathers
+            ? 'gather'
+            : null;
         const label =
           `${t(`ally.${defId}.name`)} — ${allyDesc(defId)} · ${allyRules()}` +
-          (opensHide ? ` · ${t('battle.ally.sunderHint')}` : '');
+          (opensHide ? ` · ${t('battle.ally.sunderHint')}` : '') +
+          (gathers
+            ? ` · ${t('battle.ally.gatherHint', {
+                g: gatherMul(defId),
+                c: ALLY_DEFS[defId].carryCap ?? 1,
+              })}`
+            : '');
         const el = h('button', {
           class: 'ally-btn hud-item',
           attrs: { type: 'button', 'aria-label': label, title: label },
@@ -475,11 +597,23 @@ export function createBattleHud(): Screen<GameFacade> {
           h('span', { class: 'ally-btn-name', text: t(`ally.${defId}.name`) }),
           costLabel,
         );
-        if (opensHide) {
+        /*
+         * 배지 DOM은 **한 벌**이다 — 자리(버튼 안쪽 위 모서리)도, 좁은 화면에서 낱말을
+         * 접는 규칙도 종류와 무관하게 같아야 하기 때문이다. 그래서 기존 `.ally-btn-sunder`가
+         * 배지의 **자리 이름**으로 남고 종류는 수식 클래스가 가른다(색만 갈린다).
+         * 이름이 역사적이라는 것은 알고 둔다 — 바꾸면 style.css의 반응형 규칙 넷과
+         * e2e 선택자가 같이 움직여야 하고, 그건 이 배지가 사는 값보다 크다.
+         */
+        if (badge) {
           el.appendChild(
-            h('span', { class: 'ally-btn-sunder' },
-              h('span', { class: 'ally-btn-sunder-ico', html: traitIconSvg('hide') }),
-              h('span', { class: 'ally-btn-sunder-txt', text: t('battle.ally.sunder') }),
+            h('span', { class: `ally-btn-sunder ally-btn-sunder--${badge}` },
+              badge === 'sunder'
+                ? h('span', { class: 'ally-btn-sunder-ico', html: traitIconSvg('hide') })
+                : h('span', { class: 'ally-btn-sunder-ico ally-btn-sunder-ico--glyph', text: '⛏' }),
+              h('span', {
+                class: 'ally-btn-sunder-txt',
+                text: badge === 'sunder' ? t('battle.ally.sunder') : t('battle.ally.gather'),
+              }),
             ),
           );
         }
@@ -498,6 +632,10 @@ export function createBattleHud(): Screen<GameFacade> {
         h('div', { class: 'home-ally-head' },
           h('span', { class: 'ally-count-label', text: t('battle.ally.title') }),
           allyCountEl,
+          // "몇 명이 캐고 있고 짐이 몇 개인가" — 채집은 **전선에서 빠지는 일**이라
+          // 그 인원이 화면에 없으면 "왜 이렇게 안 막히지"의 답이 어디에도 없다.
+          // 부모 컨테이너가 flex-wrap이라 폭이 모자라면 줄바꿈된다.
+          (allyGatherEl = h('span', { class: 'ally-gather-num' })),
           (allyRulesEl = h('span', { class: 'tp-sub home-ally-rules', text: allyRules() })),
         ),
         h('div', { class: 'ally-row' }, ...allyBtns.map((b) => b.el)),
@@ -515,7 +653,11 @@ export function createBattleHud(): Screen<GameFacade> {
               text:
                 ALLY_DEFS[defId].sunder === true
                   ? `${allyDesc(defId)} · ${t('battle.ally.sunder')}`
-                  : allyDesc(defId),
+                  : (ALLY_DEFS[defId].gatherPct ?? 100) > 100
+                    ? // 채집꾼만 **조작법 한 마디**가 붙는다 — 이 종은 출동시키는 것만으로는
+                      // 아무 일도 안 일어나고, 자원 칸을 찍어야 비로소 일을 시작한다.
+                      `${allyDesc(defId)} · ${t('battle.ally.rulesGather')}`
+                    : allyDesc(defId),
             }),
           ),
         ),
@@ -580,6 +722,7 @@ export function createBattleHud(): Screen<GameFacade> {
       lastSelScenery = '';
       lastSelBase = false;
       lastAllySig = '';
+      hintShown = false;
       preview = null;
       previewWaveNo = -1;
       if (b) this.update?.(facade, 0);
@@ -608,6 +751,23 @@ export function createBattleHud(): Screen<GameFacade> {
       const b = api(facade);
       if (!b || !root) return;
       const s = b.sim.state;
+
+      /*
+       * 첫 사용자 안내 (gather-spec §7-3 (f)) — prep · 웨이브 1 · **한 번도 못 깬 사람**.
+       * 새 프로필 플래그를 안 만든다(세이브 스키마 불변). 대가는 알고 받는다:
+       * 첫 웨이브를 못 깨고 계속 지는 사람에게는 판마다 다시 보인다 — 그 사람에게는
+       * 아직 필요한 안내라 그 대가가 나쁘지 않다.
+       * 반환값을 그대로 대입하는 이유: HUD가 아직 안 붙은 프레임에 눌러 버리면
+       * 안내가 영영 사라진다(pushBanner가 조용히 반환한다).
+       */
+      if (
+        !hintShown &&
+        s.phase === 'prep' &&
+        s.waveIndex === 1 &&
+        facade.profile.data.stats.wavesCleared === 0
+      ) {
+        hintShown = showHintBanner(t('battle.hint.gather'));
+      }
 
       // 상단 숫자
       setText(waveNum, s.endless ? `∞ ${s.waveIndex}` : `${s.waveIndex}/${s.waveCount}`);
@@ -713,13 +873,31 @@ export function createBattleHud(): Screen<GameFacade> {
         setText(targetBtn, t(`battle.targeting.${tw.targeting}`));
       }
 
-      // 방해 지형지물 제거 패널 (선택 타워 패널과 상호배타 — placement가 보장)
+      /*
+       * ── 자원 패널 (옛 '방해 지형지물 제거' 패널의 확장) ────────────────────────
+       * 같은 셀이 두 가지 뜻을 갖게 됐다: **캘 것**(짐 하나)이면서 **치울 것**(건설 자리)이다.
+       * 그래서 패널 하나가 둘을 나란히 판다 — 그리고 D1이 만든 기회비용을 화면이 말한다:
+       * 안 턴 칸을 치우면 **그 짐을 버리는 것**이다(battle.res.clearWarn).
+       * ⚠ 제거 쪽(클래스 · 2단 확인 · 사유 문구)은 한 줄도 안 바꿨다 — e2e가 전부 잡는다.
+       */
       const sc = over ? null : (b.selectedScenery?.() ?? null);
+      const res = sc ? b.sim.resourceAt(sc.x, sc.z) : null; // ⚠ taken을 안 걸러낸다
       const scSig = sc ? `${sc.x},${sc.z}` : '';
       if (scSig !== lastSelScenery) {
         lastSelScenery = scSig;
         scPanel.style.display = sc ? '' : 'none';
         disarm(); // 대상이 바뀌면 확인 무장은 무효
+        // 머리는 **대상이 바뀔 때만** 다시 쓴다 (종류는 판 내내 안 변한다)
+        if (res) {
+          scIco.innerHTML = '';
+          scIco.textContent = RES_EMOJI[res.kind];
+          setText(scName, t(`res.${res.kind}.name`));
+        } else if (sc) {
+          scIco.textContent = '';
+          scIco.innerHTML = sceneryIconSvg;
+          setText(scName, t('battle.scenery.title'));
+        }
+        cls(scIco, 'tp-ico--res', res !== null);
       }
       if (sc) {
         const cost = b.sim.clearSceneryCost(sc.x, sc.z);
@@ -737,15 +915,88 @@ export function createBattleHud(): Screen<GameFacade> {
         cls(scClearBtn, 'is-armed', scArmed);
         // 골드가 모자라면 비활성 + 얼마나 모자란지 이유를 그 자리에 띄운다
         cls(scClearBtn, 'is-disabled', blocked);
-        setText(
-          scDesc,
-          short > 0
-            ? t('battle.scenery.needGold', { n: fmt(short) })
-            : scArmed && cost !== null
-              ? t('battle.scenery.confirmDesc', { n: fmt(cost) })
-              : t('battle.scenery.desc'),
+
+        // --- 채집 갈래 -------------------------------------------------------
+        const refs = b.gatherRefs?.() ?? null;
+        const canSend = res !== null && !res.taken && b.requestGatherAt !== undefined;
+        scGatherBtn.style.display = canSend ? '' : 'none';
+        const key = res && refs ? res.cellZ * refs.gridW + res.cellX : -1;
+        const claimer = key >= 0 ? allyClaiming(s.allies, key) : null;
+        const who = canSend ? pickGatherer(s.allies, key) : null;
+        // 못 보내는 사유를 **화면이 말한다** — 회색 버튼만 있으면 "왜"가 어디에도 없다
+        const anyGatherer = s.allies.some(
+          (a) => a.alive && (ALLY_DEFS[a.defId].gatherPct ?? 100) > 0,
         );
-        cls(scDesc, 'is-warn', short > 0 || scArmed);
+        cls(scGatherBtn, 'is-disabled', canSend && who === null);
+        // D1이 만든 기회비용 — 안 턴 칸을 치우면 **그 짐을 버리는 것**이다.
+        // 결제 확인 문구에 한 줄로 붙는다(치우기가 무엇을 앗아 가는지 그 자리에서 말한다).
+        const clearWarn =
+          res && !res.taken ? ` · ${t('battle.res.clearWarn', { g: fmt(res.value) })}` : '';
+
+        // 숫자 줄 — 짐값 · (보낼 사람 기준) 캐기 초 · 마을까지 초
+        if (res && res.taken) {
+          setText(scInfo, t('battle.res.taken'));
+        } else if (res) {
+          let line = t('battle.res.value', { g: fmt(res.value) });
+          // ⚠ 시간은 **누구를 보낼지 정한 뒤의 숫자**다. 그 사람이 없으면 안 적는다 —
+          //   임의의 종을 가정해 적으면 화면이 아무도 실행하지 않을 값을 말하게 된다.
+          if (who && refs) {
+            const wd = ALLY_DEFS[who.defId];
+            const secs = Math.max(1, Math.round(gatherTicksFor(wd, res.kind) / TICK_RATE));
+            const dx = res.cellX - refs.baseX;
+            const dz = res.cellZ - refs.baseZ;
+            const walk = Math.max(
+              1,
+              Math.round(Math.sqrt(dx * dx + dz * dz) / Math.max(0.1, wd.speed)),
+            );
+            line += ` · ${t('battle.res.time', { s: secs, w: walk })}`;
+          }
+          setText(scInfo, line);
+        }
+        scInfo.style.display = res ? '' : 'none';
+
+        /*
+         * 상태/경고 줄 — **우선순위가 곧 "지금 이 사람이 알아야 하는 것"의 순서**다.
+         *
+         * ⚠ 골드 부족(needGold)을 맨 위에 두면 안 된다. 치우기 값은 380부터 시작하고
+         *   초반 잔고는 그 아래에 오래 머무르므로, 그대로 두면 **안 턴 칸의 설명이
+         *   판 내내 "골드 부족"으로 덮인다** — 정작 지금 할 수 있는 일(공짜인 채집)이
+         *   화면에서 사라진다. 그래서 골드 부족은 **캘 것이 없는 칸에서만** 말한다
+         *   (치우기 버튼은 어차피 회색이라 못 누른다는 사실 자체는 이미 보인다).
+         */
+        let warn = false;
+        let desc: string;
+        if (scArmed && cost !== null) {
+          // 결제 직전 — 되돌릴 수 없는 지출이라 다른 무엇보다 먼저다.
+          // 안 턴 칸이면 D1의 기회비용(짐을 버린다)이 여기 붙는다.
+          desc = t('battle.scenery.confirmDesc', { n: fmt(cost) }) + clearWarn;
+          warn = true;
+        } else if (!res) {
+          desc = short > 0 ? t('battle.scenery.needGold', { n: fmt(short) }) : t('battle.scenery.desc');
+          warn = short > 0;
+        } else if (res.taken) {
+          // 그루터기 — 캘 것이 없으니 이 칸의 남은 뜻은 '치우기'뿐이다
+          desc = short > 0
+            ? t('battle.scenery.needGold', { n: fmt(short) })
+            : t(`res.${res.kind}.tag`);
+          warn = short > 0;
+        } else if (claimer) {
+          // 이미 사람이 가 있다. **캐는 중이면** 규칙 한 줄을 대신 띄운다:
+          // 맞으면 손이 멈추고, 그래도 등에 진 짐은 안 놓친다(§4-4). 그 둘이 화면에서
+          // 안 갈리면 플레이어에게는 "가끔 안 캔다"가 랜덤으로 읽힌다.
+          desc = isGathering(claimer)
+            ? t('battle.res.fightFirst')
+            : t('battle.res.claimed', { n: t(`ally.${claimer.defId}.name`) });
+        } else if (who || !canSend) {
+          // (canSend가 false인데 여기까지 온 것은 채집 API가 없는 목 UI뿐이다 —
+          //  그때는 "왜 못 보내나"를 말할 처지가 아니므로 주제 문장을 그대로 둔다)
+          desc = t('battle.res.desc');
+        } else {
+          desc = anyGatherer ? t('battle.res.handsFull') : t('battle.res.sendNone');
+          warn = true;
+        }
+        setText(scDesc, desc);
+        cls(scDesc, 'is-warn', warn);
       }
 
       // 마을 패널: 레벨업 + 출동 (타워/소품 패널과 상호배타 — placement가 보장)
@@ -783,11 +1034,30 @@ export function createBattleHud(): Screen<GameFacade> {
         // 출동 버튼 — 비용은 나가 있는 인원 수에 따라 오르므로 인원이 바뀔 때만 갱신하고,
         // 골드는 매 프레임 바뀌니 비활성 여부는 항상 다시 본다.
         // (패널이 닫혀 있으면 이 블록에 오지 않는다 — 안 보이는 DOM을 매 프레임 만지지 않는다)
-        const allySig = `${s.allies.length}/${s.allyCap}`;
+        // 채집 인원·짐도 같은 서명에 접는다 — 셋 중 하나라도 바뀌면 줄을 다시 쓴다
+        let gathering = 0;
+        let carrying = 0;
+        for (const a of s.allies) {
+          if (!a.alive) continue;
+          if (a.gatherKey >= 0) gathering++;
+          carrying += a.carryCount;
+        }
+        const headCount = `${s.allies.length}/${s.allyCap}`;
+        const allySig = `${headCount}|${gathering}|${carrying}`;
         if (allySig !== lastAllySig) {
           lastAllySig = allySig;
-          setText(allyCountEl, allySig);
+          setText(allyCountEl, headCount);
           cls(allyCountEl, 'is-full', s.allies.length >= s.allyCap);
+          // 아무도 안 캐고 짐도 없으면 **줄 자체를 비운다** — 채집을 안 하는 판에서
+          // "0명 채집 중"이 상시로 떠 있으면 그것 자체가 소음이다.
+          //
+          // ⚠ 두 조각을 **따로** 켠다. 하나로 묶으면 아무도 안 캐고 짐만 있을 때
+          // "⛏ 0명 채집 중 · 짐 1"이 뜬다 — 줄을 비우는 분기가 합이 0인 경우만 막기
+          // 때문이다. 0은 "없다"이지 "0명이 하고 있다"가 아니다.
+          const parts: string[] = [];
+          if (gathering > 0) parts.push(t('battle.ally.gathering', { n: gathering }));
+          if (carrying > 0) parts.push(t('battle.ally.carrying', { c: carrying }));
+          setText(allyGatherEl, parts.join(' · '));
           for (const btn of allyBtns) setText(btn.costLabel, fmt(b.sim.allyCost(btn.defId)));
         }
         // canTrainAlly는 상한·골드·종료 여부를 한 번에 본다 (sim이 커맨드를 거부하는 판정 그대로)
@@ -831,6 +1101,50 @@ export function createBattleHud(): Screen<GameFacade> {
       }
     },
   };
+
+  /** 그 칸을 이미 맡은 사람 (예약은 배타적이라 최대 한 명) — 없으면 null */
+  function allyClaiming(allies: readonly AllyState[], key: number): AllyState | null {
+    for (const a of allies) {
+      if (a.alive && a.gatherKey === key) return a;
+    }
+    return null;
+  }
+
+  /**
+   * 지금 [채집 보내기]를 누르면 **누가 갈까** — 화면에 적을 숫자를 위한 미리보기다.
+   *
+   * ⚠ **이것은 정책이 아니다.** 실제로 누가 가는지는 언제나 sim이 정한다
+   *   (gather-spec D7 · sim/allies.ts moveAlly ③: 이미 그 칸을 맡은 사람 →
+   *   gatherPct 내림차순 → id 오름차순). 여기서 같은 순서를 되짚는 이유는 패널이
+   *   "채집꾼이면 4초, 파수꾼이면 20초"를 **누르기 전에** 말해야 하기 때문이고,
+   *   그것이 이 기능의 교육이다. 두 곳이 어긋나면 **화면의 숫자만** 틀리고 규칙은
+   *   흔들리지 않는다 — 그래서 정렬을 sim으로 보내고 복제본을 이쪽에 두는 것이 맞다.
+   *   (UI에 정책을 두면 그 정책이 hash()에도 sim 테스트에도 안 잡히고, 봇 하네스는
+   *    또 다른 정책을 쓰게 되어 사람과 봇이 다른 게임을 하게 된다 — §7-1)
+   *
+   * 정렬을 안 하고 한 번만 훑는 이유: `state.allies`는 풀 순서(swap-remove)라 id 순이
+   * 아니고, 복사해 정렬하면 패널이 열려 있는 동안 매 프레임 배열을 하나씩 버리게 된다.
+   * "동점이면 낮은 id"는 비교식에 직접 적으면 순회 순서와 무관하게 같은 답이 나온다.
+   */
+  function pickGatherer(allies: readonly AllyState[], key: number): AllyState | null {
+    let best: AllyState | null = null;
+    let bestPct = -1;
+    for (const a of allies) {
+      if (!a.alive) continue;
+      const def = ALLY_DEFS[a.defId];
+      const pct = def.gatherPct ?? 100;
+      if (pct <= 0) continue; // 못 캐는 종은 애초에 후보가 아니다
+      if (a.carryCount >= (def.carryCap ?? 1)) continue; // 짐이 가득
+      // ⚠ `key >= 0` 가드가 있어야 한다 — 키를 못 구한 경우(-1)에 이 비교를 그대로 두면
+      //   **아무 명령도 없는 사람**(gatherKey −1)이 "이미 그 칸을 맡은 사람"으로 잡힌다.
+      if (key >= 0 && a.gatherKey === key) return a; // 이미 맡은 사람이 언제나 우선
+      if (best === null || pct > bestPct || (pct === bestPct && a.id < best.id)) {
+        best = a;
+        bestPct = pct;
+      }
+    }
+    return best;
+  }
 
   /** 선택 타워 상태 조회 */
   function selectedTowerState(b: BattleUiApiExt | null): TowerState | null {

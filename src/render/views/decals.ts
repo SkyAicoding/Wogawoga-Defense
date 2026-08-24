@@ -239,7 +239,10 @@ export class Decals {
     this.hideCellMarker();
   }
 
-  showSortieMarker(points: readonly { x: number; z: number }[]): void {
+  showSortieMarker(
+    points: readonly { x: number; z: number }[],
+    color: number = MARKER_COLOR_SORTIE,
+  ): void {
     if (points.length === 0) {
       this.hideCellMarker();
       return;
@@ -262,12 +265,22 @@ export class Decals {
       this.sortieGeo = mergeGeos(geos);
     }
     this.marker.geometry = this.sortieGeo;
-    this.markerMat.color.setHex(MARKER_COLOR_SORTIE);
+    this.markerMat.color.setHex(color);
     this.markerMode = 'sortie';
     // 좌표는 지오메트리에 구워 넣었다 — 메시는 원점에 둔다(호흡 스케일도 쓰지 않는다)
     this.marker.position.set(0, 0, 0);
     this.marker.scale.set(1, 1, 1);
     this.marker.visible = true;
+  }
+
+  /**
+   * **자원 칸**으로 보낸 명령의 목표 표식 — 이동 표식과 같은 메시를 쓰고 **색만** 바꾼다
+   * (gather-spec §7-2: 드로우콜 Δ 0). 색을 가르는 이유는 그 탭의 뜻이 다르기 때문이다:
+   * 한랭색 표식은 "저기로 가서 선다"이고 금색 표식은 "저기서 캐서 지고 온다"다.
+   * 명령 자체는 한 글자도 안 바뀐다 — 갈리는 것은 표시뿐이다(§7-1).
+   */
+  showGatherOrder(cellX: number, cellZ: number): void {
+    this.showSortieMarker([{ x: cellX, z: cellZ }], MARKER_COLOR_GATHER);
   }
 
   hideCellMarker(): void {
@@ -415,6 +428,11 @@ const MARKER_BEACON_H = 2.2;
 const MARKER_COLOR_CELL = 0xffa63c;
 const MARKER_COLOR_SORTIE = 0x9fdcf7;
 const MARKER_COLOR_TOWER = 0xffe45c;
+/**
+ * 채집 명령 표식 = 진한 금색. 이동(한랭색)과 갈리고 소품 선택(주황)보다 노랗다 —
+ * 자원 배지(healthbars kind 7)의 금색과 **같은 축**이라 "그 배지를 찍었다"가 이어진다.
+ */
+const MARKER_COLOR_GATHER = 0xffcf3a;
 /**
  * 타워 링 배율 — 타워 실루엣은 T1 0.9 ~ T5 1.4셀이라 소품용 링(외경 0.46)은
  * 받침 밑에 깔려 안 보인다. 1.6배면 외경 0.74로 만렙 받침(반경 약 0.69) 바깥에 선다.

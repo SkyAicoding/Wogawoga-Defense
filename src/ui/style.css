@@ -467,6 +467,13 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .ally-count-num { font-size: 0.9rem; font-weight: 900; color: #9fdcf7; }
 /* 상한에 닿으면 "왜 버튼이 안 눌리는가"의 답이 여기 있어야 한다 */
 .ally-count-num.is-full { color: #ff9d6a; }
+/*
+ * "⛏ n명 채집 중 · 짐 c" — 인원 표시(한랭색) 옆의 **다른 색**이다.
+ * 채집 중인 사람은 전선에서 빠져 있다(캐는 중·운반 중은 전투 불능) — 그 사실이
+ * 같은 색으로 적히면 "나가 있는 인원"과 뭉개진다. 아무도 안 캐면 빈 문자열이라
+ * 이 span은 자리를 안 먹는다.
+ */
+.ally-gather-num { font-size: 0.74rem; font-weight: 800; color: #cdf09a; min-width: 0; }
 .ally-btn {
   flex: 1; min-width: 0; min-height: 48px;
   display: flex; align-items: center; justify-content: center; gap: 5px;
@@ -492,6 +499,15 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .ally-btn-sunder-ico { width: 10px; height: 10px; flex: 0 0 auto; }
 .ally-btn-sunder-ico svg { width: 100%; height: 100%; display: block; }
+/*
+ * 배지 자리는 **한 벌**이고 종류만 는다 (battlehud.ts의 badge: 'sunder' | 'gather').
+ * 채집 배지는 초록 — 이 게임에서 초록은 버는 쪽이고(자원 배지·[채집 보내기] 버튼과
+ * 같은 축), 가죽 배지의 흙빛(#e7c79c)과 한눈에 갈린다.
+ * 아이콘이 SVG가 아니라 글자(⛏)라 크기 규칙이 하나 더 필요하다 — 10px 상자에
+ * 이모지를 넣으면 잘린다.
+ */
+.ally-btn-sunder--gather { background: rgba(20, 46, 12, 0.55); color: #cdf09a; }
+.ally-btn-sunder-ico--glyph { width: auto; height: auto; font-size: 0.58rem; line-height: 1.6; }
 /* 아군은 한랭색 — 3D 인스턴스 색조(ALLY_TINT)·아군 체력바와 같은 축이다 */
 .ally-btn-ico { width: 26px; height: 26px; flex: 0 0 auto; }
 .ally-btn-ico svg { width: 100%; height: 100%; }
@@ -515,11 +531,31 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   .ally-btn-name { display: none; }
   .ally-btn-ico { width: 24px; height: 24px; }
   .ally-btn { gap: 6px; }
+  /* 채집 인원 줄은 좁은 화면에서 제 줄을 갖는다 — 인원 표시와 한 줄에 욱여넣으면
+     "⛏ 2명 채집…"으로 잘려 짐 개수가 통째로 사라진다 */
+  .ally-gather-num { flex: 1 1 100%; }
   /* 이름을 접는 폭이면 배지의 낱말도 접는다 — 아이콘만 남고 문장은 아래 설명 줄이 받는다 */
   .ally-btn-sunder-txt { display: none; }
   .ally-btn-sunder { padding: 0 2px; }
   /* 버튼에서 이름이 접히는 폭이다 — 그만큼 아래 설명 줄이 유일한 정보원이 된다 */
   .ally-info-desc { font-size: 0.68rem; }
+}
+/*
+ * ── 출동 버튼이 **셋에서 넷**이 됐다 (채집꾼, gather-spec §7-3 (a)) ──────────
+ * `.ally-row`가 flex 균등이라 버튼 폭이 그만큼 줄어든다. 실측 계산(아래 표는
+ * 이 파일과 index.html의 값으로 계산한 박스 모델 값이다):
+ *   390px → 79.5px · 360px → 72.0px · 320px → 62.0px  (높이는 48px 고정)
+ * 320px에서 내용물(아이콘 24 + gap 6 + 3자리 비용 ≈ 26 + 좌우 패딩 12)이 딱 맞으므로
+ * 그 아래로는 아이콘과 여백을 한 번 더 줄여 **글자가 아니라 여백이 먼저 깎이게** 한다.
+ * 터치 타깃(높이 48px ≥ 44px)은 어느 폭에서도 안 건드린다 — 좁아지는 것은 가로뿐이다.
+ * 2×2 그리드는 안 쓴다: 세로가 +56px이고 마을 패널은 이미 하단을 많이 먹어
+ * 카메라가 setLift로 판을 비켜세우는 중이다.
+ */
+@media (max-width: 360px) {
+  .ally-btn { gap: 4px; padding-left: 4px; padding-right: 4px; }
+  .ally-btn-ico { width: 21px; height: 21px; }
+  .ally-btn-cost { font-size: 0.76rem; }
+  .ally-btn-sunder { font-size: 0.52rem; }
 }
 /*
  * 종별 설명 세 줄 — 5단계의 '출동 안내 패널'을 마을 패널 안으로 흡수한 것.
@@ -720,6 +756,12 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .tp-btn--target { background: linear-gradient(180deg, #9fdcf7, #58b7dd); }
 /* 방해 지형지물 제거 — 흙/돌 톤으로 강화(금)·판매(빨강)와 구분 */
 .tp-btn--clear { background: linear-gradient(180deg, #d3b487, #a07a4a); }
+/*
+ * [채집 보내기] — 초록. 바로 옆의 [치우기](흙색)와 **성격이 정반대**라 색이 갈려야 한다:
+ * 이쪽은 1탭에 골드를 **버는** 일이고 저쪽은 2단 확인으로 골드를 **쓰는** 일이다.
+ * 채집 배지(.ally-btn-sunder--gather)·자원 배지의 초록과 같은 축이다.
+ */
+.tp-btn--gather { background: linear-gradient(180deg, #b8e06a, #6fa03a); }
 /* 확인 무장 상태: 색이 확 바뀌어야 "한 번 더 누르면 나간다"가 읽힌다 */
 .tp-btn--clear.is-armed {
   background: linear-gradient(180deg, #ffd94a, #ff8a1e); color: var(--ink);
@@ -744,6 +786,11 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 /* 현재 성능 줄 — 설명문(tp-sub)보다 한 단계 또렷하게, 숫자가 먼저 읽히도록 */
 .tp-sub--stats { color: var(--gold); opacity: 1; letter-spacing: 0.01em; }
 .tp-ico--scenery svg { width: 100%; height: 100%; }
+/* 자원 칸의 얼굴은 이모지 한 자다 (battlehud RES_EMOJI) — 34px 상자 안에서 가운데 */
+.tp-ico--res {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.65rem; line-height: 1;
+}
 .tp-ico--home svg { width: 100%; height: 100%; }
 /* 홈타운 패널 — 마을 톤(따뜻한 흙빛)으로 타워 패널과 한눈에 구분 */
 .tower-panel--home { background: linear-gradient(180deg, #5d4526, var(--panel)); }
@@ -757,6 +804,18 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .banner--wave { background: linear-gradient(180deg, #ffd94a, #ff9d2e); color: var(--ink); box-shadow: 0 6px 0 rgba(0, 0, 0, 0.3); }
 .banner--boss { background: linear-gradient(180deg, #ff7a63, #b02818); color: #fff; box-shadow: 0 0 34px rgba(255, 60, 30, 0.65); animation: banner-in 2.4s ease both, boss-shake 0.12s linear 6; }
+/*
+ * 첫 사용자 안내 — 웨이브·보스 배너와 **일부러 다르게 작다**. 저 둘은 "지금 무슨 일이
+ * 벌어졌다"이고 이건 "해 볼 수 있는 것이 있다"라, 같은 크기로 뜨면 사건으로 오해된다.
+ * 한 문장이 390px에서 두 줄이 되도록 nowrap을 푼다 (banner 기본은 nowrap이다).
+ */
+.banner--hint {
+  background: linear-gradient(180deg, #b8e06a, #6fa03a); color: var(--ink);
+  box-shadow: 0 6px 0 rgba(0, 0, 0, 0.3);
+  font-size: 0.86rem; font-weight: 800; letter-spacing: 0;
+  padding: 10px 18px; max-width: min(92vw, 420px); white-space: normal; text-align: center;
+  line-height: 1.35; animation: hint-in 5s ease both;
+}
 
 /* --- 결과 ---------------------------------------------------------------- */
 .screen--result.is-won { background: radial-gradient(100% 70% at 50% 0%, rgba(255, 208, 74, 0.3), transparent 60%), linear-gradient(180deg, #2c3f22, #0e1a12); }
@@ -838,6 +897,17 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   12% { transform: scale(1); opacity: 1; }
   80% { transform: scale(1); opacity: 1; }
   100% { transform: scale(0.9); opacity: 0; }
+}
+/*
+ * 안내 배너 전용 — banner-in(1.7배에서 튀어나오는 팝)을 안 쓴다. 저 팝은 "사건이
+ * 일어났다"의 문법이라 안내에 쓰면 놀라게 하고, 무엇보다 판을 보고 있던 눈을 뺏는다.
+ * 여기서는 아래에서 조용히 떠올랐다 위로 사라진다. 5초는 한 문장(31자)을 읽는 시간이다.
+ */
+@keyframes hint-in {
+  0% { transform: translateY(10px); opacity: 0; }
+  8% { transform: none; opacity: 1; }
+  86% { transform: none; opacity: 1; }
+  100% { transform: translateY(-6px); opacity: 0; }
 }
 @keyframes boss-shake { 0%, 100% { translate: 0 0; } 25% { translate: -4px 0; } 75% { translate: 4px 0; } }
 @keyframes btn-shake { 0%, 100% { translate: 0 0; } 20%, 60% { translate: -6px 0; } 40%, 80% { translate: 6px 0; } }

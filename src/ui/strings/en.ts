@@ -126,6 +126,58 @@ export const en: Record<string, string> = {
   'ally.slinger.desc': 'Throws from behind. Hits fliers, but pins nobody',
   'ally.guardian.name': 'Guardian',
   'ally.guardian.desc': 'Shield and armor. Holds out even when swarmed by {n}',
+
+  // --- Gatherer (the fourth tribe) ------------------------------------------
+  // {g} = harvest multiplier (gatherPct/100), {c} = carryCap — battlehud's allyDesc fills them in.
+  'ally.gatherer.name': 'Gatherer',
+  // 한국어 '대신 싸움에는 못 나서요'의 어조에 맞춘다 — 'Useless'는 이 게임에서 너무 모질다.
+  'ally.gatherer.desc': 'Harvests {g}x faster and carries {c} loads. Not one for fighting',
+
+  // --- The eight resources (docs/gather-spec.md §7-4) ------------------------
+  // Each tag names the only two axes a kind changes: time to gather, and what the load is worth.
+  'res.berry.name': 'Berry Bush',
+  'res.berry.tag': 'The quickest to pick — and the cheapest',
+  'res.mushroom.name': 'Mushroom Patch',
+  'res.mushroom.tag': 'Quick to pick, modest pay',
+  'res.honey.name': 'Honeycomb',
+  'res.honey.tag': 'Middling on both counts',
+  'res.fruit.name': 'Fruit Tree',
+  'res.fruit.tag': 'One tree, a whole crop',
+  'res.flint.name': 'Flint',
+  'res.flint.tag': 'Fast, for a rock',
+  'res.wood.name': 'Timber',
+  'res.wood.tag': 'Steady. Grows everywhere',
+  'res.stone.name': 'Stone Pile',
+  'res.stone.tag': 'Slow going — but it pays',
+  'res.obsidian.name': 'Obsidian',
+  'res.obsidian.tag': 'The slowest and the richest',
+
+  // --- Resource panel --------------------------------------------------------
+  // Note it does NOT say "clear it to build here" (D1: a picked tile never opens up).
+  'battle.res.desc': 'Gather it and carry it home to the village to get the coins',
+  // 단위를 붙인다 — 같은 파일의 clearWarn 이 'a {g} coin load' 라 서로 안 맞았다.
+  'battle.res.value': 'This load is worth {g} coins',
+  'battle.res.time': '{s}s to gather · {w}s back home',
+  'battle.res.send': 'Send a gatherer',
+  'battle.res.sendNone': 'Nobody free — train a gatherer in the village',
+  'battle.res.handsFull': 'Their hands are full — send them home to drop the load',
+  'battle.res.taken': 'Already taken — only a stump left',
+  'battle.res.claimed': '{n} is on the way',
+  'battle.res.fightFirst': 'A hit stops their hands. The load on their back is safe',
+  'battle.res.clearWarn': 'This throws away a {g} coin load',
+
+  // --- Tribe panel (gathering) ----------------------------------------------
+  'battle.ally.gather': 'Gathers fast',
+  'battle.ally.gatherHint': 'Sent to a resource tile, gathers {g}x faster and carries {c} loads',
+  // ko 와 같이 두 조각으로 가른다 — 아무도 안 캐는데 '0 gathering' 이 뜨면 거짓말이다.
+  'battle.ally.gathering': '⛏ {n} gathering',
+  'battle.ally.carrying': '{c} carried',
+  // 형제 문자열 battle.ally.sunder('Opens hide')와 같은 자리에 붙으므로 대문자로 시작한다.
+  'battle.ally.rulesGather': 'Tap a resource tile and they gather it and carry it home',
+
+  // --- First-run hint (one banner) ------------------------------------------
+  'battle.hint.gather': '🍓 Tap a tribesman, then tap a tree — they gather it and carry it home for coins',
+
   // --- Wave preview band (prep only) ---------------------------------------
   'battle.preview.title': 'Next wave',
   'battle.preview.expand': 'Show details',

@@ -271,9 +271,18 @@ export class PlacementController {
    * 규칙 2) 이동 명령 목표 표식 — 마지막으로 찍은 자리에 원을 남긴다.
    * 아군이 자유 이동이라 **어디로 가는 중인지가 화면 어디에도 없다**. 표식이 없으면
    * 명령이 먹혔는지조차 알 수 없다(6명이 동시에 출발하면 더 그렇다).
+   *
+   * ── 채집 (gather-spec §7-1) — **바뀐 것은 표시뿐이다** ──────────────────────
+   * 찍은 칸에 아직 안 턴 자원이 있으면 표식이 금색이 된다. 명령 갈래는 위(onTap ②)에서
+   * 한 글자도 안 바뀌었고 여전히 `moveAlly { allyId: -1, defId }`다 — 그 칸에 **한 사람만**
+   * 보내는 판정은 sim이 한다(sim/allies.ts moveAlly ③). 그래서 표식도 하나면 충분하다.
+   * ⚠ `resourceAt`은 `taken`을 **안 걸러내고** 돌려준다 — "캘 수 있는가"는 여기서 판단한다.
+   *   다 턴 칸을 찍은 것은 그냥 이동이고, 금색으로 그리면 화면이 거짓말을 한다.
    */
   private showAllyOrder(cellX: number, cellZ: number): void {
-    this.stage3d.decals.showSortieMarker([{ x: cellX, z: cellZ }]);
+    const res = this.sim.resourceAt(cellX, cellZ);
+    if (res && !res.taken) this.stage3d.decals.showGatherOrder(cellX, cellZ);
+    else this.stage3d.decals.showSortieMarker([{ x: cellX, z: cellZ }]);
   }
 
   private showRangeFor(towerId: number): void {
@@ -293,6 +302,19 @@ export class PlacementController {
   /** 지금 고른 부족 종족 (없으면 null) — HUD가 '누구를 고르고 있는지' 표시에 쓴다 */
   selectedAlly(): AllyId | null {
     return this.selectedAllyDef;
+  }
+
+  /**
+   * 지금 **안 턴 자원 칸의 금색 배지를 켤 때인가** (gather-spec §7-1 ①: showResourceBadges).
+   *
+   * 켜는 조건이 둘인 이유: 부족을 고르는 것은 "이제 어디로 보낼까"이고, 소품 칸을 고르는
+   * 것은 "이 칸이 뭐지"다. 둘 다 자원 칸을 훑어보는 순간이다 — 특히 뒤쪽은 자원 패널의
+   * [채집 보내기]가 웨이브 중의 주 경로라(§7-1 보조 입구) 그때 다른 칸도 같이 보여야
+   * "다음엔 어디를 찍을까"가 한 화면에서 결정된다.
+   * 상시로 켜지 않는 이유는 healthbars.GatherViewInfo.selecting 주석에 있다(배지밭 방지).
+   */
+  showingResourceBadges(): boolean {
+    return this.selectedAllyDef !== null || this.selectedSceneryCell !== null;
   }
 
   /**

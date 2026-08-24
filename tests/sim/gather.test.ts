@@ -254,6 +254,58 @@ describe('채집 — 밭과 명령', () => {
     expect(b.gatherKey).toBe(-1);
   });
 
+  it('E-9 **놀고 있는 사람이 캐는 중인 사람을 이긴다** — 둘째 채집꾼이 실제로 나간다', () => {
+    // ⚠ 실측으로 잡은 결함의 회귀 방벽이다. 이 단(段)이 없으면 후보가 gatherPct 동점이라
+    //   언제나 **낮은 id**가 뽑혀, 1번이 캐던 칸을 버리고(진행분 소멸) 새 칸으로 옮겨 간다.
+    //   그러면 채집꾼을 몇을 뽑든 **실질 가동은 영영 1명**이고, 정원을 세는 밸런스 계산이
+    //   통째로 거짓이 된다(T6이 이 위에서 짐값을 맞추면 그 숫자가 전부 틀린다).
+    const sim = mk();
+    const first = train(sim); // id 낮음
+    const second = train(sim); // id 높음
+    // 1번을 FAR_A로 보내 실제로 캐게 만든다
+    expect(sim.applyCommand({ type: 'moveAlly', allyId: -1, cellX: FAR_A.x, cellZ: FAR_A.z })).toBe(true);
+    expect(first.gatherKey).toBeGreaterThanOrEqual(0);
+    runUntil(sim, '1번이 FAR_A에 도착해 캐기 시작', () => first.gatherTicks > 0);
+    const keyA = first.gatherKey;
+    const ticksA = first.gatherTicks;
+    expect(ticksA).toBeGreaterThan(0);
+
+    // 이제 **다른 칸**을 찍는다 — 놀고 있는 2번이 가야 한다
+    expect(sim.applyCommand({ type: 'moveAlly', allyId: -1, cellX: FAR_B.x, cellZ: FAR_B.z })).toBe(true);
+
+    expect(second.gatherKey, '놀던 2번이 새 칸을 맡는다').toBeGreaterThanOrEqual(0);
+    expect(first.gatherKey, '1번은 자기 칸을 그대로 지킨다').toBe(keyA);
+    expect(first.gatherTicks, '1번의 진행분이 파괴되지 않는다').toBeGreaterThanOrEqual(ticksA);
+    expect(second.gatherKey).not.toBe(first.gatherKey);
+
+    // 그리고 둘 다 실제로 자기 칸을 캐낸다 = 가동이 정말 2명이다.
+    // (배달까지 안 보는 이유: 채집꾼은 carryCap 2라 한 짐으로는 자동 귀환을 안 한다.
+    //  여기서 재려는 것은 "둘이 동시에 일한다"이지 귀환 규칙이 아니다 — 그건 ⑩이 잠근다.)
+    const got = run(sim, 3000).filter((e) => e.type === 'gathered');
+    const byAlly = new Set(got.map((e) => (e as { allyId: number }).allyId));
+    expect(byAlly.size, '두 사람이 각각 한 짐씩 캤다 = 실질 가동 2명').toBe(2);
+    expect(sim.state.resources.filter((r) => r.taken).length, '두 칸이 텄다').toBe(2);
+  });
+
+  it('E-9 전부 캐는 중이면 **진행분이 가장 적은 사람**이 옮겨 간다 (버리는 값이 최소)', () => {
+    const sim = mk();
+    const a = train(sim);
+    const b = train(sim);
+    // a를 먼저 캐게 하고, 조금 뒤 b도 캐게 해서 진행분에 차이를 만든다
+    expect(send(sim, a.id, FAR_A)).toBe(true);
+    runUntil(sim, 'a가 캐기 시작', () => a.gatherTicks > 0);
+    run(sim, 10);
+    expect(send(sim, b.id, FAR_B)).toBe(true);
+    runUntil(sim, 'b가 캐기 시작', () => b.gatherTicks > 0);
+    expect(a.gatherTicks).toBeGreaterThan(b.gatherTicks); // a가 더 많이 캤다
+
+    // 셋째 칸을 종족 명령으로 찍는다 → 덜 캔 b가 옮겨 가야 한다
+    const aTicks = a.gatherTicks;
+    expect(sim.applyCommand({ type: 'moveAlly', allyId: -1, cellX: NEAR.x, cellZ: NEAR.z })).toBe(true);
+    expect(a.gatherTicks, '더 많이 캔 사람은 안 건드린다').toBeGreaterThanOrEqual(aTicks);
+    expect(b.gatherTicks, '덜 캔 사람이 옮겨 가며 진행분을 버린다').toBe(0);
+  });
+
   it('⑥ gatherPct 0인 종은 못 캔다 — 명령은 성공하고 예약만 안 붙는다', () => {
     const sim = mk();
     const s = train(sim, 'slinger');

@@ -69,6 +69,17 @@ const RAID_SHOT_FX_MAX = 6;
  * 매 프레임 다시 읽으므로 숫자가 어긋나지 않는다.
  */
 const BOUNTY_CHUNK_FX_MAX = 4;
+/**
+ * 한 배치에서 그릴 **채집 연출** 수 상한 (gather-spec §7-2).
+ *
+ * 4로 두는 근거는 위 둘과 같다: 정원이 6이라 한 틱에 6건 이상이 나올 수 없지만
+ * 4배속에서는 여러 틱이 한 배치에 몰려 들어온다. 특히 `gatherStarted`는
+ * 전선 옆 칸(스테이지1 40칸 중 22칸)에서 맞았다 다시 캐기를 반복하는 구간이 있어
+ * 배치가 뭉치면 먼지가 겹친다.
+ * ⚠ **배달(gatherDelivered)은 이 상한을 안 탄다** — 판당 20~40건뿐이고 그게 이 기능의
+ *   보상 순간이라, 솎이면 "돈이 언제 들어왔는지"가 화면에서 사라진다.
+ */
+const GATHER_FX_MAX = 4;
 
 export function fxStrength(dmg: number, tier: number): number {
   const d = Math.max(1, dmg);
@@ -360,6 +371,8 @@ export class FxRouter {
   private raidShots = 0;
   /** 살점 값 부분 지급 팝업 — 배치당 상한 (BOUNTY_CHUNK_FX_MAX) */
   private bountyChunks = 0;
+  /** 채집 연출 — 배치당 상한 (GATHER_FX_MAX). 배달은 여기 안 센다 */
+  private gathers = 0;
   /**
    * 살아 있는 적의 종 — 데미지 숫자 표기 규약이 armor를 알아야 해서 스폰 때 기억한다.
    * **연출 전용 표다.** 시뮬레이션은 이 표를 모르고, 여기 값이 틀려도 판정은 안 바뀐다.
@@ -410,6 +423,7 @@ export class FxRouter {
     this.allyShots = 0;
     this.raidShots = 0;
     this.bountyChunks = 0;
+    this.gathers = 0;
     for (const ev of events) {
       switch (ev.type) {
         case 'waveStarted': {
@@ -809,6 +823,98 @@ export class FxRouter {
             sizeVar: 0.6,
           });
           audio.play('enemyDie');
+          break;
+        }
+        // --- 채집 (docs/gather-spec.md §7-2) ---------------------------------
+        case 'gatherStarted': {
+          // 발밑 먼지 — allyTrained(:773)가 쓰는 레시피를 작게 줄인 것.
+          // **소리를 안 붙인다**: 캐기 시작은 판당 수십 번이고 맞을 때마다 다시 나므로
+          // 소리가 붙는 순간 배경음이 된다(:518의 bountyChunk가 적어 둔 판단 그대로다).
+          if (this.gathers >= GATHER_FX_MAX) break;
+          this.gathers++;
+          const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
+          s3.particles.burst(w.x, 0.22, w.z, 0xc9b48c, 5, 0.85, 0.05, 0.42, {
+            gravity: 8,
+            drag: 1.6,
+            upBias: 0.85,
+            sizeVar: 0.5,
+          });
+          break;
+        }
+        case 'gathered': {
+          // **짐을 졌다** — 여기서 코인을 띄우지 않는다. 지급은 배달뿐이고(D3),
+          // 여기서 그리면 지고 오다 죽었을 때 화면이 거짓말한 것이 된다.
+          // 화면에서 실제로 늘어나는 것은 머리 위 짐 칩(healthbars kind 6)이고,
+          // 이 불티는 그 칩이 **언제** 늘었는지를 알리는 짧은 강조다.
+          if (this.gathers >= GATHER_FX_MAX) break;
+          this.gathers++;
+          const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
+          s3.particles.burst(w.x, 0.8, w.z, 0xffd06a, 8, 1.0, 0.055, 0.55, {
+            gravity: 6,
+            drag: 1.4,
+            upBias: 1.0,
+            sizeVar: 0.5,
+            glow: true,
+          });
+          break;
+        }
+        case 'gatherDelivered': {
+          // **채집이 코인을 내는 유일한 자리**(D3). 그래서 이 게임에서 다른 어떤 채집
+          // 연출보다 크고, 유일하게 소리를 받는다 — 판당 20~40건이라 배경음이 되지 않는다.
+          // 크기 0.95는 살점 값(0.55/0.8)보다 크고 처치 지급(0.9~1.6)의 아래쪽이다:
+          // "부분 지급보다 큰 사건이지만 사냥 한 마리를 넘지는 않는다".
+          // ⚠ GATHER_BASE_VALUE가 0인 동안에는 `+0`이 뜬다. 그게 지금의 사실이다 —
+          //   T6이 값을 켜면 같은 자리에 그대로 실제 액수가 뜬다.
+          const p = this.worldToScreen(ev.x, 1.15, ev.z);
+          if (p) spawnDamageNumber(p.sx, p.sy, `+${ev.gold}`, 'gold', 0.95);
+          const w = s3.cellToWorld(ev.x, ev.z, this.v);
+          s3.particles.ring(w.x, w.z, 0xffd06a, 0.6, 10);
+          audio.play('amberGain');
+          break;
+        }
+        case 'gatherLost': {
+          // 사유별로 **다르게 그린다** — 넷이 뜻하는 바가 전부 다르기 때문이다.
+          if (ev.reason === 'hit') {
+            // 맞아서 손이 멈췄다 = 발밑 게이지가 0으로 돌아간다(게이지 자체는 sim 상태를
+            // 따라 저절로 깨진다). 여기서는 그 순간을 붉은 티끌로 짧게 찍기만 한다 —
+            // 잦은 사건이라 팝업도 소리도 없다. 이 표시가 없으면 "왜 안 캐지지"의 답이
+            // 화면 어디에도 없다(§4-4가 위험으로 적어 둔 자리다).
+            if (this.gathers >= GATHER_FX_MAX) break;
+            this.gathers++;
+            const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
+            s3.particles.burst(w.x, 0.3, w.z, 0xff6b52, 5, 1.0, 0.05, 0.35, {
+              gravity: 7,
+              drag: 1.5,
+              upBias: 0.9,
+              sizeVar: 0.5,
+            });
+            break;
+          }
+          if (ev.reason === 'died') {
+            // 짐을 진 채 죽었다 — 짐이 땅에 흩어진다. allyDied(사람)와 같은 자리에서
+            // 겹치므로 **다른 것을 말한다는 것**이 색과 높이로 갈려야 한다: 금색 파편,
+            // 그리고 팝업은 0.4 위로 올려 사람의 연출과 포개지지 않게 한다.
+            const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
+            s3.particles.burst(w.x, 0.55, w.z, 0xd8a33f, 9, 1.4, 0.06, 0.75, {
+              gravity: 11,
+              drag: 1.2,
+              upBias: 0.7,
+              sizeVar: 0.6,
+            });
+            // 잃은 액수가 0이면 띄우지 않는다 — `−0`은 정보가 아니라 소음이다.
+            // (배달의 `+0`은 다르다: 그건 **흐름이 여기까지 왔다**는 신호라 값이 0이어도 뜬다)
+            if (ev.gold > 0) {
+              const p = this.worldToScreen(ev.cellX, 1.55, ev.cellZ);
+              // ⚠ 명세는 회색을 적었지만 회색 DamageKind가 없고, 새로 만들려면
+              //   damagenumbers.ts의 유니온과 CSS를 함께 늘려야 한다(이 트랙 소유가 아니다).
+              //   그래서 **색은 돈을 말하고 부호가 잃었음을 말한다** — 같은 금색에 `−`다.
+              if (p) spawnDamageNumber(p.sx, p.sy, `-${ev.gold}`, 'gold', 0.8);
+            }
+            break;
+          }
+          // 'moved' / 'cleared' — 칸이 다시 살아 돌아왔다는 신호는 **배지 색**이 낸다
+          // (healthbars kind 7이 매 프레임 sim 상태를 다시 읽는다). 별도 연출을 붙이면
+          // 명령을 바꿀 때마다 화면이 번쩍여 "무언가 잘못됐다"로 읽힌다.
           break;
         }
         /*

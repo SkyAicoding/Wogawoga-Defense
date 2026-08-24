@@ -47,7 +47,7 @@ describe('i18n 문자열', () => {
    * 한 번도 t()에 넘기지 않아 화면에는 이름과 가격만 떴다(5단계에서 출동 안내 패널로 연결).
    * 여기서는 **계약 쪽**(정의 → 사전)이 끊기지 않는지만 본다.
    */
-  it('아군 3종의 nameKey/descKey가 양쪽 사전에 있다', () => {
+  it('아군 4종의 nameKey/descKey가 양쪽 사전에 있다', () => {
     for (const id of ALL_ALLY_IDS) {
       const def = ALLY_DEFS[id];
       for (const k of [def.nameKey, def.descKey]) {

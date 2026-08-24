@@ -41,6 +41,7 @@
  */
 import * as THREE from 'three';
 import type { AllyState, EnemyId, EnemyState } from '@/data/types';
+import { isGathering } from '@/data/resources';
 import { clamp01, easeOutBack, lerp } from '@/core/mathx';
 import { flatMat } from '../palette';
 import {
@@ -164,6 +165,19 @@ function attackProgress(left: number, ticks: number, alpha: number): number {
   if (left <= 0 || ticks <= 0) return 0;
   return clamp01(1 - (left - alpha) / ticks);
 }
+
+/**
+ * 캐기 한 번(훑어 내리기)의 길이 (틱). 30 = 1.0초.
+ *
+ * 왜 새 상수인가: 캐는 동안에는 **쿨다운이 돌지 않는다**(캐는 중은 전투 불능이라
+ * 조준도 타격도 없다 — gather-spec D5). 그래서 아래 `allyAttackProgress`의 역산이
+ * 얼어붙어 팔이 한 자세로 굳는다. 채집 자세만은 뷰가 위상을 직접 만들어야 하고
+ * (meshlib/enemies.ts 채집 포즈 4의 ⚠⚠ 주석이 이 일을 T5 소관으로 적어 뒀다),
+ * 그 위상의 출처는 시간이 아니라 **gatherTicks**다 — 그래야 배속·일시정지에서
+ * 손놀림이 진행과 같이 가고, 맞아서 진행분이 0으로 돌아가면(D5) 동작도 처음부터 다시 시작해
+ * "손이 멈췄다"가 팔에서도 읽힌다.
+ */
+const GATHER_SWING_TICKS = 30;
 
 /**
  * 아군 공격 동작 진행도 0..1 — **쿨다운 잔여 틱에서 역산한다.**
@@ -536,9 +550,14 @@ export class EnemyView {
        * 멈춘 아군은 이동거리가 늘지 않아 다리가 저절로 정지 자세로 굳는다.
        */
       const gait = wrapGait(travel * rig.gaitPerDist + off);
-      // 공격 채널 — 진행도는 쿨다운 잔여 틱에서 역산해 **피해가 들어가는 틱**에 맞춘다
+      // 공격 채널 — 진행도는 쿨다운 잔여 틱에서 역산해 **피해가 들어가는 틱**에 맞춘다.
+      // 단, 캐는 중이면 같은 채널을 **채집 위상**이 가져간다(위 GATHER_SWING_TICKS).
+      // 같은 채널을 쓰므로 포즈가 겹칠 걱정이 없다: 캐는 사람은 전투 불능이라 조준도
+      // 타격도 없고(targetId −1), 반대로 싸우는 사람은 gatherKey가 −1이라 여기 안 온다.
       const atk = allyAttackAnim(a.defId);
-      const atkP = allyAttackProgress(a.attackCdLeft, atk, a.targetId >= 0, alpha);
+      const atkP = isGathering(a)
+        ? ((a.gatherTicks + alpha) % GATHER_SWING_TICKS) / GATHER_SWING_TICKS
+        : allyAttackProgress(a.attackCdLeft, atk, a.targetId >= 0, alpha);
       const pop = anim.age < 0.28 ? easeOutBack(anim.age / 0.28) : 1;
       _pos.y = groundLiftAt(rig, Math.abs(Math.sin(gait))) * pop;
       // 온몸으로 내려친다 — 치켜들 때 뒤로, 내려칠 때 앞으로. 셰이더와 **같은 포락선**이다

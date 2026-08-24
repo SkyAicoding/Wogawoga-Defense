@@ -266,22 +266,52 @@ export function moveAlly(
   //  UI를 개체 선택으로 좁히는 것은 사용자 요구를 뒤집는 일이다.
   //  → D7의 취지("한 짐 = 한 사람")를 sim에서 지킨다. 규칙이 hash()와 sim 테스트 안으로
   //    들어오는 부수 이득도 있다(UI에 두면 어느 쪽도 못 잡는다).
-  //  고르는 규칙: **이미 그 칸을 맡은 사람 → gatherPct 내림차순 → id 오름차순.**
-  //  전부 정수/열거 비교라 부동소수 동점 문제가 없고, `orderOrder`가 id 오름차순이므로
-  //  "동점이면 낮은 id"가 순회 순서 하나로 자동으로 나온다(`>` 비교라 앞사람이 이긴다).
+  //  고르는 규칙은 **세 단(段)**이고, 위 단이 언제나 아래 단을 이긴다:
+  //    1단) 이미 그 칸을 맡은 사람            (E-1: 진행분을 지킨다)
+  //    2단) **놀고 있는 사람** (gatherKey < 0)  ← 여기가 핵심이다. 아래 ⚠ 참조
+  //    3단) 다른 칸을 캐는 중이면 **진행분이 가장 적은 사람** (버리는 것이 가장 작다)
+  //  같은 단 안에서는 gatherPct 내림차순 → id 오름차순. 전부 정수/열거 비교라 부동소수
+  //  동점 문제가 없고, `orderOrder`가 id 오름차순이므로 "동점이면 낮은 id"가 순회 순서
+  //  하나로 자동으로 나온다(`>` 비교라 앞사람이 이긴다).
+  //
+  //  ⚠ **2단이 없으면 둘째 채집꾼이 구조적으로 영영 안 나간다.** 실측으로 잡은 결함이다:
+  //    채집꾼 2명 · 1번이 A칸을 캐는 중(진행 25틱) · 플레이어가 B칸을 찍는다
+  //      → 2단이 없으면 후보가 `gatherPct` 동점이라 언제나 **낮은 id(1번)** 가 뽑히고,
+  //        1번이 A를 버리고(진행분 25 → 0) B로 간다. 2번은 1번의 짐이 가득 찰 때까지
+  //        **한 번도 안 움직인다.** 곧 채집꾼을 몇을 뽑든 실질 가동은 언제나 1명이다.
+  //    이 상태로 T6이 짐값을 맞추면 그 숫자가 통째로 틀린다(정원을 세는 계산이 전부 거짓).
+  //
   //  짐이 가득 찬 사람과 못 캐는 종(gatherPct 0)은 애초에 후보가 아니다 — 뽑아 봐야
   //  setGatherTarget이 예약을 안 붙여 헛걸음만 시킨다.
+  //  (한 짐을 캐고 아직 정원이 남은 사람은 `gatherKey = -1`이라 2단에 들어온다 —
+  //   gather.ts가 짐 확정 시 예약을 즉시 풀기 때문이다. 그게 옳다: 그 사람은 놀고 있다.)
   let only: AllySim | null = null;
   if (isResource && allyId < 0) {
+    /** 낮을수록 먼저 — 1단 0 · 2단 1 · 3단 2 */
+    const tierOf = (a: AllySim): number => (a.gatherKey === key ? 0 : a.gatherKey < 0 ? 1 : 2);
+    let bestTier = 3;
     for (const a of orderOrder) {
       if (defId !== undefined && a.defId !== defId) continue;
       if ((a.def.gatherPct ?? 100) <= 0) continue;
       if (a.carryCount >= (a.def.carryCap ?? 1)) continue;
-      if (a.gatherKey === key) {
-        only = a; // 이미 그 칸을 맡은 사람이 언제나 우선 (E-1: 진행분을 지킨다)
+      const tier = tierOf(a);
+      if (tier === 0) {
+        only = a; // 1단은 더 볼 것이 없다
         break;
       }
-      if (only === null || (a.def.gatherPct ?? 100) > (only.def.gatherPct ?? 100)) only = a;
+      if (only === null || tier < bestTier) {
+        only = a;
+        bestTier = tier;
+        continue;
+      }
+      if (tier > bestTier) continue;
+      // 같은 단 안의 경합
+      if (tier === 2 && a.gatherTicks !== only.gatherTicks) {
+        // 3단: 버리는 진행분이 더 적은 쪽
+        if (a.gatherTicks < only.gatherTicks) only = a;
+        continue;
+      }
+      if ((a.def.gatherPct ?? 100) > (only.def.gatherPct ?? 100)) only = a;
     }
     // 아무도 자격이 없으면 only는 null → 아래 루프가 **평소대로 전원 이동**한다.
     // (자원 칸이지만 캘 사람이 없는 것뿐이므로 "거기로 가라"는 여전히 유효한 명령이다)

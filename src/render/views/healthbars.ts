@@ -5,7 +5,19 @@
  *   0 = 적 체력바, 1 = 타워·아군 체력바 (카메라 정렬 빌보드)
  *   2 = 파괴 잔해, 3 = 침묵 룬     (지면/지붕에 눕는 원형 표식, towerstatus.ts가 상태 소유)
  *   4 = 기지(홈타운) 체력바        (빌보드 — 1과 같은 팔레트, 크기와 저체력 경보만 다르다)
+ *   5 = 캐기 진행 게이지 · 6 = 짐 칩 · 7 = 자원 배지   (채집, gather-spec §6-1 — 전부 빌보드)
  * 만피는 숨긴다 — 바가 보인다 = 지금 뭔가 깎이고 있다는 신호다.
+ *
+ * ── 채집 표시가 왜 **여기** 얹혔는가 (드로우콜 0) ──────────────────────────
+ * gather-spec §6-1은 자원 배지를 "stage3d.decals의 인스턴스 층"에 얹으라고 적었는데,
+ * 코드를 보면 **decals에는 인스턴스 층이 없다** — 병합 메시(slots·chevrons·marker)뿐이라
+ * 칸 하나가 텄을 때마다 40~51개 지오메트리를 다시 병합해야 하고, 그건 같은 문서가
+ * D1으로 지운 재병합 위험(1회당 CPU 0.3~1.4ms + 버퍼 재할당)을 배지 이름으로 되살리는 일이다.
+ * 이 메시는 이미 인스턴스라 **상태 변화가 어트리뷰트 한 칸 쓰기**로 끝나고,
+ * 메시가 하나도 안 늘어 드로우콜 Δ가 0이다(count가 0이던 프레임에서만 0 → 1).
+ * 대가는 CAPACITY 160의 공유다: 최악 프레임(기지1 + 적56 + 타워15 + 아군6 + 표식)에
+ * 게이지 6 + 짐 칩 12 + 배지 51이 더해지면 상한에 닿을 수 있다. 그래서 **배지를 맨 뒤에**
+ * 쌓는다 — 넘칠 때 잘리는 것이 언제나 배지이고, 체력바는 한 개도 안 잘린다.
  *
  * ── 왜 네 가지를 한 메시에 몰아넣는가 (드로우콜 예산) ────────────────────────
  * 표식용 메시를 따로 두면 그 자체로 +1 콜이고, 실측한 최대 메시 프레임
@@ -53,7 +65,11 @@
  * 없앨 게 아니라 옮길 신호라 판단해 3D 바로 그대로 이사시켰다(주기·역치 동일).
  */
 import * as THREE from 'three';
-import type { AllyState, EnemyState, TowerState } from '@/data/types';
+import type { AllyState, EnemyState, ResourceCellState, TowerState } from '@/data/types';
+import { ALLY_DEFS } from '@/data/allies';
+// sim이 아니라 **data** 모듈이다 — 도착 판정과 캐기 틱을 sim과 같은 함수로 본다
+// (렌더가 @/sim을 임포트하지 않는다는 규약은 그대로다 — enemyview.ts 헤더 참조).
+import { gatherTicksFor, isGathering } from '@/data/resources';
 import { lerp } from '@/core/mathx';
 import { BOSS_ENEMIES } from '../meshlib/enemies';
 import { towerTierScale } from '../meshlib/towers';
@@ -112,6 +128,26 @@ const BASE_ROOF_Y: readonly number[] = [1.228, 1.24, 1.639, 1.639, 2.126];
 const BASE_BAR_CLEARANCE = 0.22;
 /** 지면 표식(잔해) 높이 — 지형 z-파이팅을 polygonOffset과 함께 피한다 */
 const GROUND_Y = 0.045;
+/**
+ * ── 채집 표시 셋 (gather-spec §6-1) ────────────────────────────────────────
+ * 게이지는 **발밑**이다. 머리 위는 이미 체력바와 짐 칩이 쓰고 있어 세 층이 겹치면
+ * 어느 것이 무엇인지 읽히지 않는다. 폭은 아군 체력바(0.5)보다 좁게 잡아
+ * "이건 체력이 아니다"가 크기로도 갈린다.
+ */
+const GATHER_BAR_W = 0.44;
+const GATHER_BAR_H = 0.1;
+const GATHER_BAR_Y = 0.17;
+/** 짐 칩 — 머리 위(체력바보다 위). 진 개수만큼 **위로 쌓는다**(최대 carryCap 2) */
+const LOAD_CHIP = 0.17;
+const LOAD_CHIP_Y = 1.22;
+const LOAD_CHIP_GAP = 0.21;
+/**
+ * 자원 배지 — 소품 **위에** 뜬다. 지면 데칼로 두면 55° 부감에서 소품 밑동에 가려
+ * 정작 나무가 큰 칸(랜드마크)이 안 보인다. 셀 중심을 쓰는 이유는 탭 타깃이 셀이기 때문이다
+ * (소품은 셀 안에서 흩어져 있지만, 플레이어가 찍는 것은 칸이다).
+ */
+const RES_BADGE = 0.32;
+const RES_BADGE_Y = 1.08;
 const _pos = new THREE.Vector3();
 const _quat = new THREE.Quaternion();
 /** 지면 표식용 — 쿼드를 눕힌다 (빌보드 분기를 타지 않는다) */
@@ -132,6 +168,42 @@ export interface BaseBarInfo {
   maxHp: number;
   /** 마을 레벨 (1-base) — 바 높이가 이걸 따라간다 */
   level: number;
+}
+
+/**
+ * 채집 표시에 필요한 것 전부 — 자원 칸 목록 · 격자 폭 · 지금 부족을 고르고 있는가.
+ * BaseBarInfo와 같은 규약이다(필요한 필드만 받는다). update의 **마지막 선택 인자**라
+ * 기존 호출부와 테스트는 한 줄도 안 고쳐도 그대로 돈다.
+ */
+export interface GatherViewInfo {
+  /** BattleState.resources 그대로 — 목록은 안 변하고 taken만 변한다 */
+  cells: readonly ResourceCellState[];
+  /** 셀 키 해석용 격자 폭 (AllyState.gatherKey = cellZ * gridW + cellX) */
+  gridW: number;
+  /**
+   * 지금 부족원을 고르고 있는가. **안 턴 칸의 금색 배지는 그때만 뜬다** —
+   * 상시로 띄우면 판에 배지 40개가 깔려 정작 골랐을 때의 신호가 죽는다.
+   * 텄음(회색 칩)과 예약(한랭색)은 이 값과 무관하게 항상 뜬다: 앞은 "이 판을 얼마나 캤나"를
+   * 말없이 가르치고, 뒤는 "저기는 이미 사람이 간다"라 선택 중이 아니어도 알아야 한다.
+   */
+  selecting: boolean;
+}
+
+/**
+ * 셀 키 → 자원 칸. **선형 탐색이다.** 칸이 판당 40~51개이고 이 함수를 부르는 것은
+ * 캐는 중인 아군(정원 6)뿐이라 최악이 프레임당 306회 비교다. 매 프레임 Map을 만들면
+ * 그쪽이 더 비싸고(할당), 뷰가 sim의 색인을 복제하기 시작한다.
+ */
+function cellAtKey(
+  cells: readonly ResourceCellState[],
+  key: number,
+  gridW: number,
+): ResourceCellState | null {
+  if (key < 0) return null;
+  for (const c of cells) {
+    if (c.cellZ * gridW + c.cellX === key) return c;
+  }
+  return null;
 }
 
 export class HealthBarView {
@@ -206,7 +278,53 @@ varying vec2 vBarUv;`,
         .replace(
           '#include <color_fragment>',
           `#include <color_fragment>
-if (vKind < 1.5 || vKind > 3.5) {
+if (vKind > 4.5) {
+  // ── 채집 표시 (5 게이지 · 6 짐 칩 · 7 자원 배지) ───────────────────────
+  // **체력바 분기에 얹지 않는다.** 그 분기는 kind를 숫자로 재서 뜻을 만든다
+  // (own = min(vKind,1) · isBase = step(3.5, vKind)) — 5·6·7을 그대로 흘리면
+  // 전부 **기지로 오인돼** 30% 미만에서 마을이 무너질 때처럼 깜빡인다.
+  // 차오르는 게이지는 언제나 0%에서 시작하므로 그건 **매번** 일어난다
+  // (gather-spec §6-1이 잡아낸 자리다). 분기를 앞에 따로 두면 kind 4 이하의 픽셀은
+  // 한 개도 안 바뀐다 — 이 파일의 회귀 테스트가 잠근 그림이 그대로 산다.
+  if (vKind < 5.5) {
+    // 5) 캐기 진행 — 이 바는 체력이 아니라 **진행**이다. 그래서 팔레트 램프를 안 탄다:
+    //    0%에서 붉게 시작하면 "다쳤다"로 읽힌다. 채워진 쪽은 고정 호박색이다.
+    float inset = 0.16;
+    float edge = step(inset, vBarUv.y) * step(vBarUv.y, 1.0 - inset)
+               * step(inset * 0.3, vBarUv.x) * step(vBarUv.x, 1.0 - inset * 0.3);
+    vec3 body = vBarUv.x < vFill ? vec3(1.0, 0.78, 0.28) : vec3(0.09, 0.07, 0.05);
+    diffuseColor.rgb = mix(vec3(0.34, 0.24, 0.13), body, edge);
+  } else if (vKind < 6.5) {
+    // 6) 짐 칩 — 등에 진 짐 하나가 칩 하나다. 코인이 아니라 **꾸러미**로 읽히게
+    //    묶은 자국(십자 띠)을 넣는다. 코인을 그리면 배달 전에 죽었을 때
+    //    화면이 거짓말을 한 것이 된다(§7-2 3층).
+    vec2 q = (vBarUv - 0.5) * 2.0;
+    float box = smoothstep(1.0, 0.84, max(abs(q.x), abs(q.y)));
+    float strap = clamp(step(abs(q.x), 0.15) + step(abs(q.y), 0.15), 0.0, 1.0);
+    vec3 col = mix(vec3(0.96, 0.75, 0.31), vec3(0.68, 0.46, 0.19), strap);
+    diffuseColor.rgb = col * (0.88 + 0.12 * sin(uTime * 3.0 + vFill * 6.283));
+    diffuseColor.a *= box;
+  } else {
+    // 7) 자원 배지 — 마름모 칩. vFill 하나가 세 상태를 나른다:
+    //      1 = 아직 안 텄다 (금색 · 부족원을 고르고 있을 때만 뜬다)
+    //      0.5 = 누가 캐러 가는 중이다 (한랭색 · 예약이 배타적이라 언제나 한 명)
+    //      0 = 텄다 (회색 그루터기 칩 · 항상 뜬다)
+    vec2 q = (vBarUv - 0.5) * 2.0;
+    float d = abs(q.x) + abs(q.y);
+    float body = smoothstep(1.0, 0.80, d);
+    float core = smoothstep(0.86, 0.66, d);
+    float taken = 1.0 - step(0.25, vFill);
+    float claim = step(0.25, vFill) * (1.0 - step(0.75, vFill));
+    vec3 col = vec3(1.0, 0.81, 0.23);
+    col = mix(col, vec3(0.62, 0.86, 0.99), claim);
+    col = mix(col, vec3(0.44, 0.42, 0.40), taken);
+    // 살아 있는 칸만 호흡시킨다 — 회색 칩은 판이 끝날 때 40개가 동시에 깔리므로
+    // 그것까지 깜빡이면 화면이 시끄러워지고 "다 캤다"의 조용함이 사라진다.
+    float alive = 1.0 - taken;
+    diffuseColor.rgb = mix(vec3(0.05, 0.04, 0.04), col * (1.0 + alive * 0.16 * sin(uTime * 4.0)), core);
+    diffuseColor.a *= body * mix(0.70, 0.95, alive);
+  }
+} else if (vKind < 1.5 || vKind > 3.5) {
   // ── 체력바 ────────────────────────────────────────────────────────────
   // own: 0 = 적, 1 = 내 편(타워·아군 kind 1, 기지 kind 4). 기지는 팔레트·테두리·눈금이
   // 타워와 **완전히 같다** — 갈리는 건 크기와 아래 저체력 점멸뿐이다.
@@ -288,6 +406,7 @@ if (vKind < 1.5 || vKind > 3.5) {
     marks: readonly TowerMark[] = [],
     allies: readonly AllyState[] = [],
     base: BaseBarInfo | null = null,
+    gather: GatherViewInfo | null = null,
   ): void {
     let n = 0;
     _quat.identity();
@@ -361,6 +480,65 @@ if (vKind < 1.5 || vKind > 3.5) {
       this.fillAttr.setX(n, m.phase);
       this.kindAttr.setX(n, m.kind);
       n++;
+    }
+    // ── 채집 (gather-spec §6-1) — 게이지 · 짐 칩 · 자원 배지 ─────────────────
+    // 순서에 뜻이 있다: 게이지와 짐 칩은 **사람에 붙은 표시**라 체력바 바로 뒤에,
+    // 배지는 **판에 깔리는 표시**라 맨 뒤에 온다. CAPACITY를 넘겨 잘리는 것은
+    // 언제나 배지 쪽이어야 한다(위 헤더).
+    if (gather) {
+      for (const a of allies) {
+        if (!a.alive) continue;
+        // 발밑 게이지 — 분모는 **그 사람의** 실제 캐기 틱이다. 곧 같은 칸이라도
+        // 채집꾼의 게이지는 빠르고 파수꾼의 게이지는 느리다(gatherPct는 속도에만 곱한다).
+        if (isGathering(a) && n < CAPACITY) {
+          const cell = cellAtKey(gather.cells, a.gatherKey, gather.gridW);
+          if (cell) {
+            cellToWorld(lerp(a.prevX, a.x, alpha), lerp(a.prevZ, a.z, alpha), _pos);
+            _pos.y = GATHER_BAR_Y;
+            _mat.compose(_pos, _quat, _scl.set(GATHER_BAR_W, GATHER_BAR_H, 1));
+            this.mesh.setMatrixAt(n, _mat);
+            const need = Math.max(1, gatherTicksFor(ALLY_DEFS[a.defId], cell.kind));
+            this.fillAttr.setX(n, Math.min(1, a.gatherTicks / need));
+            this.kindAttr.setX(n, 5);
+            n++;
+          }
+        }
+        // 짐 칩 — 진 개수만큼 나란히. **운반 중에도 계속 떠 있다**: §4-4의
+        // "캐기는 맞으면 중단, 운반은 안 중단"이 화면에서 갈리는 자리가 여기다
+        // (게이지는 맞으면 0으로 깨지고, 칩은 그대로 남는다).
+        for (let i = 0; i < a.carryCount && n < CAPACITY; i++) {
+          cellToWorld(lerp(a.prevX, a.x, alpha), lerp(a.prevZ, a.z, alpha), _pos);
+          // 빌보드는 인스턴스 **위치**에 카메라 우/상 벡터를 더해 만든다 — 월드 x로
+          // 옮기면 시점에 따라 두 칩이 겹친다. 그래서 나란히가 아니라 위로 쌓는다
+          // (carryCap이 2라 두 칸이면 충분하다).
+          _pos.y = LOAD_CHIP_Y + i * LOAD_CHIP_GAP;
+          _mat.compose(_pos, _quat, _scl.set(LOAD_CHIP, LOAD_CHIP, 1));
+          this.mesh.setMatrixAt(n, _mat);
+          this.fillAttr.setX(n, (a.id % 7) / 7);
+          this.kindAttr.setX(n, 6);
+          n++;
+        }
+      }
+      // 자원 배지 — 텄음/예약은 항상, 안 턴 금색은 부족을 고르고 있을 때만
+      for (const c of gather.cells) {
+        if (n >= CAPACITY) break;
+        const key = c.cellZ * gather.gridW + c.cellX;
+        let claimed = false;
+        for (const a of allies) {
+          if (a.alive && a.gatherKey === key) {
+            claimed = true;
+            break;
+          }
+        }
+        if (!c.taken && !claimed && !gather.selecting) continue;
+        cellToWorld(c.cellX, c.cellZ, _pos);
+        _pos.y = RES_BADGE_Y;
+        _mat.compose(_pos, _quat, _scl.set(RES_BADGE, RES_BADGE, 1));
+        this.mesh.setMatrixAt(n, _mat);
+        this.fillAttr.setX(n, c.taken ? 0 : claimed ? 0.5 : 1);
+        this.kindAttr.setX(n, 7);
+        n++;
+      }
     }
     this.mesh.count = n;
     this.mesh.instanceMatrix.needsUpdate = true;

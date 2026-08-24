@@ -617,23 +617,28 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
   // --- 6단계: 상시 출동 바는 없어졌고, 마을 패널 안에만 있다 ----------------
   // 사용자 요청("마을을 선택했을때 아군을 선택하거나 마을을 업그레이드")대로
   // 마을을 고르기 전에는 출동 버튼이 화면에 **보이지 않아야** 한다.
+  // ⚠ 부족이 **넷**이 됐다 (채집꾼 — docs/gather-spec.md T1의 ALL_ALLY_IDS).
+  //   순서는 싼 값 순이라 0번이 채집꾼이다. 이 테스트가 재는 것(출동·상한·정원)은
+  //   종과 무관하므로 개수만 따라 올린다.
   const btns = page.locator('.ally-btn');
-  await expect(btns).toHaveCount(3); // DOM에는 있다 (패널이 display:none일 뿐)
+  await expect(btns).toHaveCount(4); // DOM에는 있다 (패널이 display:none일 뿐)
   await expect(btns.first()).toBeHidden();
 
   // 마을(기지 셀) 탭 → 한 패널에서 출동과 레벨업이 둘 다 열린다
   const homePanel = page.locator('.tower-panel--home');
   await tapBase(page);
   await expect(homePanel).toBeVisible();
-  await expect(homePanel.locator('.ally-btn')).toHaveCount(3);
+  await expect(homePanel.locator('.ally-btn')).toHaveCount(4);
   await expect(homePanel.locator('.tp-btn--up')).toBeVisible();
   await homePanel.evaluate((el) =>
     Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)),
   );
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const box = await btns.nth(i).boundingBox();
     expect(box, `출동 버튼 ${i} 박스`).not.toBeNull();
     expect(box!.height, `출동 버튼 ${i} 높이`).toBeGreaterThanOrEqual(44);
+    // 버튼이 셋에서 넷이 되면서 **가로**가 좁아졌다 — 세로만 재면 계약이 반쪽이다
+    expect(box!.width, `출동 버튼 ${i} 폭`).toBeGreaterThanOrEqual(44);
   }
 
   /*
@@ -650,7 +655,7 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
   const cap1 = await page.evaluate(() => window.__wgd!.sim.allyCap());
   expect(cap1, 'Lv1 정원').toBeGreaterThanOrEqual(1);
   for (let i = 0; i < cap1; i++) {
-    await btns.nth(i % 3).click();
+    await btns.nth(i % 4).click();
     await page.waitForTimeout(120);
     expect(await page.evaluate(() => window.__wgd!.selectedBase()), `${i + 1}번째 출동 뒤 마을 선택`)
       .toBe(true);
@@ -678,7 +683,7 @@ test('아군 출동: 골드 소모 · 상한 · 봉쇄 · 드로우콜 증가 0'
    *   · 마을을 한 단 올리면 **그 자리에서** 다시 살아나 한 명이 더 나간다.
    * 상한이 다시 상수로 굳거나 레벨과의 연결이 끊기면 둘 중 하나가 바로 빨개진다.
    */
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     await expect(btns.nth(i), `정원이 찼는데 출동 버튼 ${i}가 살아 있다`).toHaveClass(/is-disabled/);
   }
   const grown = await page.evaluate(() => {
@@ -1092,6 +1097,22 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
     const g = window.__wgd!;
     // 판의 네 귀퉁이 + 한가운데 — 격자 크기를 훅으로 알 수 없으므로 배치 가능 셀의
     // 경계 상자로 잡는다 (pickBoardCell과 같은 근사)
+    /*
+     * ⚠ **찍는 칸은 반드시 건설 가능 칸이어야 한다** — 자원 칸을 찍으면 이 테스트가
+     * 재려는 것이 바뀐다.
+     *
+     * 예전에는 바운딩 박스의 **모서리 좌표**를 그대로 찍었는데(`{x: minX, z: minZ}`),
+     * 그 좌표가 건설 가능 칸이라는 보장이 없었다. 실제로 스테이지1에서 `(0,7)`이
+     * 소품(바위) 칸이라, 채집이 들어온 뒤로는 거기 도착한 부족원이 **저절로 캐기
+     * 시작**했다(`moveAlly`는 자원 칸에서 채집이 된다 — 설계다). 그 발밑 게이지가
+     * 체력바 인스턴스 메시를 `count 0 → 1`로 켜서 드로우콜이 하나 늘고,
+     * "**이동**은 드로우콜을 안 늘린다"는 이 계약이 이동과 무관한 이유로 빨개졌다.
+     *
+     * 곧 문턱(≤ 1)이 틀린 게 아니라 **표본이 틀렸다.** 건설 가능 칸만 고르면
+     * 자원 칸이 구조적으로 배제된다(자원 칸 ⊂ 소품 칸이고 소품 칸은 건설 불가다).
+     * 채집 자체의 드로우콜 값은 이 테스트가 아니라 **아래 전용 계약**이 잰다.
+     */
+    const free: { x: number; z: number }[] = [];
     let minX = Infinity;
     let maxX = -Infinity;
     let minZ = Infinity;
@@ -1099,6 +1120,7 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
     for (let z = 0; z < 40; z++) {
       for (let x = 0; x < 40; x++) {
         if (!g.sim.canPlaceAt(x, z)) continue;
+        free.push({ x, z });
         minX = Math.min(minX, x);
         maxX = Math.max(maxX, x);
         minZ = Math.min(minZ, z);
@@ -1107,13 +1129,26 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
     }
     const midX = Math.round((minX + maxX) / 2);
     const midZ = Math.round((minZ + maxZ) / 2);
+    /** 원하는 모서리에 **가장 가까운 실제 건설 가능 칸**. 동점은 x→z 순으로 결정론이다 */
+    const near = (tx: number, tz: number): { x: number; z: number } => {
+      let best = free[0]!;
+      let bd = Infinity;
+      for (const c of free) {
+        const d = (c.x - tx) * (c.x - tx) + (c.z - tz) * (c.z - tz);
+        if (d < bd) {
+          bd = d;
+          best = c;
+        }
+      }
+      return best;
+    };
     const pts = [
-      { x: minX, z: minZ },
-      { x: maxX, z: minZ },
-      { x: minX, z: maxZ },
-      { x: maxX, z: maxZ },
-      { x: midX, z: midZ },
-      { x: minX, z: midZ },
+      near(minX, minZ),
+      near(maxX, minZ),
+      near(minX, maxZ),
+      near(maxX, maxZ),
+      near(midX, midZ),
+      near(minX, midZ),
     ];
     g.sim.state.allies.forEach((a, i) => {
       const p = pts[i % pts.length]!;
@@ -1146,6 +1181,147 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
   expect(scattered.calls - clustered.calls, msg).toBeLessThanOrEqual(1);
   expect(scattered.tris - clustered.tris, msg).toBeLessThanOrEqual(2_000);
   await page.evaluate(() => window.__wgd!.pause(false));
+
+  expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
+});
+
+/*
+ * 채집이 그림에 무는 값을 **숨기지 않고 명시한다**.
+ *
+ * 왜 별도 계약인가: 바로 위 '아군 이동' 계약이 재는 것은 **이동**이고, 채집은 다른 기능이다.
+ * 그런데 채집 게이지가 체력바 인스턴스 메시를 `count 0 → 1`로 켜므로, 아무것도 안 깎이는
+ * **한가한 프레임**에서는 드로우콜이 하나 는다. 그 값을 이동 계약에 섞어 넣으면
+ * (a) 이동 계약이 이동과 무관한 이유로 빨개지고 (b) 채집의 값은 **아무 데도 안 적힌다**.
+ * 그래서 표본을 가르고 여기서 정면으로 잰다.
+ *
+ * ⚠ **정착값과 버스트를 반드시 갈라 재야 한다.** 처음 이 계약을 `maxFrame`(20프레임 최댓값)
+ * 하나로 쓰자 Δ가 3으로 나왔고, 그 3을 그대로 문턱에 적었으면 **틀린 값이 계약이 될 뻔했다.**
+ * 단발 측정과 60프레임 측정을 갈라 실측한 정체는 이렇다(desktop, 스테이지1):
+ *   아무것도 없음 11 → 채집꾼 세워만 둠 12(+1 = **유닛 메시**, 채집과 무관)
+ *   → 캐는 중 정착 **13(+1 = 채집 게이지)** → 캐기 시작 직후 최댓값 15(+2)
+ * 마지막 +2는 새 층이 아니라 **이미 있는 연출 층**(파티클·숫자 스프라이트)이 잠깐 켜진 것이고,
+ * 2.5초 뒤면 13으로 되돌아온다. 곧 채집이 무는 **영구 비용은 +1 하나**다.
+ *
+ * 잠그는 것 셋:
+ *  · **정착 Δ ≤ 1** — 게이지 하나가 메시를 켜는 값. 이게 채집의 진짜 값이다.
+ *    1을 넘으면 층이 는 것이므로 설계가 바뀐 것이고 반드시 다시 봐야 한다.
+ *    ⚠ 표본 A는 **채집꾼을 이미 세워 둔 상태**여야 한다 — 안 그러면 유닛 메시 +1이
+ *      채집 몫으로 잘못 적힌다(위 11 → 12가 그 함정이다).
+ *  · **버스트도 예산 안** — 연출이 겹쳐도 90콜/150,000삼각형을 안 넘는다.
+ *  · **최악 프레임(웨이브 중)이 예산 안** — 예산이 실제로 걸리는 자리다.
+ */
+test('채집: 영구 그림 값은 +1 (버스트와 갈라 잰다) · 전 구간 예산 안', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await page.goto('/?test=1', { waitUntil: 'networkidle' });
+  await page.mouse.click(100, 300);
+  await page.getByRole('button', { name: /전투/ }).first().click();
+  await page.waitForFunction(() => window.__wgd !== undefined);
+  await page.waitForTimeout(900);
+
+  /*
+   * ⚠ **통제**: 두 표본에서 부족원의 **자리가 같아야 한다.**
+   * 처음 이 계약을 쓸 때 표본 A를 집결 지점(뭉쳐 있음), B를 자원 칸(흩어짐)으로 잡았다가
+   * Δ 3을 얻었는데, 그 3에는 **자리가 달라서 생긴 몫**(그림자 패스·컬링)이 섞여 있었다.
+   * 코드로 확인한 사실: 이번 변경이 더한 렌더 층은 `healthbars`의 InstancedMesh **하나**뿐이고
+   * `decals`·`enemyview`는 새 메시가 0이다. 곧 Δ 3은 층 수가 아니라 통제 실패였다.
+   * ⇒ 두 표본 다 **같은 자원 칸으로 흩어 보내고**, 캐느냐 아니냐만 가른다.
+   *   (A는 `gatherPct`가 0인 종 = 못 캐는 사람을 같은 칸에 세운다)
+   */
+  await page.evaluate(() => window.__wgd!.setGold(99_999));
+
+  // ── 표본 A: 같은 자리에 흩어져 있지만 **안 캔다** (전투 부족을 자원 칸에 세운다) ──
+  const nA = await page.evaluate(() => {
+    const g = window.__wgd!;
+    let n = 0;
+    while (g.canTrainAlly('clubber') && n < 6) {
+      if (!g.trainAlly('clubber')) break;
+      n++;
+    }
+    const cells = g.sceneryList();
+    g.allies().forEach((a, i) => {
+      const c = cells[i % cells.length]!;
+      g.sim.applyCommand({ type: 'moveAlly', allyId: a.id, cellX: c.x, cellZ: c.z });
+    });
+    g.ff(600);
+    return n;
+  });
+  expect(nA, '부족원을 한 명도 못 뽑았다 (표본이 성립하지 않는다)').toBeGreaterThan(0);
+  await page.evaluate(() => window.__wgd!.pause(true));
+  await page.waitForTimeout(2_500); // 연출이 꺼질 시간 — 정착값을 잰다
+  const idleOff = await maxFrame(page);
+  await page.evaluate(() => window.__wgd!.pause(false));
+
+  // 같은 판을 새로 시작해 표본 B를 같은 자리에서 잡는다
+  await page.goto('/?test=1', { waitUntil: 'networkidle' });
+  await page.mouse.click(100, 300);
+  await page.getByRole('button', { name: /전투/ }).first().click();
+  await page.waitForFunction(() => window.__wgd !== undefined);
+  await page.waitForTimeout(900);
+  await page.evaluate(() => window.__wgd!.setGold(99_999));
+  const nGather = await page.evaluate(() => {
+    const g = window.__wgd!;
+    let n = 0;
+    while (g.canTrainAlly('gatherer') && n < 6) {
+      if (!g.trainAlly('gatherer')) break;
+      n++;
+    }
+    return n;
+  });
+  expect(nGather, '채집꾼을 한 명도 못 뽑았다').toBeGreaterThan(0);
+
+  // ── 표본 B: 같은 사람들이 실제로 캐는 중 ────────────────────────────────────
+  const gathering = await page.evaluate(() => {
+    const g = window.__wgd!;
+    const cells = g.sceneryList();
+    const xs = g.allies();
+    xs.forEach((a, i) => {
+      const c = cells[i % cells.length]!;
+      g.sim.applyCommand({ type: 'moveAlly', allyId: a.id, cellX: c.x, cellZ: c.z });
+    });
+    g.ff(600); // 걸어가서 캐기 시작할 시간
+    return g.sim.state.allies.filter((a) => a.gatherKey >= 0).length;
+  });
+  expect(gathering, '아무도 안 캔다 (표본 B가 성립하지 않는다)').toBeGreaterThan(0);
+
+  // 버스트 먼저 — 캐기 시작 연출이 켜져 있는 동안
+  await page.evaluate(() => window.__wgd!.pause(true));
+  await page.waitForTimeout(300);
+  const burst = await maxFrame(page);
+  const burstMsg = `버스트 ${JSON.stringify(burst)} (예산 90콜 / 150,000삼각형)`;
+  expect(burst.calls, burstMsg).toBeLessThanOrEqual(90);
+  expect(burst.tris, burstMsg).toBeLessThanOrEqual(150_000);
+
+  // 그리고 **정착**을 기다려 진짜 영구 비용을 잰다 (연출이 꺼질 시간)
+  await page.waitForTimeout(2_500);
+  const idleOn = await maxFrame(page);
+  await page.evaluate(() => window.__wgd!.pause(false));
+
+  const idleMsg =
+    `정착 프레임(자리 통제됨): 안 캠 ${nA}명 ${JSON.stringify(idleOff)}` +
+    ` → 캐는 중 ${gathering}명 ${JSON.stringify(idleOn)} / 버스트 최댓값 ${burst.calls}콜`;
+  expect(idleOn.calls - idleOff.calls, idleMsg).toBeLessThanOrEqual(1);
+
+  // ── 표본 C: 최악 프레임 (웨이브 진행 중 = 체력바가 어차피 켜져 있다) ─────────
+  await page.evaluate(() => {
+    const g = window.__wgd!;
+    g.callWave();
+    g.ff(600);
+  });
+  await page.evaluate(() => window.__wgd!.pause(true));
+  await page.waitForTimeout(300);
+  const busy = await maxFrame(page);
+  await page.evaluate(() => window.__wgd!.pause(false));
+
+  const busyMsg = `최악 프레임 ${JSON.stringify(busy)} (예산 90콜 / 150,000삼각형)`;
+  expect(busy.calls, busyMsg).toBeLessThanOrEqual(90);
+  expect(busy.tris, busyMsg).toBeLessThanOrEqual(150_000);
+  // 최악 프레임은 한가한 쪽보다 당연히 크다(적·투사체·체력바). 여기서 재는 것은
+  // "채집이 그 위에 층을 더 얹지 않는다"이고, 그 증거는 위 **정착 Δ ≤ 1** 하나다.
 
   expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
 });
