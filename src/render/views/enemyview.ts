@@ -85,6 +85,25 @@ const TAU = Math.PI * 2;
 const ATTACK_SWING_RATE = 9;
 /** 공격 중 앞으로 기울이는 최대 각(rad) — 내려치는 순간에 몸이 따라 나간다 */
 const ATTACK_LEAN = 0.22;
+/**
+ * **문간 한 대의 주기 (초)** — 문 앞에 선 적이 마을을 무는 동작 한 번의 길이.
+ *
+ * 1.0 인 이유는 sim 의 한 입 주기(`GATE_BITE_TICKS` 30틱)와 같은 박자이기 때문이다.
+ * ⚠ 그렇다고 `@/data` 에서 그 상수를 끌어오지는 **않는다**: 이 값은 순수 연출이라
+ * 어긋나도 판정이 한 톨도 안 바뀌고(피해는 sim 이 정한다), 대신 상수를 끌어오면
+ * 렌더 핫루프가 밸런스 표에 묶여 "박자를 조금 늦추자"가 밸런스 변경이 된다.
+ * 이 파일이 `ATTACK_SWING_RATE = 9`(rad/s)를 쿨다운과 무관하게 고른 것과 같은 규약이다.
+ *
+ * 개체마다 `phaseOffset01(id)` 만큼 어긋내므로 문 앞의 대열이 한 몸처럼 내려치지 않는다 —
+ * 실제로도 개체의 한 입 시각은 **도착한 틱**이 정하므로 제각각이다.
+ */
+const GATE_SWING_PERIOD = 1;
+/**
+ * 문간에서 무는 동작의 최대 앞기울임(rad). 타워를 두들길 때(ATTACK_LEAN 0.22)보다 깊다 —
+ * 마을 지붕은 타워 몸통보다 낮고, 대형 공룡은 목을 아래로 꺾어야 문다.
+ * 0.34 는 trex(반경 0.80)가 마을 바닥판 밖에 서서도 주둥이가 지붕 선에 닿는 각이다.
+ */
+const GATE_LEAN = 0.34;
 /** "멈춰 있다"로 보는 한 틱 이동거리 상한 (타일) */
 const STOPPED_EPS = 1e-4;
 /**
@@ -356,8 +375,11 @@ export class EnemyView {
       if (dt > 1e-3) {
         anim.age += dt;
         anim.flash = Math.max(0, anim.flash - dt * 5);
-        // 조준 자세는 정지 상태(siegeHoldLeft)를 따라 완만히 들고 난다
-        const want = e.siegeHoldLeft > 0 ? 1 : 0;
+        // 조준 자세는 정지 상태(siegeHoldLeft)를 따라 완만히 들고 난다.
+        // **문간(gateTicks > 0)도 같은 정지다** — 마을 문 앞에 선 적은 걷지 않고
+        // 눈앞의 것을 팬다(src/sim/gate.ts 규칙 3·4). 자세를 안 바꾸면 대열 전체가
+        // 걷다 만 자세로 얼어붙어 "멈춰 서서 때린다"가 화면에서 사라진다.
+        const want = e.siegeHoldLeft > 0 || e.gateTicks > 0 ? 1 : 0;
         anim.aim += (want - anim.aim) * Math.min(1, dt * AIM_RATE);
       }
 
@@ -381,10 +403,38 @@ export class EnemyView {
        * 두 길을 섞으면 던지는 팔이 제자리걸음까지 겹쳐 박자가 두 개가 된다.
        */
       const lean = enemyAttackLean(e.defId);
-      const atkP = lean > 0 ? attackProgress(e.attackAnimLeft, e.attackAnimTicks, alpha) : 0;
-      const aim = lean > 0 ? anim.aim : 0;
-      // 멈춰 서서 타워를 때리는 중 — 공격 포즈가 없는 종만 위상을 시간으로 굴린다
-      const swinging = lean === 0 && e.towerTargetId >= 0 && step < STOPPED_EPS;
+      /*
+       * **문간** — 마을 문 앞에 서서 마을을 무는 중(src/sim/gate.ts).
+       * 여기서 갈리는 것은 "무엇을 때리는가"가 아니라 **동작의 출처**다:
+       * 타워 타격은 sim 이 동작 카운터(attackAnimLeft)를 실어 보내지만, 한 입은
+       * 마을 HP 를 1 깎는 회계일 뿐이라 개체 동작 카운터가 없다. 그래서 문간의
+       * 동작만은 뷰가 위상을 직접 만든다 — 채집 자세(GATHER_SWING_TICKS)와 같은 사정이고
+       * 같은 해법이다.
+       *
+       * 위상은 **개체마다 어긋난 1초 톱니**다. 포락선이 p=0 과 p=1 에서 똑같이 0이라
+       * (gait.ts attackEnvelope) 톱니가 되감기는 순간에도 자세가 안 튄다.
+       */
+      const atGate = e.gateTicks > 0;
+      const gateP = atGate
+        ? ((this.time / GATE_SWING_PERIOD + phaseOffset01(e.id)) % 1 + 1) % 1
+        : 0;
+      const atkP = atGate
+        ? gateP
+        : lean > 0
+          ? attackProgress(e.attackAnimLeft, e.attackAnimTicks, alpha)
+          : 0;
+      // 문간에서는 던지는 포즈가 없는 종(공룡·짐승)도 상체를 쓴다 — 아래 swing 과
+      // 합쳐 "제자리 걸음 + 앞으로 물어뜯기"가 된다. lean 0 인 종은 attackLean 이
+      // 0을 돌려주므로 기울임은 뒤의 GATE_LEAN 이 따로 준다.
+      const aim = atGate || lean > 0 ? anim.aim : 0;
+      /*
+       * 멈춰 서서 때리는 중 — 공격 포즈가 없는 종만 위상을 시간으로 굴린다.
+       * 문간이 조건에 들어온 이유: 문 앞의 적은 `towerTargetId` 가 −1 이다
+       * (gate.ts 규칙 4 — 문간의 적은 타워를 안 때린다). 그대로 두면 공룡 대열이
+       * **통째로 얼어붙는다**. 이 게임에서 가장 오래 보이는 정지 장면이 그거라면
+       * 사용자 요구("문 앞에서 서로 때린다")가 화면에 도착하지 않는다.
+       */
+      const swinging = lean === 0 && (atGate || (e.towerTargetId >= 0 && step < STOPPED_EPS));
       const swing = swinging ? this.time * ATTACK_SWING_RATE : 0;
       const gait = rigged
         ? wrapGait(travel * rig.gaitPerDist + off + swing)
@@ -420,6 +470,15 @@ export class EnemyView {
       if (swinging) pitch -= Math.max(0, Math.sin(gait)) * ATTACK_LEAN;
       // 온몸으로 던진다 — 젖힐 때 뒤로, 놓을 때 앞으로. 셰이더와 **같은 포락선**을 쓴다.
       pitch += attackLean(atkP, aim, lean);
+      /*
+       * 문간 추가 기울임 — 마을 지붕을 향해 목을 꺾는다.
+       * `attackLean` 은 이 종의 던지기 각(lean)에 비례하는데 공룡은 그 값이 0이라
+       * 위 한 줄만으로는 몸이 하나도 안 기운다. 문간에서는 종을 안 가리므로
+       * (gate.ts 규칙 1) 기울임도 종을 안 가려야 한다.
+       * sin 반주기만 쓰는 것은 위 swinging 과 같은 규약이다 — 내려칠 때만 숙이고
+       * 되돌아올 때는 자세를 세운다.
+       */
+      if (atGate) pitch -= Math.max(0, Math.sin(gateP * TAU)) * GATE_LEAN * anim.aim;
 
       _quat.setFromAxisAngle(AXIS_Y, -e.heading);
       _quat2.setFromAxisAngle(AXIS_Z, pitch);

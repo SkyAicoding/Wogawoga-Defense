@@ -7,6 +7,7 @@ import type {
   AllyId,
   BattleSim,
   BattleUiApi,
+  EnemyId,
   ResultSummary,
   StageDef,
   TargetingMode,
@@ -101,8 +102,18 @@ export interface BattleGatherApi {
   gatherRefs(): { baseX: number; baseZ: number; gridW: number };
 }
 
+/**
+ * **집결** — 계약(`BattleUiApi`)에 없는 조작이라 채집 둘과 같은 확장으로 낸다.
+ * `src/data/types.ts` 를 넓히지 않은 이유: sim 은 이 개념을 모른다.
+ * 구현은 기존 `moveAlly`(allyId −1 = 전원)를 마을 셀로 한 번 발행하는 것이 전부라
+ * (sim 0줄) 계약에 얹을 만한 새 능력이 아니다. HUD 는 없으면 버튼을 안 그린다.
+ */
+export interface BattleRallyApi {
+  requestRallyAllies(): void;
+}
+
 export class BattleController {
-  readonly api: BattleUiApi & BattleGatherApi;
+  readonly api: BattleUiApi & BattleGatherApi & BattleRallyApi;
   readonly sim: BattleSim;
   readonly stage3d: Stage3D;
   readonly camera = new DioramaCamera();
@@ -174,6 +185,9 @@ export class BattleController {
     // 기지 최대 HP는 홈타운 Lv1 배율이 걸린 값이다 — stage.baseHp를 그대로 쓰면
     // Lv1 hpMul이 1이 아닌 테이블에서 피해 외형 단계가 어긋난다 (레벨업 시 baseUpgraded가 갱신)
     this.fx.baseHpMax = this.sim.state.baseHpMax;
+    // 문간 피해 숫자를 마을 머리 위에 띄우는 데 쓴다 — 좌표를 아는 쪽이 넘긴다
+    // (`requestRallyAllies` 가 baseCell 을 채우는 것과 같은 이유: UI/연출은 판을 모른다)
+    this.fx.baseCell = { x: this.stage.baseCell.x, z: this.stage.baseCell.z };
     this.fx.towerCellLookup = (id) => {
       const t = this.sim.state.towers.find((tw) => tw.id === id);
       return t ? { x: t.cellX, z: t.cellZ } : null;
@@ -245,6 +259,35 @@ export class BattleController {
       requestTrainAlly: (defId: AllyId) => {
         // 경로는 sim이 결정론적으로 고른다 (allies.ts 규칙 1) — UI는 종만 고른다
         if (self.sim.applyCommand({ type: 'trainAlly', defId })) audio.play('uiTap');
+      },
+      requestRallyAllies: () => {
+        /*
+         * 집결 — 살아 있는 부족원 **전원**을 마을 셀로. sim 은 한 줄도 안 늘었다:
+         * 기존 moveAlly 의 "allyId −1 + defId 생략 = 전원" 갈래를 그대로 쓴다
+         * (types.ts BattleCommand.moveAlly 주석 참조).
+         *
+         * ⚠ 문간이 들어온 뒤로 이 버튼의 **뜻이 바뀌었다.** gate-wip 에서는 "부족원을
+         *   앞으로 보내 보스를 붙잡는다"였고 실전 활성 0% 로 실패했다(부족원이 스폰 즉시
+         *   걸어 나가 보스 도착 전에 죽는다). 이번 설계는 집결점(마을 앞 1.4/0.8)과
+         *   문간선(1.37~1.95)이 기하로 겹쳐 마을 앞의 부족원이 **태어난 자리에서**
+         *   문 앞의 적을 붙잡는다 — 곧 "붙잡으러 보내는" 조작이 필요 없다.
+         *   지금 이 버튼이 파는 것은 **자원 칸으로 캐러 나간 일꾼을 되부르는 것**이다.
+         *
+         * 판 위 선택을 먼저 푸는 이유: 부족 선택이 살아 있으면 **다음 캔버스 탭이
+         * 또 하나의 moveAlly 가 된다**(placement.ts). 집결시켜 놓고 화면을 한 번
+         * 만졌다가 방금 부른 전원이 엉뚱한 칸으로 되돌아 나가는 사고가 그것이다.
+         *
+         * 아무도 안 나가 있으면 moveAlly 가 false 를 돌려주고 소리도 안 난다 —
+         * 눌린 척하지 않는다.
+         */
+        self.placement.clearAllySelection();
+        const ok = self.sim.applyCommand({
+          type: 'moveAlly',
+          allyId: -1,
+          cellX: self.stage.baseCell.x,
+          cellZ: self.stage.baseCell.z,
+        });
+        if (ok) audio.play('uiTap');
       },
       requestRefresh: () => {
         if (self.sim.applyCommand({ type: 'refreshHand' })) audio.play('cardRefresh');
@@ -626,6 +669,53 @@ export class BattleController {
         return ok;
       },
       allyCost: (defId: AllyId): number => this.sim.allyCost(defId),
+      /*
+       * ── 문간 검증 창 (e2e 전용) ──────────────────────────────────────────
+       * 문간 띠와 집결 버튼은 DOM 이라 Playwright 가 직접 읽지만, "지금 문 앞에
+       * 누가 얼마나 섰는가"는 sim 상태라 창이 따로 필요하다(src/sim/gate.ts).
+       */
+      gateEnemies: (): {
+        id: number;
+        defId: EnemyId;
+        gateTicks: number;
+        owed: number;
+        cdLeft: number;
+        blockerAllyId: number;
+      }[] =>
+        this.sim.state.enemies
+          .filter((e) => e.alive && e.gateTicks > 0)
+          .map((e) => ({
+            id: e.id,
+            defId: e.defId,
+            gateTicks: e.gateTicks,
+            owed: e.gateOwed,
+            cdLeft: e.gateBiteCdLeft,
+            blockerAllyId: e.blockerAllyId,
+          })),
+      /*
+       * 연출 계측용 — 문간 한 입의 지붕 파편처럼 **작고 가려지는** 연출은 캡처로
+       * 못 닫는다(0.062타일 ≈ 3px, 게다가 문 앞 큰 놈의 몸통 뒤다). 개수로 닫는다.
+       * 누적 쪽(spawnedTotal)은 풀 포화·앰비언트에 안 타므로 두 읽기 사이에 프레임을
+       * 안 끼우면 "이 한 틱의 사건이 낸 파티클"만 갈라진다.
+       */
+      particleCount: (): number => this.stage3d.particles.liveCount,
+      particlesSpawned: (): number => this.stage3d.particles.spawnedTotal,
+      /*
+       * 계측 격리용 — 타워가 쏘는 동안에는 궤적·불티가 매 틱 섞여 들어와 지붕 파편을
+       * 갈라낼 수 없다. 문 앞 대치 자체는 타워와 무관하게 그대로 선다.
+       */
+      sellAllTowers: (): number => {
+        let n = 0;
+        for (const t of [...this.sim.state.towers]) {
+          if (this.sim.applyCommand({ type: 'sellTower', towerId: t.id })) n++;
+        }
+        this.processEvents();
+        return n;
+      },
+      rallyAllies: (): void => {
+        this.api.requestRallyAllies();
+        this.processEvents();
+      },
       canTrainAlly: (defId: AllyId): boolean => this.sim.canTrainAlly(defId),
       // 홈타운 방어/레벨업 검증용 — 최대 레벨·골드 부족 거부까지 그대로 밟는다
       baseInfo: (): {

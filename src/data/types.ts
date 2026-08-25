@@ -590,6 +590,31 @@ export interface WavePlanParams {
  *   '.' 지상  '~' 물/공허  'o' 건설 슬롯  '#' 장식(바위 등, 건설 불가)
  * 경로 셀은 paths 웨이포인트에서 래스터라이즈되어 지형에 표시된다.
  */
+/**
+ * 문간 교전의 스테이지별 덮어쓰기 — 세 항목 전부 **생략 가능**이고, 생략하면 balance.ts 의
+ * `GATE_BITE_TICKS` / `GATE_HOLD_MIN_TICKS` 와 "켜짐"이 그대로 쓰인다.
+ * 배포 데이터는 한 스테이지도 이 필드를 적지 않는다(= 기본값 그대로).
+ */
+export interface GateSpec {
+  /**
+   * `false` 면 적이 문 앞에 서지 않고 **종전대로 누수한다**(문간 기능 전체가 꺼진다).
+   * `gate-off` 되돌리기 대조군(tests/sim/controls.ts)이 쓰는 유일한 스위치다.
+   */
+  enabled?: boolean;
+  /** 한 입의 주기(틱). 기본 GATE_BITE_TICKS */
+  biteTicks?: number;
+  /**
+   * 체류의 하한(틱). 기본 GATE_HOLD_MIN_TICKS.
+   *
+   * ⚠ `claude/gate-wip` 의 `divisor`(한 입 = ceil(baseDamage/divisor))를 **여기로 교체했다**.
+   *   그 손잡이는 판별력이 0이었다 — 4 → 32 로 8배를 올려도 완주율이 1.25% → 1.88% 로
+   *   0.6%p 움직이고 멈췄다. 문간의 결말을 divisor 가 **언제**만 바꾸고 **어느 쪽**을 안
+   *   바꾸기 때문이다. 이번 설계에서 총액은 `baseDamage` 로 고정이라 divisor 가 뜻을 잃고,
+   *   실제로 움직일 것이 남은 유일한 축이 **잡졸의 체류 하한**이다.
+   */
+  holdMinTicks?: number;
+}
+
 export interface StageDef {
   id: number;
   nameKey: string;
@@ -617,6 +642,16 @@ export interface StageDef {
    * 스웜 종**뿐이라 종을 지정해서 덮어쓴다.
    */
   leakDamage?: Partial<Record<EnemyId, number>>;
+  /**
+   * **문간 교전 손잡이** (src/sim/gate.ts). 생략하면 전부 기본값이다 — 곧 이 필드를
+   * 안 적은 여섯 스테이지의 동작은 balance.ts 상수가 정한다.
+   *
+   * 왜 스테이지에 두는가(= 왜 모듈 상수만으로 두지 않는가): `leakDamage` 와 **정확히 같은
+   * 이유**다. 되돌리기 대조군(tests/sim/controls.ts)은 데이터 주입구로만 만들어질 수 있는데,
+   * 문간을 모듈 상수로만 두면 `SIEGE_ENGAGE_RANGE` 처럼 **주입구 없는 되돌리기**가 되어
+   * 항목이 통째로 UNPROVEN 으로 태어난다(controls.UNREACHABLE 참조).
+   */
+  gate?: GateSpec;
   baseCell: Vec2;
   baseHp: number;
   startGold: number;
@@ -698,6 +733,46 @@ export interface EnemyState {
    * 그 아군을 난투(brawl)로 반격한다. 공중 적에게는 절대 붙지 않는다 — 날아서 지나간다.
    */
   blockerAllyId: number;
+  /**
+   * **문 앞에 서서 버틴 누적 틱** (0 = 문간이 아니다). src/sim/gate.ts.
+   *
+   * 이 한 필드가 "문간에 있는가"와 "얼마나 오래 있었는가"를 **동시에** 나타낸다.
+   * 별도의 bool 을 두지 않은 이유는 두 값이 동시에 정확해야 안전한 설계를 피하려는
+   * 것이다(entities.ts `bountyPaid` 주석의 논거와 같다) — 상태가 하나면 풀 재사용
+   * 리셋 누락이 한 곳에서만 일어난다.
+   *
+   * ⚠⚠ **어떤 분기보다 앞에서 무조건 증가한다.** 스턴·감속·힐·방패·아군 봉쇄·마을 화력
+   *   그 무엇도 이 값을 멈추지 못한다. 그것이 종료 증명의 전부다(gate.ts §종료 증명).
+   *   조건부로 증가시키는 순간 판이 영영 안 끝나는 상태가 생긴다.
+   *
+   * 0에서 1이 되는 순간은 `moveEnemies` 가 정지선에 도달시킨 그 틱이고, 그 뒤로는
+   * **두 번 다시 걷지 않는다**. 곧 이 값이 0보다 크면 좌표가 영구히 고정이다.
+   * 공개 상태다 — HUD 가 '문 앞에 선 수'를, 연출이 대치 링을 여기서 읽는다.
+   */
+  gateTicks: number;
+  /**
+   * 다음 한 입까지 남은 틱 (문간이 아니면 항상 0). gate.ts 규칙 5.
+   *
+   * `attackCdLeft`(타워 타격)와 **일부러 분리한다** — 같은 이유다(entities.ts
+   * `brawlCdLeft` 주석): 두 행동은 서로 배타이고(문 앞의 적은 타워를 안 때린다·규칙 4)
+   * 합치면 "문 앞에 서는 순간 타워 쿨다운이 한 박자 밀리는" 숨은 결합이 생긴다.
+   * 공개 상태인 이유는 HUD 가 '다음 한 입까지 남은 시간'을 그대로 그리기 때문이다.
+   */
+  gateBiteCdLeft: number;
+  /**
+   * **도착이 청구하는 총액 중 아직 안 낸 잔액.** 스폰 시 `baseDamage` 로 굳고, 한 입마다
+   * `GATE_BITE_AMOUNT` 씩 줄고, 0이면 더 못 문다. gate.ts 규칙 6.
+   *
+   * ⚠⚠ **`leakEnemy` 가 청구하는 값이 `baseDamage` 가 아니라 이 필드다.** 그 한 줄이
+   *   총량 항등식을 **자료구조로** 보장한다:
+   *     Σ(한 입) + (뚫고 들어갈 때의 잔액 한 방) = e.baseDamage — 언제나, 정확히.
+   *   곧 문간이 켜지든 꺼지든 한 마리가 마을에 넣는 총 피해가 **한 자리도 안 바뀐다**.
+   *   문간이 꺼진 판에서는 이 값이 스폰 뒤 한 번도 안 줄어 `baseDamage` 그대로이므로
+   *   `leakEnemy` 의 동작이 **비트 단위로 종전과 같다**.
+   *
+   * 공개 상태인 이유는 HUD 가 "앞으로 N 입 남음"을 그리기 때문이다.
+   */
+  gateOwed: number;
 }
 
 /**
@@ -1046,11 +1121,27 @@ export type SimEvent =
       goldNow: number;
       /** 최대 체력 (웨이브 스케일 포함) — 대형/후반 적일수록 사망 폭발을 크게 */
       maxHp: number;
+      /**
+       * **문 앞에서 죽었다면** 그 자리에서 버틴 틱 수 (문간이 아니었으면 생략).
+       * 여기 싣는 이유: 개체는 이 이벤트 뒤 같은 틱에 풀로 회수되므로 계측이 나중에
+       * `gateTicks` 를 읽을 방법이 없다. 곧 이 필드가 문간 체류의 **유일한 확정 기록**이다.
+       */
+      gateTicks?: number;
     }
   | {
+      /**
+       * **뚫고 들어갔다** — 개체의 퇴장 사건(전원 공통). 문간이 켜져도 이 사건의 자리는
+       * 그대로다: 문 앞에 선 적도 체류 상한에 닿으면 여기로 나간다(gate.ts 규칙 7).
+       * 곧 `fx.ts` 의 `foeDef` 정리·오디오·계측이 종전 그대로 전원을 덮는다.
+       */
       type: 'enemyLeaked';
       enemyId: number;
       defId: EnemyId;
+      /**
+       * 이 퇴장이 **실제로 청구한** 마을 HP = `EnemyState.gateOwed` 의 잔액.
+       * 문간을 한 번도 안 거쳤으면 `baseDamage` 그대로이고(종전과 동일),
+       * 문 앞에서 전액을 다 물었으면 **0** 이다(그때는 `baseDamaged` 가 따라오지 않는다).
+       */
       baseDamage: number;
       /**
        * 누수로 **몰수된** 미지급 현상금. 살점 값에서 총 지급액이 움직이는 유일한 자리가
@@ -1060,6 +1151,47 @@ export type SimEvent =
       forfeited: number;
     }
   | { type: 'bossSpawned'; enemyId: number; defId: EnemyId }
+  | {
+      /**
+       * **적이 문 앞에 섰다** — 정지선에 도달해 걸음을 멈추고 마을과 마주 본다.
+       * 개체당 정확히 한 번 나간다. **종을 안 가린다** — 보스도 잡졸도 공중도 같다
+       * (gate.ts 규칙 1·9. 사용자 요구 "모두 통일"). 이름이 `bossAtGate` 가 아닌 이유다.
+       *
+       * 끝나는 사건은 둘이다: `enemyDied`(죽었다) 또는 `enemyLeaked`(뚫고 들어갔다).
+       * HUD 의 문간 띠와 연출의 대치 링이 켜지는 신호다.
+       */
+      type: 'enemyAtGate';
+      enemyId: number;
+      defId: EnemyId;
+      /** 문 앞 좌표 (마을 중심에서 `GATE_STANDOFF_EDGE + radius`) */
+      x: number;
+      z: number;
+      /** 이 개체가 앞으로 물 총액 = 남은 입 수. HUD 가 "N 입 남음"을 미리 그린다 */
+      owed: number;
+      /** 이 개체의 체류 상한(틱) — HUD 가 "언제 뚫고 들어오나"를 그릴 수 있다 */
+      holdTicks: number;
+    }
+  | {
+      /**
+       * **한 입** — 문 앞의 적이 마을을 물었다. 바로 뒤에 `baseDamaged` 가 따라온다.
+       * 순서는 `raidAttack` → `towerDamaged` 와 같은 규약이다(siege.ts fireAtTower):
+       * **무는 것이 먼저이고 깎이는 것이 나중**이라야 연출이 인과대로 읽는다.
+       *
+       * `baseDamaged` 만으로는 누수와 구분할 수 없어 따로 둔다 — 누수는 적이 사라지지만
+       * 한 입은 무는 자가 그대로 서 있어서 연출(지붕 파편·마을 흔들림)이 달라야 한다.
+       */
+      type: 'gateBite';
+      enemyId: number;
+      defId: EnemyId;
+      /** 실제로 깎은 마을 HP — 언제나 `GATE_BITE_AMOUNT`(=1)다 */
+      amount: number;
+      x: number;
+      z: number;
+      /** 이 한 입 뒤 남은 잔액 (0이면 이 개체는 더 안 문다) */
+      owed: number;
+      /** 이 한 입 시점의 누적 문간 체류 틱 */
+      gateTicks: number;
+    }
   | { type: 'towerPlaced'; towerId: number; defId: TowerId; cellX: number; cellZ: number }
   | { type: 'towerUpgraded'; towerId: number; defId: TowerId; tier: number }
   | { type: 'towerSold'; towerId: number; refund: number }

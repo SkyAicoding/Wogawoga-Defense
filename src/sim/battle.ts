@@ -1,7 +1,7 @@
 /**
  * createBattle — BattleSim 구현. 틱 순서:
  * 웨이브 스폰(+prep 수리) → **아군 교전/봉쇄(+적의 난투 반격)** → 적의 타워 공격(+저주)
- * → 부서진 타워 회수 → 적 이동/누수 → **아군 이동** → 상태이상
+ * → 부서진 타워 회수 → **문간 교전(문 앞의 한 입)** → 적 이동/누수 → **아군 이동** → 상태이상
  * → 버프 재계산(5틱마다) → 타워 조준/발사(침묵 감소) → **홈타운 조준/발사**
  * → 투사체 이동/명중 → 사망 처리(적·아군) → 승패 판정.
  *
@@ -10,12 +10,15 @@
  *    (src/sim/siege.ts 규칙 4).
  *  · **아군 교전이 공성보다 앞** — 봉쇄된 적은 타워를 때리지 않으므로(allies.ts 규칙 5)
  *    공성이 blockerAllyId를 읽으려면 봉쇄가 먼저 서 있어야 한다.
+ *  · **문간이 공성 직후·이동 직전** — 두 축이 같은 `blockerAllyId` 스냅샷을 읽어야
+ *    "봉쇄된 적은 타워도 안 때리고 마을도 안 문다"가 한 틱 안에서 일관되고, 이동은
+ *    `atGate`를 읽어 전진을 멈춘다 (src/sim/gate.ts · `isSieging`과 같은 꼴).
  *  · **아군 이동이 적 이동 직후** — 교전 판정은 이미 끝났고 결과대로 걷기만 한다.
  *    같은 틱의 같은 스냅샷으로 양쪽을 움직여야 사거리 판정이 한쪽으로 기울지 않는다.
  *  · **홈타운 발사가 타워 발사 직후, 투사체 단계 직전** — 사수는 사수끼리 같은
  *    스냅샷에서 쏴야 사거리 판정이 기울지 않고, 화살이 같은 틱의 투사체 단계에 실려야
  *    비행 시간 규칙이 타워 것과 같아진다 (hometown.ts 규칙 7).
- * 요약하면 한 틱의 인과는 **봉쇄 확정 → 공성 → 이동 → 사격**이다.
+ * 요약하면 한 틱의 인과는 **봉쇄 확정 → 공성 → 문간 → 이동 → 사격**이다.
  *
  * prep: 웨이브1 전 150틱, 이후 90틱. callWave 스킵 시 남은틱×0.15 골드(내림).
  * three/DOM 임포트 금지 — @/data/types + @/core/* 만 사용.
@@ -52,6 +55,7 @@ import {
 } from './allies';
 import { recomputeBuffs, updateProjectiles, updateTowers } from './attack';
 import { addGold, leakEnemy } from './combat';
+import { atGate, enterGate, stopDistFor, updateGate } from './gate';
 import { Economy, sceneryClearCostFor, sellRefundFor } from './economy';
 import { pathFor, World, type EnemySim, type SimCtx } from './entities';
 import {
@@ -222,6 +226,9 @@ class Battle implements BattleSim {
       this.economy.recalcCosts(ctx); // 타워 수 감소 → 핸드 실비용 하락
       recomputeBuffs(ctx); // drum이 부서졌을 수 있다 — 5틱 주기를 기다리지 않는다
     }
+    // 3-b) 문간 교전 — 문 앞에 선 적이 마을을 문다 (gate.ts). 공성과 **같은 스냅샷**을 본다.
+    //   여기서 체류 상한에 닿은 개체는 leakEnemy로 뚫고 들어가고, 회수는 9단계가 한다.
+    updateGate(ctx);
     // 4) 적 이동/누수 → 아군 이동 (같은 스냅샷으로 양쪽을 움직인다)
     this.moveEnemies();
     moveAllies(ctx);
@@ -305,6 +312,9 @@ class Battle implements BattleSim {
       if (!e.alive) continue;
       e.prevX = e.x;
       e.prevZ = e.z;
+      // **문 앞에 선 적은 두 번 다시 걷지 않는다** (gate.ts 규칙 3). 봉쇄·정지 판정보다
+      // 앞이다 — 문간은 그 둘의 결과와 무관하게 좌표를 영구히 고정한다.
+      if (atGate(e)) continue;
       // 아군에게 발이 묶였다 — 유닛 충돌 대신 쓰는 봉쇄 표현 (allies.ts 규칙 5)
       if (e.blockerAllyId >= 0) continue;
       // 습격대는 타워를 쏘는 동안 그 자리에 멈춰 선다 (siege.ts 규칙 4)
@@ -316,9 +326,16 @@ class Battle implements BattleSim {
       if (e.siegeWalkLeft > 0) e.siegeWalkLeft--;
       e.dist += sp * TICK_DT;
       const path = pathFor(ctx, e);
-      if (e.dist >= path.totalLength) {
-        e.dist = path.totalLength;
-        leakEnemy(ctx, e); // 회수는 사망 처리 단계에서
+      // 정지선 = 문간이 켜져 있으면 `totalLength − (1.15 + radius)`, 꺼져 있으면 경로 끝.
+      // **갈림은 이 한 곳뿐이다** (gate.ts 규칙 1) — `leakEnemy` 안에 두면 combat → gate
+      // 순환 참조가 생기고, 새 호출자가 조용히 규칙을 우회한다.
+      const stop = stopDistFor(ctx, e, path);
+      if (e.dist >= stop) {
+        e.dist = stop;
+        // 문간이 꺼진 판(`gate.enabled = false` 대조군)에서는 stop === totalLength 이고
+        // 아래가 종전과 **비트 단위로 같은 경로**다. 그것이 A/B 를 코드 0줄로 만든다.
+        if (stop < path.totalLength) enterGate(ctx, e, path, stop);
+        else leakEnemy(ctx, e); // 회수는 사망 처리 단계에서
         continue;
       }
       path.sample(e.dist, e);
@@ -550,6 +567,19 @@ class Battle implements BattleSim {
       // 봉쇄/난투 — 봉쇄는 이동·공성·반격을 동시에 바꾸므로 1틱만 어긋나도 전부 갈라진다
       h = mix(h, e.blockerAllyId);
       h = mix(h, e.brawlCdLeft);
+      // 문간 (gate.ts) — 셋이 **각각** 다른 발산을 잡는다.
+      //  · gateTicks     : 문 앞에 서 있는가(= 이동 여부) + 몇 틱째인가. 진입이 1틱만
+      //    어긋나도 여기가 갈리고, 풀 재사용 리셋 누락(resetEnemy)이 **스폰 첫 틱에**
+      //    드러난다 — v.baseHp 로도 갈리긴 하지만 그 발산은 한 주기 뒤에나 보인다.
+      //  · gateBiteCdLeft: 언제 다음 한 입이 나가는가 = 앞으로의 마을 HP 궤적 전부.
+      //    봉쇄·스턴이 쿨다운을 다르게 다루므로(규칙 8) gateTicks 에서 유도되지 않는다.
+      //  · gateOwed      : 앞으로 마을에 들어갈 총 피해. **hp 로도 gateTicks 로도 유도되지
+      //    않는다** — 같은 자리에 같은 틱수로 선 두 개체가 잔액이 다르면 앞으로의 판이
+      //    통째로 다르다. resetEnemy/waves.spawn 초기화 누락도 여기서만 그 틱에 드러난다
+      //    (bountyPaid 와 정확히 같은 논거).
+      h = mix(h, e.gateTicks);
+      h = mix(h, e.gateBiteCdLeft);
+      h = mix(h, e.gateOwed);
       // 살점 값의 지급 이력 — **hp에서 유도되지 않는다.** 회복(healAura)으로 hp가
       // 되돌아온 적은 hp가 같아도 bountyPaid가 다르고, 곧 앞으로 받을 돈이 다르다.
       // 풀 재사용 리셋 누락(resetEnemy)도 여기서만 그 틱에 드러난다 — v.gold로도

@@ -119,6 +119,9 @@ function makeEnemy(): EnemySim {
     attackAnimLeft: 0,
     attackAnimTicks: 0,
     blockerAllyId: -1,
+    gateTicks: 0,
+    gateBiteCdLeft: 0,
+    gateOwed: 0,
     def: null as unknown as EnemyDef, // 스폰 시 반드시 채워짐
     stunImmuneUntil: -1,
     siegeMul: 1,
@@ -145,6 +148,20 @@ function resetEnemy(e: EnemySim): void {
   e.siegeMul = 1;
   e.blockerAllyId = -1;
   e.brawlCdLeft = 0;
+  // **문간 상태 셋 — 리셋 누락이 곧 결정론 파괴다** (gate.ts).
+  // gateTicks 가 남아 있으면 새로 스폰된 개체가 태어나자마자 "문 앞에 서 있는 것"이 되어
+  // moveEnemies 가 첫 틱부터 그 개체를 붙잡고(두 번 다시 안 걷는다) updateGate 가
+  // 스폰 지점에서 마을을 물기 시작한다. gateOwed 가 남아 있으면 반대로 **누수 피해가
+  // 통째로 사라진다** — 앞사람이 다 물고 간 0 을 물려받은 trex 가 마을에 0 을 넣는다.
+  // 어느 쪽이든 그 차이가 풀 재사용 순서를 타므로 시드마다 갈리고, 곧 hash() 가 갈린다 —
+  // bountyPaid 가 당한 것과 **정확히 같은 모양**의 사고다(아래 주석).
+  //
+  // ⚠ gateOwed 의 기본값이 0 인 것은 **안전한 쪽으로 고장 난다**: 스폰 전의 개체는
+  //   아무것도 청구하지 않는다. waves.spawn 이 그 뒤에 baseDamage 를 넣는다
+  //   (bountyChunks 와 같은 논거 — resetEnemy 는 maxHp·baseDamage 를 읽으면 안 된다).
+  e.gateTicks = 0;
+  e.gateBiteCdLeft = 0;
+  e.gateOwed = 0;
   // 살점 값의 **지급 이력**도 같다 — 안 지우면 trex(bountyPaid 480)를 죽인 슬롯을
   // 물려받은 compy가 "이미 480을 받은 적"으로 취급돼 평생 한 푼도 못 받는다.
   // 그 감소량이 풀 재사용 순서를 타므로 시드마다 갈리고, 곧 hash()가 갈린다.

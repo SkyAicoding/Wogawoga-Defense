@@ -87,10 +87,16 @@ describe('combat', () => {
         waves: [wave([{ count: 3, intervalTicks: 10 }])],
       }),
     );
-    sim.applyCommand({ type: 'callWave' }); // 타워 없음 → 전부 누수
+    sim.applyCommand({ type: 'callWave' }); // 타워 없음 → 전부 문 앞에 선다
     const ev = runTicks(sim, 300);
-    const leaks = eventsOf(ev, 'enemyLeaked');
-    expect(leaks).toHaveLength(3);
+    // ⚠ 11단계(문간 교전) — **재는 것은 그대로이고 사건의 이름만 바뀌었다.**
+    //   적은 이제 경로 끝에서 사라지지 않고 문 앞에 서서 물기 시작한다(src/sim/gate.ts).
+    //   `enemyLeaked`(뚫고 들어감)는 체류 상한(잡졸 90틱) **뒤**인데, 이 판은 baseHp 3 이라
+    //   세 번째 한 입에서 이미 끝난다 — 곧 이 판에 누수는 0건이고 그것이 정상이다.
+    const arrivals = eventsOf(ev, 'enemyAtGate');
+    expect(arrivals).toHaveLength(3);
+    // ⚠⚠ **피해 시점은 오늘과 한 틱도 안 다르다.** 첫 입이 도착 틱에 즉시 나가고
+    //   `baseDamage` 1 짜리는 총액이 1 이라 그 한 입이 전부다. 이 배열이 그 계약이다.
     const base = eventsOf(ev, 'baseDamaged');
     expect(base.map((b) => b.hpLeft)).toEqual([2, 1, 0]);
     const ended = eventsOf(ev, 'battleEnded');

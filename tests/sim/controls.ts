@@ -80,6 +80,33 @@ const raidOff = (t: Readonly<Record<EnemyId, EnemyDef>>): Record<EnemyId, EnemyD
 const enemyHp = (mul: number) => (t: Readonly<Record<EnemyId, EnemyDef>>): Record<EnemyId, EnemyDef> =>
   mapVals(t, (d) => ({ ...d, hp: Math.max(1, Math.round(d.hp * mul)) }));
 
+// ── 문간 축 (11단계) ────────────────────────────────────────────────────────
+/**
+ * **문간을 끈 세계** — 적이 문 앞에 서지 않고 종전대로 도착 즉시 누수한다.
+ *
+ * 이 패치가 있어야 문간 축의 A/B 가 **코드 0줄**이 된다. `StageDef.gate` 주입구를
+ * 만든 이유가 그것이고(types.ts GateSpec 주석), `SIEGE_ENGAGE_RANGE` 가 겪은
+ * "주입구 없는 되돌리기"(UNREACHABLE 첫 줄)를 새 기능이 되풀이하지 않게 하는 장치다.
+ *
+ * ⚠ **아직 `CONTROLS` 에 안 넣는다.** 되돌리기 카탈로그의 계약은 "겨냥한 다리가
+ *   **전부 빨개진다**"인데, 이 축의 설계 자체가 **총량 항등식**(Σ한 입 + 잔액 =
+ *   baseDamage) 위에 서 있어 한 마리가 마을에 넣는 총 피해가 한 자리도 안 바뀐다.
+ *   곧 "빨개져야 할 다리"를 지금 적을 수 없고, 재지 않고 적으면 그게 바로 이 파일이
+ *   한 번 당한 실패다(헤더 참조). Tune 이 봉투를 다시 재서 실제로 움직인 다리를
+ *   확인하면 그 이름들과 함께 `CONTROLS` 에 등재해라 — 패치는 여기 이미 서 있다.
+ */
+export const GATE_OFF_PATCH: DataPatch = {
+  id: 'gate-off',
+  why: '문간 교전 전체를 끈다 (적이 도착 즉시 누수하던 세계)',
+  stage: (st) => ({ ...st, gate: { ...st.gate, enabled: false } }),
+};
+/** `GATE_HOLD_MIN_TICKS` 를 하한 구간의 반대 끝(60틱)으로 — 위험 2 의 유일한 손잡이 */
+export const gateHoldMin = (ticks: number): DataPatch => ({
+  id: `gate-hold-${ticks}`,
+  why: `문 앞 체류 하한 ${ticks}틱 (배포값 90)`,
+  stage: (st) => ({ ...st, gate: { ...st.gate, holdMinTicks: ticks } }),
+});
+
 // ── 타워 축 ─────────────────────────────────────────────────────────────────
 const toughMul = (mul: number) => (t: Readonly<Record<TowerId, TowerDef>>): Record<TowerId, TowerDef> =>
   mapVals(t, (d) => ({ ...d, toughness: (d.toughness ?? 1) * mul }));

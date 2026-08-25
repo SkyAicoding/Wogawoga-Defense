@@ -3,6 +3,7 @@
  * 감산(최소 1) → 가죽 타격당 상한(최소 1) → hp 감소
  * → **살점 값**: 몫 경계를 넘을 때마다 bounty의 몫, 사망 시 잔액 (settleBounty).
  * 기지 누수는 baseDamaged로 이어진다 — 남은 몫은 몰수된다.
+ * 누수의 **청구액은 `gateOwed`(잔액)** 다: 문 앞에서 이미 문 만큼은 빠진다 (src/sim/gate.ts).
  * 타워 피해(적 부족의 공격)도 여기 있다 — 감쇠/방어 없이 정수 피해가 그대로 들어간다.
  * 상태이상 부여는 attack/status 쪽에서 담당 (순환 임포트 방지).
  */
@@ -174,6 +175,9 @@ export function damageEnemy(
       bounty: e.bounty,
       goldNow: paid,
       maxHp: e.maxHp,
+      // 문 앞에서 죽었다면 그 자리에서 버틴 틱 — 개체는 같은 틱에 풀로 회수되므로
+      // 여기 안 실으면 계측이 다시 읽을 방법이 없다 (types.ts enemyDied.gateTicks)
+      ...(e.gateTicks > 0 ? { gateTicks: e.gateTicks } : {}),
     });
   } else {
     const paid = settleBounty(ctx, e, false);
@@ -280,13 +284,28 @@ export function damageAlly(ctx: SimCtx, a: AllySim, amount: number, attacker: En
 export function leakEnemy(ctx: SimCtx, e: EnemySim): void {
   if (!e.alive) return;
   e.alive = false;
+  // ⚠⚠ **청구액은 `baseDamage` 가 아니라 `gateOwed`(잔액)다** (11단계 · 문간 교전).
+  // 스폰이 `gateOwed = baseDamage` 로 굳히고(waves.spawn) 문 앞의 한 입이 1씩 깎으므로
+  //   Σ(한 입) + (여기서 청구하는 잔액) = baseDamage
+  // 가 **자료구조로** 성립한다 — 밸런스가 근사가 아니라 정의상 보존된다.
+  // 문간이 꺼진 판(StageDef.gate.enabled = false · 대조군)에서는 한 입이 0회라
+  // 이 값이 `baseDamage` 그대로이고, 곧 **종전과 비트 단위로 같다.**
+  //
+  // ⚠ 여기에 문간 분기(enterGate)를 두지 **않는다**. `claude/gate-wip` 는 여기서 갈랐고
+  //   그 대가가 `combat → gate → status → combat` 순환 참조였다. 갈림은 이동 단계
+  //   한 곳(battle.moveEnemies)에만 있고, 이 함수는 **뚫고 들어가는 순간의 경로**로만 남는다.
+  const owed = Math.max(0, e.gateOwed);
   ctx.events.push({
     type: 'enemyLeaked',
     enemyId: e.id,
     defId: e.defId,
-    baseDamage: e.baseDamage,
+    baseDamage: owed,
     forfeited: Math.max(0, e.bounty - e.bountyPaid),
   });
-  ctx.view.baseHp = Math.max(0, ctx.view.baseHp - e.baseDamage);
-  ctx.events.push({ type: 'baseDamaged', amount: e.baseDamage, hpLeft: ctx.view.baseHp });
+  e.gateOwed = 0;
+  // 전액을 문 앞에서 이미 물고 들어온 개체는 여기서 **한 톨도 안 깎는다** — 그때
+  // `baseDamaged` 를 0 으로 쏘면 연출이 "맞았다"를 거짓으로 그린다.
+  if (owed <= 0) return;
+  ctx.view.baseHp = Math.max(0, ctx.view.baseHp - owed);
+  ctx.events.push({ type: 'baseDamaged', amount: owed, hpLeft: ctx.view.baseHp });
 }

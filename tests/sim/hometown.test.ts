@@ -117,8 +117,10 @@ describe('홈타운 반격', () => {
     expect(shots.every((s) => s.targetId === slowId)).toBe(true);
     // 추월이 실제로 일어났는지 못 박는다 — 빠른 놈이 먼저 기지에 닿았다는 것은
     // 사거리 안에서 한동안 **더 가까웠다**는 뜻이다. 이게 없으면 이 테스트는 공허해진다
-    const leaks = eventsOf(ev, 'enemyLeaked');
-    expect(leaks[0]?.defId).toBe('compy');
+    // (11단계 — "기지에 닿았다"의 사건이 `enemyLeaked`에서 `enemyAtGate`로 바뀌었다.
+    //  적은 이제 사라지지 않고 문 앞에 선다. 재는 것은 **도착 순서**로 그대로다)
+    const arrivals = eventsOf(ev, 'enemyAtGate');
+    expect(arrivals[0]?.defId).toBe('compy');
   });
 
   it('타워가 전부 침묵해도 홈타운은 계속 쏜다 (규칙 5)', () => {

@@ -115,8 +115,17 @@
  *    그래서 **피해량**에 감속률을 건다. 상쇄가 원리적으로 불가능한 축이고
  *    (체류 시간이 늘어도 한 대의 위력은 그대로 줄어든다), 근접·원거리에 똑같이 걸리며,
  *    화면에서 그대로 읽힌다 — 얼어붙은 팔에는 힘이 실리지 않아 피해 숫자가 작아진다.
- *    35% 감속이면 그 대상이 타워에 넣는 피해도 35% 준다. 기지 피해(누수)는 공격이 아니라
- *    도달로 계산되므로 이 규칙과 무관하다 — 일관성 문제도 생기지 않는다.
+ *    35% 감속이면 그 대상이 타워에 넣는 피해도 35% 준다. 기지 피해는 공격이 아니라
+ *    **도달**로 계산되므로 이 규칙과 무관하다 — 일관성 문제도 생기지 않는다.
+ *
+ *    ⚠ 11단계(문간 교전) 정정 — 위 문장의 **범위만** 다시 쓴다. 적은 이제 경로 끝에서
+ *      사라지지 않고 마을 문 앞에 서서 `GATE_BITE_TICKS` 마다 마을을 문다(src/sim/gate.ts).
+ *      그래도 이 규칙은 **여전히 걸리지 않는다**: 한 입은 휘두름이 아니라 *도착이 확정한
+ *      총액(`baseDamage`)의 분납*이고, 총액은 도달이 정하기 때문이다. 곧 깎을 '한 대의
+ *      위력'이 없다.
+ *      실무적으로도 그래야 한다 — 한 입이 1 로 고정이라 `max(1, round(1 × 0.65))` = **1** 이다.
+ *      감속을 곱하면 규칙이 화면에 아무 차이도 못 만들면서 주석만 거짓이 된다.
+ *      (`claude/gate-wip` 이 이 문단을 뒤집었다가 정확히 그 상태가 됐다. 되돌려 놓는다)
  *
  *    **과대평가 금지**: 이걸로 얼음이 습격대의 '정답'이 되지는 않는다. 같은 골드에서
  *    화력 타워 한 기를 얼음으로 바꾸면 통제 실험의 모든 배치에서 손해였다 —
@@ -156,6 +165,7 @@ import { effAuraRadius, effRange } from './attack';
 import { damageTower } from './combat';
 import type { EnemySim, SimCtx } from './entities';
 import { isStunned, slowFactor } from './status';
+import { atGate } from './gate';
 
 /** 타워 최대 HP — 티어 + 메타 별 + 타워별 내구도(toughness) */
 export function maxHpFor(ctx: SimCtx, defId: TowerId, tier: number): number {
@@ -316,6 +326,16 @@ export function updateSiege(ctx: SimCtx): void {
     if (isStunned(e)) {
       // 규칙 5) 스턴 = 완전 무력화. 쿨다운도 멈춘다. 서 있었다면 규칙 4-b가 걸린다
       endHold(e);
+      e.towerTargetId = -1;
+      continue;
+    }
+    if (atGate(e)) {
+      // **문 앞에 섰다 — 타워를 때리지 않는다** (gate.ts 규칙 4). 봉쇄 분기와 **같은 모양**이고
+      // 근거도 아래와 같다: 눈앞의 것을 놔두고 멀리 있는 것을 때리는 그림은 설명이 안 된다.
+      // 문 앞에서 눈앞의 것은 마을이다. 쿨다운은 흐른다 — 무력화가 아니라 표적 전환이다.
+      // (스턴 분기 **뒤**인 이유: 문 앞에서 스턴에 걸린 적의 쿨다운이 얼어야 규칙이 하나다)
+      endHold(e);
+      if (e.attackCdLeft > 0) e.attackCdLeft--;
       e.towerTargetId = -1;
       continue;
     }

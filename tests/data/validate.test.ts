@@ -2,7 +2,12 @@
 import { describe, expect, it } from 'vitest';
 import type { BaseLevelDef, EnemyId, TowerId, TowerTier } from '@/data/types';
 import * as balance from '@/data/balance';
-import { SIEGE_ADVANCE_TICKS, SIEGE_ENGAGE_RANGE } from '@/data/balance';
+import {
+  GATE_BITE_TICKS,
+  GATE_HOLD_MAX_TICKS,
+  SIEGE_ADVANCE_TICKS,
+  SIEGE_ENGAGE_RANGE,
+} from '@/data/balance';
 import { ALL_ALLY_IDS, ALLY_DEFS } from '@/data/allies';
 import { ALL_ENEMY_IDS, BOUNTY_PER_COST, ENEMY_DEFS } from '@/data/enemies';
 import { BASE_LEVELS } from '@/data/hometown';
@@ -176,6 +181,31 @@ describe('enemies', () => {
     expect(ENEMY_DEFS.spino.baseDamage).toBeGreaterThanOrEqual(5);
     for (const s of STAGES) {
       expect(ENEMY_DEFS.trex.baseDamage, `s${s.id} 기지 HP ${s.baseHp}`).toBeLessThan(s.baseHp);
+    }
+  });
+
+  /**
+   * ⚠⚠ **문간 체류 상한의 데이터 전제** (src/sim/gate.ts §종료 증명 보조정리 B).
+   *
+   * 체류 상한은 `clamp(하한, GATE_HOLD_MAX_TICKS, baseDamage × GATE_BITE_TICKS)` 다.
+   * 곧 `baseDamage` 가 12 를 넘으면 그 종은 **총액을 다 물기 전에** 상한에 잘려
+   * 나머지가 돌파 한 방으로 몰린다 — 총량 항등식은 여전히 성립하지만(잔액이 그리로
+   * 간다) 설계가 약속한 "한 입씩 나눠 내는 그림"이 그 종에서만 사라진다.
+   * `clamp` 상한이 값과 무관하게 자르므로 **종료는 안 깨진다**. 여기서 잠그는 것은
+   * 종료가 아니라 **그림의 일관성**이고, 그래서 계약이 코드가 아니라 데이터에 있다.
+   *
+   * 지금 걸리는 값: 종 표의 최댓값 trex 12, 스테이지 덮어쓰기는 s1 compy 3 하나.
+   */
+  it('문간 — 모든 baseDamage 와 leakDamage 덮어쓰기가 12 이하다 (체류 상한의 전제)', () => {
+    const MAX = GATE_HOLD_MAX_TICKS / GATE_BITE_TICKS; // = 12
+    for (const id of EXPECTED_ENEMIES) {
+      expect(ENEMY_DEFS[id].baseDamage, `${id} baseDamage`).toBeLessThanOrEqual(MAX);
+    }
+    for (const s of STAGES) {
+      for (const [id, v] of Object.entries(s.leakDamage ?? {})) {
+        expect(v, `s${s.id} leakDamage.${id}`).toBeGreaterThanOrEqual(1);
+        expect(v, `s${s.id} leakDamage.${id}`).toBeLessThanOrEqual(MAX);
+      }
     }
   });
 

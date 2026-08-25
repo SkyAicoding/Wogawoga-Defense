@@ -120,6 +120,14 @@ export class WaveSpawner {
     e.bountyPaid = 0;
     // 스테이지별 누수 피해 덮어쓰기 — 없으면 종의 기본값 그대로 (StageDef.leakDamage 주석)
     e.baseDamage = ctx.opts.stage.leakDamage?.[def.id] ?? def.baseDamage;
+    // ── 문간 상태 셋 (gate.ts) ─────────────────────────────────────────────────
+    // resetEnemy 가 이미 0 으로 못박지만 여기서도 명시한다 (shieldHitsLeft·attackCdLeft 가
+    // 양쪽에 적혀 있는 것과 같은 관행). **gateOwed 만은 여기가 유일한 진짜 초기화다** —
+    // 값이 baseDamage 라 resetEnemy 시점(Pool.acquire)에는 아직 알 수 없다.
+    // ⚠ 반드시 위 baseDamage 대입 **뒤**여야 한다. 앞에 두면 이전 개체의 값을 청구한다.
+    e.gateTicks = 0;
+    e.gateBiteCdLeft = 0;
+    e.gateOwed = e.baseDamage;
     e.radius = def.radius;
     pathFor(ctx, e).sample(0, e);
     e.prevX = e.x;

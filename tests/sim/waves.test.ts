@@ -44,7 +44,10 @@ describe('waves', () => {
     );
     sim.applyCommand({ type: 'callWave' });
     const ev: SimEvent[] = [];
-    for (let i = 0; i < 150; i++) {
+    // 250틱 — 문간 교전이 개체당 최대 GATE_HOLD_MAX_TICKS(360) 를 더할 수 있지만,
+    // 여기 raptor 는 baseDamage 1 이라 체류가 하한 90틱이다(gate.ts 규칙 7).
+    // 종전 150 + 90 = 240 이 필요하고 여유 10 을 둔다.
+    for (let i = 0; i < 250; i++) {
       sim.tick();
       ev.push(...sim.drainEvents());
     }

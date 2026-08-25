@@ -21,7 +21,7 @@ import { towerTierScale } from '@/render/meshlib/towers';
 import { ATK_LAUNCH } from '@/render/meshlib/gait';
 import type { RaidShotOpts } from '@/render/views/projectileview';
 import type { DioramaCamera } from '@/render/camera';
-import { showBossBanner, showWaveBanner } from '@/ui/screens/battlehud';
+import { noteGateHold, showBossBanner, showWaveBanner } from '@/ui/screens/battlehud';
 import { damageText, spawnDamageNumber } from '@/ui/widgets/damagenumbers';
 import type { DamageKind } from '@/ui/widgets/damagenumbers';
 
@@ -44,6 +44,27 @@ const SHAKE_BUDGET = 0.5;
 
 /** 한 배치에서 허용하는 타워 피격 연출(파편+숫자) 수 — 부족 무리의 난타 스팸 방지 */
 const TOWER_HIT_FX_MAX = 4;
+/**
+ * 한 배치에서 그릴 **문간 도착** 연출 수 상한 (src/sim/gate.ts).
+ *
+ * ⚠ 이 상한이 필요해진 것이 문간 설계의 가장 큰 연출상 변화다. gate-wip 에서 문 앞에
+ *   서는 것은 **보스뿐**이라 동시 2마리였는데, 이번 설계는 종을 안 가리므로
+ *   (규칙 1·9 — 사용자 요구 "모두 통일") 홍수 웨이브(s1 w31 = 57마리 · w44 = 60마리)에서
+ *   초당 여섯 마리가 같은 자리에 도착한다. 도착마다 먼지를 피우면 파티클 풀(512)이
+ *   **도착 연출 하나로** 마르고, 정작 봐야 할 타워 착탄과 사망 폭발이 사라진다.
+ */
+const GATE_ARRIVE_FX_MAX = 3;
+/**
+ * 마을 피격음의 최소 간격 (ms).
+ *
+ * 종전에 `baseDamaged` 는 **적이 도달할 때 한 번**이었다. 문간에서는 문 앞의 적
+ * 하나하나가 1초에 한 번씩 물어(gate.ts 규칙 5) 같은 사건이 **초당 열몇 번**이 된다.
+ * sfx.ts 가 이미 레시피당 100ms 창에 3회로 막지만 그건 초당 30회라 여전히 기관총이다.
+ * 여기서 한 겹 더 막는 이유는 뜻이 있다 — **마을이 맞는 것은 마을의 사건이고 마을은
+ * 하나다.** 무는 자가 몇이든 화면이 내는 소리는 한 목소리여야 한다.
+ * 150ms = 초당 6~7회. 한 입 주기(1초)보다 짧아 단독 타격은 한 번도 안 삼킨다.
+ */
+const BASE_HIT_SFX_MS = 150;
 /**
  * 한 배치에서 궤적을 그릴 아군 원거리 타격 수 상한.
  * 아군은 최대 6명이지만 4배속에서는 한 배치에 여러 틱이 몰려 들어와,
@@ -391,6 +412,24 @@ export class FxRouter {
    * 스폰에서 넣고 사망/누수에서 지우므로 크기는 항상 '지금 살아 있는 마릿수'다.
    */
   private readonly foeDef = new Map<number, EnemyId>();
+  /** 한 배치의 문간 도착 연출 수 (GATE_ARRIVE_FX_MAX 상한) */
+  private gateArrivals = 0;
+  /** 한 배치의 한 입 수 — 지붕 파편을 **한 번에 모아** 튀긴다 */
+  private gateBites = 0;
+  /**
+   * 한 배치에 마을이 잃은 총 HP (한 입 + 뚫고 들어간 잔액).
+   *
+   * ⚠ **모아서 한 번에 그리는 것이 이 설계의 요구다.** 한 입이 마을 HP 정확히 1이라
+   *   (gate.ts 규칙 5) 개체마다 그리면 화면에 "−1"이 초당 열몇 개 뜬다 — 숫자가
+   *   많을수록 읽히는 것이 아니라 **하나도 안 읽힌다**. 한 배치를 합쳐 "−7" 하나로
+   *   띄우면 그 초에 마을이 실제로 잃은 값이 그대로 읽히고, 뚫고 들어간 티라노의
+   *   잔액 한 방(−12)도 같은 자리에 같은 모양으로 나온다.
+   */
+  private baseHitAmount = 0;
+  /** 한 배치의 마을 피격 사건 수 (0 이면 플러시를 통째로 건너뛴다) */
+  private baseHits = 0;
+  /** 마지막 마을 피격음 시각 (ms) — BASE_HIT_SFX_MS 참조 */
+  private baseHitSfxAt = -1e9;
 
   constructor(
     private stage3d: Stage3D,
@@ -437,6 +476,10 @@ export class FxRouter {
     this.bountyChunks = 0;
     this.gathers = 0;
     this.regrows = 0;
+    this.gateArrivals = 0;
+    this.gateBites = 0;
+    this.baseHitAmount = 0;
+    this.baseHits = 0;
     for (const ev of events) {
       switch (ev.type) {
         case 'waveStarted': {
@@ -449,6 +492,68 @@ export class FxRouter {
         case 'waveCleared':
           audio.play('waveClear');
           audio.music.setIntensity(1);
+          break;
+        case 'enemyAtGate': {
+          /*
+           * **문 앞에 섰다** (src/sim/gate.ts). 종전에는 이 순간이 곧 적이 사라지는
+           * 순간이라 연출이 아예 없었다 — 이제는 판에서 가장 긴 대치의 시작이다.
+           *
+           * ⚠ gate-wip 과 결정적으로 다른 점: 여기 오는 것이 **보스뿐이 아니다**.
+           *   전 16종이 온다(규칙 1·9). 그래서 연출을 두 층으로 갈랐다.
+           *    · 전 종 — 발을 디디는 흙먼지 한 줌. 반경에 비례해 크기가 갈리므로
+           *      "큰 놈이 섰다"가 먼지만으로도 읽힌다. 배치당 GATE_ARRIVE_FX_MAX 로 막는다.
+           *    · 보스만 — 포효 · 음악 격상 · 흔들림. 홍수 웨이브에서 이걸 종마다 주면
+           *      포효가 배경음이 되고(이 파일의 규약: 잦은 사건에 소리를 붙이면 배경이 된다)
+           *      화면이 쉬지 않고 흔들려 멀미가 난다.
+           *
+           * 체류 상한은 HUD 로 넘긴다 — 배너(showBossBanner)와 **같은 경로**다.
+           * HUD 는 폴링이 원칙이지만 이 한 값만은 폴링으로 못 구한다(스테이지가
+           * `holdMinTicks` 를 덮어쓸 수 있는데 UI 는 어느 스테이지인지 모른다).
+           * 놓쳐도 돌파 게이지 한 칸이 접힐 뿐, 나머지는 전부 폴링이 정한다.
+           */
+          noteGateHold(ev.enemyId, ev.holdTicks);
+          const def = ENEMY_DEFS[ev.defId];
+          if (this.gateArrivals < GATE_ARRIVE_FX_MAX && s3.particles.load < 0.8) {
+            this.gateArrivals++;
+            const w = s3.cellToWorld(ev.x, ev.z, this.v);
+            s3.particles.burst(
+              w.x,
+              0.3,
+              w.z,
+              0xc8b28a,
+              Math.round(6 + 14 * def.radius),
+              1.6 + 1.2 * def.radius,
+              0.05 + 0.03 * def.radius,
+              0.6,
+              {
+                gravity: 5,
+                drag: 1.6,
+                // 낮게 옆으로 퍼진다 — 착지가 아니라 '버티고 선' 그림이다
+                upBias: 0.15,
+                sizeVar: 0.55,
+              },
+            );
+          }
+          if (def.boss) {
+            audio.play('bossRoar');
+            audio.music.setIntensity(3);
+            this.shake(0.28);
+            this.buzz(45);
+          }
+          break;
+        }
+        case 'gateBite':
+          /*
+           * 한 입 — 지붕이 뜯긴다. **여기서는 세지만 하고 그리지 않는다**(아래 플러시).
+           * 개체마다 그리면 문 앞에 열몇 마리가 선 순간 파편과 숫자가 화면을 덮는데,
+           * 그것들이 말하는 사실은 전부 같다: "마을이 지금 깎이고 있다".
+           * 사실이 하나면 그림도 하나여야 한다.
+           *
+           * 좌표를 안 쓰는 이유: 파편이 튀는 자리는 **무는 자**가 아니라 **맞는 것**이고,
+           * 맞는 것은 언제나 마을 지붕 하나다. 마을 좌표는 렌더가 이미 안다
+           * (baseUpgraded 가 같은 값을 쓴다 — 그래서 이벤트에 실을 필요가 없었다).
+           */
+          this.gateBites++;
           break;
         case 'bossSpawned':
           showBossBanner();
@@ -978,15 +1083,50 @@ export class FxRouter {
           void STATUS_COLOR[ev.kind];
           break;
         }
-        case 'enemyLeaked':
-          // 기지에 닿아 사라진 적 — 사망(enemyDied)을 거치지 않으므로 여기서 지운다.
+        case 'enemyLeaked': {
+          // 마을 안으로 들어가 사라진 적 — 사망(enemyDied)을 거치지 않으므로 여기서 지운다.
           // 안 지우면 표가 판 전체의 누적 스폰 수만큼 자란다.
           this.foeDef.delete(ev.enemyId);
+          /*
+           * **울타리를 넘어 들어간다.**
+           * 문간이 들어온 뒤로 이 사건의 성격이 바뀌었다: 종전에는 언제나 마을 HP 가
+           * 같이 깎여서(baseDamaged) 흔들림과 소리가 퇴장을 대신 말해 줬는데, 이제는
+           * 문 앞에서 빚을 다 갚고 나가는 개체가 **대다수**다(baseDamage 1인 11종은
+           * 3초 체류 중 첫 틱에 전액을 문다 — gate.ts 규칙 6·7). 그 개체들은
+           * `baseDamage === 0` 으로 나가므로 `baseDamaged` 가 따라오지 않고,
+           * 그대로 두면 3초를 버티고 선 적이 **소리도 그림도 없이 증발한다.**
+           * 그래서 퇴장 자체에 먼지 한 줌을 붙인다. 자리는 마을 — 들어가는 곳이 거기다.
+           */
+          if (this.gateArrivals < GATE_ARRIVE_FX_MAX && s3.particles.load < 0.85) {
+            this.gateArrivals++;
+            const def = ENEMY_DEFS[ev.defId];
+            const w = s3.basecamp.group.position;
+            s3.particles.burst(
+              w.x,
+              0.5,
+              w.z,
+              0xb59a72,
+              Math.round(5 + 10 * def.radius),
+              1.5 + 1.5 * def.radius,
+              0.05 + 0.03 * def.radius,
+              0.5,
+              { gravity: 4, drag: 1.7, upBias: 0.5, sizeVar: 0.6 },
+            );
+          }
           break;
+        }
         case 'baseDamaged': {
-          this.shake(0.35);
-          audio.play('baseHit');
-          this.buzz(50);
+          /*
+           * 흔들림·소리·숫자는 **여기서 안 낸다** — 배치 끝의 flushBaseHits() 가 모아서
+           * 한 번에 낸다. 종전에는 이 사건이 "적이 도달할 때 한 번"이라 그 자리에서
+           * 내도 됐지만, 문간에서는 문 앞의 적 하나하나가 1초에 한 번씩 물어
+           * **같은 사건이 초당 열몇 번**이 된다(gate.ts 규칙 5).
+           *
+           * 마을 피해 단계(지붕이 무너진 정도)만 그 자리에서 갱신한다 — 이건 상태이지
+           * 사건이 아니고, 같은 값을 몇 번 써도 결과가 같다(멱등).
+           */
+          this.baseHits++;
+          this.baseHitAmount += Math.max(0, ev.amount);
           const ratio = ev.hpLeft / Math.max(1, this.baseHpMax);
           s3.setBaseDamageLevel(ratio > 0.6 ? 0 : ratio > 0.3 ? 1 : 2);
           break;
@@ -1045,6 +1185,65 @@ export class FxRouter {
           break;
       }
     }
+    this.flushBaseHits();
+  }
+
+  /**
+   * **마을 피격 한 배치를 한 번에 그린다** — 문간 설계가 강제한 유일한 구조 변경이다.
+   *
+   * 왜 배치 단위인가: 문 앞에 선 적은 저마다 1초에 한 번 마을 HP 를 1 깎는다
+   * (gate.ts 규칙 5). 홍수 웨이브에서는 문 앞이 열몇 마리라 `baseDamaged` 가
+   * **초당 열몇 번**이고, 그때마다 흔들고 소리 내고 "−1"을 띄우면
+   *  · 화면이 쉬지 않고 떨려 모바일에서 멀미가 나고(SHAKE_BUDGET 은 프레임 총량을
+   *    막아 주지만 그건 상한이지 리듬이 아니다),
+   *  · 같은 숫자가 겹쳐 떠서 **정작 그 초에 얼마를 잃었는지 못 읽는다.**
+   * 한 배치를 합치면 화면이 말하는 것이 정확히 "이번에 마을이 −N" 하나가 된다.
+   *
+   * 세기는 **잃은 비율**로 낸다. 한 입(−1/25)은 툭 치는 정도이고, 12초를 버틴
+   * 티라노가 잔액을 밀어 넣고 들어가는 순간(−12/25)은 종전의 한 방과 같은 세기다 —
+   * 곧 오늘의 감각이 큰 사건에서 그대로 보존되고, 잡졸의 잔상만 줄어든다.
+   */
+  private flushBaseHits(): void {
+    const s3 = this.stage3d;
+    /*
+     * 지붕 파편 — 한 입이 몇이든 **한 번**. towerDamaged 의 피격 연출을 글자 그대로
+     * 재사용한다(같은 인스턴서·같은 낙하 계수): 새 메시도 새 색도 안 판다.
+     * 드로우콜이 0 늘고, 무엇보다 같은 사건에 같은 그림이라야 플레이어가 두 번 배우지
+     * 않는다 — 저것은 내 구조물이 갉히는 소리다.
+     * 높이 1.7 은 지붕 용마루다. 1.05 로 잡았다가 올렸다: 문 앞의 큰 놈은 화면에서
+     * 마을보다 커서 낮은 파편이 **몸통 뒤에 통째로 가려진다.**
+     */
+    if (this.gateBites > 0 && s3.particles.load < 0.85) {
+      const w = s3.basecamp.group.position;
+      const n = Math.min(16, 6 + this.gateBites * 2);
+      s3.particles.burst(w.x, 1.7, w.z, 0xc8a06a, n, 2.4, 0.062, 0.55, {
+        gravity: 9,
+        drag: 1.4,
+        upBias: 0.55,
+        sizeVar: 0.6,
+      });
+    }
+    if (this.baseHits === 0 || this.baseHitAmount <= 0) return;
+    const frac = this.baseHitAmount / Math.max(1, this.baseHpMax);
+    // 0.10 ~ 0.35. 상한 0.35 는 **종전의 한 방과 같은 값**이다 — 큰 사건의 감각을
+    // 낮추지 않고, 작은 사건만 아래로 뺀다.
+    this.shake(clamp(0.1 + 0.9 * frac, 0.1, 0.35));
+    // 소리는 한 목소리다 — 마을은 하나다(BASE_HIT_SFX_MS 주석)
+    const now = performance.now();
+    if (now - this.baseHitSfxAt >= BASE_HIT_SFX_MS) {
+      this.baseHitSfxAt = now;
+      audio.play('baseHit');
+      this.buzz(frac > 0.15 ? 50 : 25);
+    }
+    /*
+     * 마을이 잃은 HP — 판에서 가장 비싼 숫자다. 타워 피격과 같은 'tower' 색을 쓴다:
+     * 적이 받는 흰 숫자와 **다른 종류**로 읽혀야 한다(towerDamaged 의 같은 자리 주석).
+     * 배율 1.15 로 살짝 크게 띄운다.
+     */
+    // ⚠ worldToScreen 은 **셀 좌표**를 받는다(안에서 cellToWorld 를 부른다).
+    //   위 파티클이 쓰는 basecamp.group.position 은 월드 좌표라 여기 넣으면 안 된다.
+    const gp = this.worldToScreen(this.baseCell.x, 2.1, this.baseCell.z);
+    if (gp) spawnDamageNumber(gp.sx, gp.sy, `-${Math.round(this.baseHitAmount)}`, 'tower', 1.15);
   }
 
   /**
@@ -1122,6 +1321,13 @@ export class FxRouter {
 
   /** baseDamaged 비율 계산용 (컨트롤러가 주입) */
   baseHpMax = 1;
+  /**
+   * 마을 셀 좌표 (컨트롤러가 주입) — `baseHpMax` 와 같은 규약이다.
+   * 마을이 잃은 HP 숫자를 마을 머리 위에 띄우는 데 쓴다. 사건에 안 싣는 이유는
+   * `baseUpgraded` 가 좌표를 안 싣는 것과 같다 — **마을은 판에 하나뿐**이고
+   * 게임 쪽이 이미 안다. 곧 sim 이벤트가 이 연출 때문에 넓어지지 않는다.
+   */
+  baseCell: { x: number; z: number } = { x: 0, z: 0 };
 
   private findTowerCell(towerId: number): { x: number; z: number } | null {
     // 타워 셀은 뷰가 알고 있음 — positionOf는 월드 좌표라 셀 역변환 대신 상태에서 찾기

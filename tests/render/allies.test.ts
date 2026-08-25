@@ -130,6 +130,10 @@ function enemy(o: Partial<EnemyState> = {}): EnemyState {
     attackAnimLeft: 0,
     attackAnimTicks: 0,
     blockerAllyId: -1,
+    // 문간 (src/sim/gate.ts) — 목 객체라 언제나 '문간이 아니다'
+    gateTicks: 0,
+    gateBiteCdLeft: 0,
+    gateOwed: 0,
     flying: false,
     x: 4,
     z: 2,
