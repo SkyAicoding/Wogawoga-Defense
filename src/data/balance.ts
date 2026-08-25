@@ -372,7 +372,7 @@ export const GATE_BITE_AMOUNT = 1;
  *     다리가 재는 대상을 옮기는 것이라 더 나쁘다.
  * tests/sim/gate.test.ts 가 이 유도를 직접 잠근다.
  */
-export const GATE_HOLD_MIN_TICKS = 90;
+export const GATE_HOLD_MIN_TICKS = 60;
 /**
  * **문 앞 체류의 절대 상한** (틱). 720틱 = 24.0초.
  *
