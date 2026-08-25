@@ -167,7 +167,14 @@ export const RESOURCE_WEIGHTS: Readonly<
 export const LANDMARK_KINDS: ReadonlySet<ResourceId> = new Set<ResourceId>(['wood', 'stone']);
 
 /**
- * **다시 자라는 종** (R4). 다 캔 칸이 `GATHER_REGROW_TICKS` 뒤 같은 종·같은 값으로 돌아온다.
+ * **다시 자라는 종** (R4). 다 캔 칸이 같은 종·같은 값으로 돌아온다 — 다만 **언제**는
+ * 시계가 아니라 밭이 정한다: 재고가 문턱 아래로 내려가고(`GATHER_REGROW_STOCK_FRAC`)
+ * 최소 지연(`GATHER_REGROW_TICKS`)까지 지난 칸만 후보다.
+ *
+ * ⚠⚠ **이 집합은 그 재고 비율의 분모이기도 하다** (`sim/gather.ts ResourceField.regrowDenom`).
+ *   곧 이 집합에서 한 종을 빼거나 넣으면 총액뿐 아니라 **재생이 켜지는 시점**이 함께 움직인다.
+ *   광물이 여기 없다는 사실이 그 분모를 정상으로 유지한다 — 광물까지 분모에 넣으면 s6
+ *   (재생종이 총액의 17.2%뿐)에서 재고가 그 위로 영영 못 올라가 게이트가 상시 켜짐으로 굳는다.
  *
  * ⚠ 광물 셋(`stone`·`flint`·`obsidian`)은 **여기 없다.** 근거 둘:
  *  ① 자연스럽다 — 딸기는 다시 열리고 나무는 다시 자라지만 캐낸 부싯돌은 안 돌아온다.

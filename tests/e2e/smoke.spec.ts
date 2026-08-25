@@ -1719,8 +1719,23 @@ test('채집: 한 사이클이 실제로 돈다 · 사람 없으면 0 · 캔 자
   /*
    * ── ④ **다시 자란다. 단 타워를 지으면 영영 안 자란다** ──────────────────────
    * 이 두 줄이 이 기능이 만드는 **진짜 선택**이다: 지금 지을까(칸을 영구히 얻고 그 자원을
-   * 태운다), 두고 계속 캘까(수입은 이어지지만 그 칸이 주기마다 다시 막힌다).
+   * 태운다), 두고 계속 캘까(수입은 이어지지만 그 칸이 언젠가 다시 막힌다).
    * ⚠ 재생을 안 재면 "캔 자리가 빈다"만 남아 **자원이 유한하다는 성질만 확인**하게 된다.
+   *
+   * ⚠⚠ **재생의 방아쇠가 시간에서 밭의 재고 비율로 옮겨졌다** (사용자 요구 · R7,
+   *   `balance.GATHER_REGROW_STOCK_FRAC`). 곧 `regrowAt` 은 이제 "자라는 틱"이 아니라
+   *   **"자랄 수 있게 되는 틱"** 이고, 그때까지 기다리는 것만으로는 안 자란다 —
+   *   **밭이 비어 있어야** 자란다. 그래서 아래는 먼저 유료 제거로 밭을 비운다.
+   *   비우는 목표는 시작 총액의 25% 이하다: 재생 판정의 분모는 **재생종만의 value 합**이고
+   *   스테이지1에서 그것이 전체의 75.8%이므로, 전체의 25%까지 내리면 재생종 기준 재고도
+   *   반드시 문턱(50%) 아래로 내려간다(0.25 × 281 = 70.25 < 0.5 × 213 = 106.5).
+   *   ⚠ 문턱을 25%보다 더 낮게 밸런싱하면 이 여유도 함께 조정해야 한다.
+   *   ⚠ **이 비우기가 없어도 지금은 통과한다** — 배포본 최소 지연이 9,000틱(300초)이라
+   *     그 300초 동안 일꾼들이 스스로 밭을 문턱 아래로 비우기 때문이다(실측으로 확인했다).
+   *     그 우연에 기대지 않으려고 명시적으로 비운다: 지연이나 일꾼 수를 밸런싱하는 순간
+   *     그 우연은 사라지는데, 그때 이 항목은 **재생이 죽어서**가 아니라 **밭이 안 비어서**
+   *     빨개진다 — 그건 무엇이 틀렸는지 말해 주지 못하는 실패다.
+   *     방아쇠 자체의 양방향 계약은 `tests/sim/gather.test.ts` 의 R7 블록이 잠근다.
    */
   const regrow = await page.evaluate((taken) => {
     const g = window.__wgd!;
@@ -1734,6 +1749,24 @@ test('채집: 한 사이클이 실제로 돈다 · 사람 없으면 0 · 캔 자
       g.setGold(99_999);
       burnBuilt = g.place(0, burn.cellX, burn.cellZ);
     }
+    // ── 밭을 비운다 — 값이 큰 칸부터 유료로 치운다 (치운 칸은 영구히 빈다 = R-f) ──
+    let total0 = 0;
+    for (const r of g.sim.state.resources) total0 += r.value;
+    const standing = (): number => {
+      let n = 0;
+      for (const r of g.sim.state.resources) if (!r.taken) n += r.value;
+      return n;
+    };
+    const order = g.sim.state.resources
+      .filter((r) => !r.taken)
+      .slice()
+      .sort((a, b) => b.value - a.value);
+    for (const r of order) {
+      if (standing() * 4 <= total0) break;
+      g.setGold(99_999_999); // 제거값은 1.6^n 로 오른다 — 매번 채워 넣는다
+      g.clearScenery(r.cellX, r.cellZ);
+    }
+    const stripped = standing() * 4 <= total0;
     const need = target.regrowAt - g.sim.state.tick;
     g.ff(Math.max(1, need + 60));
     const t2 = g.sim.state.resources.find((r) => r.cellX === target.cellX && r.cellZ === target.cellZ)!;
@@ -1742,6 +1775,8 @@ test('채집: 한 사이클이 실제로 돈다 · 사람 없으면 0 · 캔 자
       : null;
     return {
       ok: true as const,
+      stripped,
+      standingFrac: standing() / total0,
       grewBack: !t2.taken,
       canPlaceAfterRegrow: g.sim.canPlaceAt(target.cellX, target.cellZ),
       burnBuilt,
@@ -1751,7 +1786,11 @@ test('채집: 한 사이클이 실제로 돈다 · 사람 없으면 0 · 캔 자
   }, cycle.taken);
   expect(regrow.ok, '재생을 기다리는 칸이 하나도 없다 (표본이 성립하지 않는다)').toBe(true);
   if (regrow.ok) {
-    expect(regrow.grewBack, '주기가 지났는데 다시 안 자랐다').toBe(true);
+    expect(
+      regrow.stripped,
+      `밭을 문턱 아래로 못 비웠다 — 재고 ${(regrow.standingFrac * 100).toFixed(1)}% (표본이 성립하지 않는다)`,
+    ).toBe(true);
+    expect(regrow.grewBack, '밭이 비었고 자격도 지났는데 다시 안 자랐다').toBe(true);
     expect(regrow.canPlaceAfterRegrow, '다시 자랐는데 아직 지을 수 있다 — 막혀야 한다').toBe(false);
     if (regrow.burnBuilt) {
       expect(regrow.burnedStillTaken, '타워를 지은 칸이 다시 자랐다 (R3 위반)').toBe(true);

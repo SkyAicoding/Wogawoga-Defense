@@ -29,6 +29,7 @@ import {
   GATHER_DIST_GAIN,
   GATHER_DELIVER_RANGE,
   GATHER_REGROW_MAX,
+  GATHER_REGROW_STOCK_FRAC,
   gatherValueFor,
 } from '@/data/balance';
 import {
@@ -327,6 +328,52 @@ describe('총액 (§9-1 ⑦) — 이 한 줄이 D9의 감사 가능성 전부다
     expect(s1.filter((c) => REGROWABLE_KINDS.has(c.kind)).length).toBe(32);
     expect(s1.filter((c) => !REGROWABLE_KINDS.has(c.kind)).length).toBe(8);
     expect(s1vals[0], '짐 하나가 최소 2골드는 된다 — 정수 반올림의 바닥').toBeGreaterThanOrEqual(2);
+  });
+
+  /**
+   * ── 재고 비율의 **분모** (R7 신설) ────────────────────────────────────────
+   * 재생의 방아쇠가 시간에서 밭의 재고 비율로 옮겨지면서
+   * (`balance.GATHER_REGROW_STOCK_FRAC` · `sim/gather.ts ResourceField.regrowDenom`)
+   * **재생종만의 짐값 합**이 새로 계약이 됐다. 여기서 그 수를 인쇄하고 잠근다.
+   *
+   * ⚠ 이 파일이 그 자리인 이유: 분모는 **좌표만의 함수**여야 하는데
+   *   (`resourceKindOf` 는 셀 단독 해시 · `REGROWABLE_KINDS` 는 상수 · `gatherValueFor` 는
+   *   마을거리의 함수) 이 파일의 `fieldOf` 는 시드를 **인자로 받지도 않는다.**
+   *   곧 여기서 세어지는 것 자체가 그 성질의 증거다.
+   * ⚠⚠ **s6 의 17.2% 가 분모 설계의 근거다.** 광물까지 분모에 넣으면 s6 은 바위를 다 캔 뒤
+   *   재고가 그 비중 위로 영영 못 올라가 게이트가 상시 켜짐으로 굳는다 — 곧 그 스테이지에서
+   *   기능이 통째로 죽는다. 그 사실을 여기서 수로 잠가 둔다.
+   */
+  it('`resources.regrowDenom` — 재생종만의 짐값 합(재고의 분모)을 인쇄하고 잠근다', () => {
+    console.log('[resources] 스테이지별 재고 분모 (재생종 Σv) / 문턱값');
+    for (const stage of STAGES) {
+      const field = fieldOf(stage, B);
+      const all = field.reduce((n, c) => n + c.value, 0);
+      const denom = field
+        .filter((c) => REGROWABLE_KINDS.has(c.kind))
+        .reduce((n, c) => n + c.value, 0);
+      // ⚠ 분모가 0이면 재고 비율이 **정의되지 않는다**(0으로 나눈다). 그때 sim 은 옛 규칙
+      //   (순수 타이머)으로 닫도록 짜여 있지만, 배포 스테이지가 그 가지로 떨어지면
+      //   사용자 요구가 그 판에서만 조용히 사라진다. 여섯 판 다 재생종이 있어야 한다.
+      expect(denom, `s${stage.id} 에 재생종이 하나도 없다 — 재고 비율이 정의되지 않는다`).toBeGreaterThan(0);
+      console.log(
+        `  s${stage.id} ${stage.biome.padEnd(9)} 분모 ${String(denom).padStart(3)} / 총액 ${String(all).padStart(3)}` +
+          ` = ${((denom / all) * 100).toFixed(1)}% · 문턱값 ${(GATHER_REGROW_STOCK_FRAC * denom).toFixed(1)}`,
+      );
+    }
+    const s1 = fieldOf(STAGES[0] as StageDef, B);
+    const s1Denom = s1.filter((c) => REGROWABLE_KINDS.has(c.kind)).reduce((n, c) => n + c.value, 0);
+    expect(s1Denom, '스테이지1 재고 분모 (= 재생종 32칸의 짐값 합)').toBe(213);
+    expect(GATHER_REGROW_STOCK_FRAC * s1Denom, '스테이지1에서 재생이 켜지는 재고').toBeCloseTo(106.5, 6);
+    // s6 — 분모 설계의 근거. 재생종이 총액의 **4분의 1도 안 된다**
+    const s6 = fieldOf(STAGES[5] as StageDef, B);
+    expect((STAGES[5] as StageDef).biome).toBe('volcano');
+    const s6All = s6.reduce((n, c) => n + c.value, 0);
+    const s6Denom = s6.filter((c) => REGROWABLE_KINDS.has(c.kind)).reduce((n, c) => n + c.value, 0);
+    expect(
+      s6Denom / s6All,
+      '⚠ s6 의 재생종 비중 — 이 수가 커지면 balance.GATHER_REGROW_STOCK_FRAC 의 유도를 다시 써야 한다',
+    ).toBeLessThan(0.25);
   });
 
   it('`resources.stageSpread` — 나머지 다섯이 s1의 **1.5배 이하**다', () => {

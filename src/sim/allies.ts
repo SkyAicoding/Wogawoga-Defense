@@ -788,6 +788,9 @@ function pickAutoCell(ctx: SimCtx, a: AllySim, gridW: number): ResourceCellState
  *     되살리면 다시 잡으러 가는데, 그것도 4의 유한한 예산 안에서만 일어난다.
  * 스톨도 없다: 자동은 어떤 완료 조건도 막지 않는다(봉쇄를 안 걸고, 웨이브 완료는 적 쪽 조건이다).
  * ⚠ 이 증명은 `regrowsLeft` 를 **늘리는** 코드가 생기는 순간 깨진다. 넣으려면 상한을 함께 넣어라.
+ * ⚠ **재고 게이트(R7)는 이 증명을 한 글자도 안 건드린다.** 그 게이트는 재생을 **미루기만**
+ *   하고 `regrowsLeft` 에 손을 안 대므로 2의 예산이 그대로다 — 곧 후보가 되살아나는 횟수의
+ *   상한이 안 늘어난다(늘리려면 예산 자체를 늘려야 하는데 그 간선이 없다).
  */
 export function updateAllyAuto(ctx: SimCtx): void {
   const stage = ctx.opts.stage;
