@@ -120,6 +120,8 @@ export const en: Record<string, string> = {
   'battle.gate.rallyHint': 'Call every tribesman home — gatherers in the field included',
   'battle.gate.title': 'The Gate',
   'battle.gate.owed': 'At the gate −{n}',
+  // 같은 배지의 둘째 얼굴 — 문 앞이 다 갚았을 때 걸어오는 것들의 빚을 적는다 (ko 주석 참조)
+  'battle.gate.incoming': 'Marching in −{n}',
   'battle.gate.more': '×{n}',
   'battle.gate.breach': 'Breaks in {s}s',
   'battle.gate.heldBreach': 'Pinned · breaks in {s}s',

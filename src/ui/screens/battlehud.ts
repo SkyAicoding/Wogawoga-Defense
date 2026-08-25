@@ -1434,15 +1434,36 @@ export function createBattleHud(): Screen<GameFacade> {
      * 하나이기 때문이다. 그리고 이 판정은 두 자리(배지·HP 바)가 **같은 사실**로 켜진다 —
      * 한 화면에서 두 경보가 다른 말을 하던 gate-wip 의 사고를 막는 유일한 방법이다.
      */
-    setText(gateOwedBadge, t('battle.gate.owed', { n: m.owedTotal }));
-    gateOwedBadge.style.display = m.owedTotal > 0 ? '' : 'none';
+    /*
+     * ⚠ 배지 슬롯은 **언제나 "이대로 두면 마을이 잃을 HP"** 하나만 판다. 그 값이 어디서
+     *   오는지만 바뀐다:
+     *     · 문 앞에 빚이 남았다        → `문 앞 −n`   (지금 물리고 있다)
+     *     · 문 앞은 다 갚았고 뒤가 온다 → `오는 중 −n` (곧 물린다)
+     *     · 판 위가 통째로 0            → 접는다       (진짜로 위협이 없다)
+     *   둘째 줄이 12단계에 새로 생겼다: `baseDamage 1` 인 11종은 도착 틱에 전액을 물어
+     *   다음 프레임부터 문 앞 빚이 0 이고, 그러면 종전 코드는 배지를 통째로 감췄다 —
+     *   랩터 8마리가 문을 덮고 마을이 4/25 인데 띠가 "랩터 ×8" 만 그렸다
+     *   (70-phone844-danger1.png). 값은 정직했지만 **읽히는 뜻이 거짓**이었다.
+     */
+    const owedShown = m.owedTotal > 0 ? m.owedTotal : m.owedIncoming;
+    setText(
+      gateOwedBadge,
+      m.owedTotal > 0
+        ? t('battle.gate.owed', { n: m.owedTotal })
+        : t('battle.gate.incoming', { n: m.owedIncoming }),
+    );
+    gateOwedBadge.style.display = owedShown > 0 ? '' : 'none';
     cls(gateOwedBadge, 'is-crit', m.doomed);
+    // 문 앞이 아니라 '오는 중'이면 아직 한 대도 안 맞았다 — 같은 슬롯이지만 톤을 낮춘다
+    cls(gateOwedBadge, 'is-soon', m.owedTotal === 0 && m.owedIncoming > 0);
 
     // 마을 HP — 상시 HUD 에서는 3D 바로 옮겨 갔지만(render/views/healthbars.ts kind 4),
     // 문간에서는 빚과 **같은 눈높이**에 있어야 뜻이 선다: 이 띠가 파는 것은
     // "빚이 얼마인가"가 아니라 "그 빚을 마을이 감당하는가"다.
     gateHpFill.style.width = `${(m.hpFrac * 100).toFixed(1)}%`;
-    cls(gateHpFill, 'is-low', m.doomed);
+    // ⚠ `doomed`(예보) **또는** `hpLow`(상태). 종전에는 doomed 만 봤는데, 문 앞이 다
+    //   갚은 프레임에서는 doomed 가 꺼져 **마을 4/25 가 초록으로** 그려졌다(규칙 2-b).
+    cls(gateHpFill, 'is-low', m.doomed || m.hpLow);
     setText(gateHpNum, `${Math.ceil(m.baseHp)}/${m.baseHpMax}`);
 
     /*

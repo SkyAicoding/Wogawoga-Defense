@@ -54,7 +54,7 @@ describe('문간 띠 뷰모델', () => {
     expect(model([foe()], { phase: 'won' }).visible).toBe(false);
   });
 
-  it('마릿수와 빚 합계는 문 앞에 선 것만 센다', () => {
+  it('마릿수와 문 앞 빚은 문 앞에 선 것만 센다 — 걸어오는 빚은 따로 담긴다', () => {
     const m = model([
       foe({ id: 1, gateOwed: 3, baseDamage: 3 }),
       foe({ id: 2, gateOwed: 5, baseDamage: 5 }),
@@ -63,6 +63,59 @@ describe('문간 띠 뷰모델', () => {
     ]);
     expect(m.count).toBe(2);
     expect(m.owedTotal).toBe(8);
+    expect(m.owedIncoming).toBe(9); // 죽은 4번은 안 센다
+    expect(m.owedAll).toBe(17);
+  });
+
+  /**
+   * ⚠ **12단계의 실측 결함**(§F①). `baseDamage 1` 인 11종은 도착 틱에 전액을 물어
+   * (gate.ts 규칙 5 — 첫 입은 즉시) 다음 프레임부터 `gateOwed` 가 0 이다.
+   * 종전 모델은 빚을 문 앞만 세서, 랩터 8마리가 문을 덮고 마을이 4/25 인데
+   * 합계가 0 → 배지도 HP 바 경보도 전부 꺼졌다(70-phone844-danger1.png).
+   * 걸어오는 빚을 같이 세면 그 프레임에서 슬롯이 안 빈다.
+   */
+  it('문 앞이 다 갚아도 걸어오는 빚이 남아 있으면 위협은 안 꺼진다', () => {
+    const paidRaptors = [1, 2, 3, 4, 5, 6, 7, 8].map((id) =>
+      foe({ id, defId: 'raptor', gateOwed: 0, baseDamage: 1, gateTicks: 40 }),
+    );
+    const marching = [9, 10, 11].map((id) =>
+      foe({ id, defId: 'raptor', gateOwed: 1, baseDamage: 1, gateTicks: 0 }),
+    );
+    const m = model([...paidRaptors, ...marching], { baseHp: 4 });
+    expect(m.visible).toBe(true);
+    expect(m.count).toBe(8);
+    expect(m.owedTotal).toBe(0); // 문 앞은 정말로 다 갚았다 — 이 값은 여전히 정직하다
+    expect(m.owedIncoming).toBe(3);
+    expect(m.owedAll).toBe(3);
+    expect(m.doomed).toBe(false); // 3 < 4 — 이 셋만으로는 아직 안 죽는다
+    expect(m.hpLow).toBe(true); // 그래도 4/25 는 위급이다 (빚과 무관한 상태 경보)
+  });
+
+  it('걸어오는 빚만으로도 마을이 죽으면 경보다', () => {
+    const m = model(
+      [
+        foe({ id: 1, gateOwed: 0, baseDamage: 1, gateTicks: 40 }),
+        foe({ id: 2, gateTicks: 0, gateOwed: 4, baseDamage: 4 }),
+      ],
+      { baseHp: 4 },
+    );
+    expect(m.owedTotal).toBe(0);
+    expect(m.owedAll).toBe(4);
+    expect(m.doomed).toBe(true);
+  });
+
+  /**
+   * `hpLow` 는 **빚에서 떼어 낸 상태 경보**다. `doomed` 는 예보라 판 위가 다 갚으면
+   * 꺼지는데, 그때도 마을이 낮으면 띠의 HP 바는 붉어야 한다.
+   * 문턱은 위급 테두리 1단계와 **같은 0.35** — 한 화면의 두 경보가 다른 말을 하면 안 된다.
+   */
+  it('hpLow 는 마을 HP 만 본다 (문턱 0.35 · 경계 포함)', () => {
+    const at = (hp: number) => model([foe({ gateOwed: 0 })], { baseHp: hp, baseHpMax: 100 });
+    expect(at(36).hpLow).toBe(false);
+    expect(at(35).hpLow).toBe(true); // 이하면 켠다
+    expect(at(1).hpLow).toBe(true);
+    // 빚이 잔뜩 남아도 마을이 넉넉하면 hpLow 는 안 켜진다 (그쪽은 doomed 의 일이다)
+    expect(model([foe({ gateOwed: 12, baseDamage: 12 })], { baseHp: 100, baseHpMax: 100 }).hpLow).toBe(false);
   });
 
   /**

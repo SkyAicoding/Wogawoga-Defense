@@ -227,7 +227,18 @@ function holdMinTicks(ctx: SimCtx): number {
  * **순수 함수다** — 개체의 HP·상태·위치를 한 개도 안 읽는다. 그것이 보조정리 A 다.
  */
 export function holdTicksFor(ctx: SimCtx, e: EnemySim): number {
-  return clamp(e.baseDamage * biteTicks(ctx), holdMinTicks(ctx), GATE_HOLD_MAX_TICKS);
+  // ⚠⚠ **상한을 마지막에 한 번 더 씌운다.** `clamp(v, lo, hi)` 는 하한을 나중에 적용해
+  //   `lo > hi` 면 **하한이 상한을 이긴다** — 곧 `StageDef.gate.holdMinTicks` 를 크게
+  //   주입하면 체류가 상한을 넘는다(실측: 5,000 주입 → 4,999틱). 지금 그 값을 쓰는
+  //   스테이지가 하나도 없어 실제 위험은 0 이지만, 그 상태에서는 **보조정리 A 의 문장
+  //   자체가 거짓**이다("모든 적의 문간 체류 ≤ GATE_HOLD_MAX_TICKS"). 증명이 데이터의
+  //   선의에 기대면 그건 증명이 아니다. `Math.min` 한 줄이 그 의존을 없앤다.
+  //   데이터 쪽에서도 같은 것을 잠근다 — `tests/data/validate.test.ts` 의
+  //   `holdMinTicks ∈ [60, 120]` 계약.
+  return Math.min(
+    GATE_HOLD_MAX_TICKS,
+    clamp(e.baseDamage * biteTicks(ctx), holdMinTicks(ctx), GATE_HOLD_MAX_TICKS),
+  );
 }
 
 /**
@@ -279,13 +290,29 @@ function standAt(ctx: SimCtx, e: EnemySim, path: BattlePath, stopDist: number): 
   }
   dx /= len;
   dz /= len;
-  // ③ 마을 중심 원 위의 부채 — 앞뒤 성분을 줄여 중심거리 stand 를 정확히 보존한다
-  const lat = ((e.id % GATE_FAN_COLS) - 1) * GATE_FAN_SPACING;
-  const fwd = Math.sqrt(Math.max(0, stand * stand - lat * lat));
-  const x = base.x + dx * fwd - dz * lat;
-  const z = base.z + dz * fwd + dx * lat;
-  // ④ 맵 밖 방지. 마을 좌표가 언제나 구간 안이라 **클램프는 마을 쪽으로만 민다** —
-  //    곧 중심거리를 절대 늘리지 않고, 규칙 2 의 "Lv1 사거리 안"이 클램프 뒤에도 산다.
+  // ③ 마을 중심 원 위의 부채 — **접근 방향 벡터를 각도로 돌린다.**
+  //    회전은 길이를 보존하므로 중심거리가 근사 없이 정확히 `stand` 다(옛
+  //    `sqrt(stand² − lat²)` 보정과 같은 성질을 한 줄 적게 얻는다). 자리를 정하는 것은
+  //    **개체의 id** 이므로 결정론이 순회 순서에 안 걸린다(절대 규칙).
+  const slot = (e.id % GATE_FAN_COLS) - (GATE_FAN_COLS - 1) / 2;
+  const ang = (slot * GATE_FAN_SPACING) / stand; // 호장 → 중심각
+  // ④ 맵 밖 방지 — **좌표를 자르지 않고 부채를 접는다.**
+  //    ⚠ 옛 구현은 x·z 를 각각 클램프했다. 그러면 잘린 개체만 중심거리가 줄어
+  //    "몸 앞끝 ≥ 마을 바깥끝"(= 메시가 움막을 안 뚫는다)이 **그 개체에서만 깨진다**.
+  //    같은 원 위의 반대쪽 자리(부호 반전) → 정면(각 0) 순으로 물러나면 세 후보 전부
+  //    중심거리가 정확히 `stand` 라 그 성질이 값과 무관하게 산다. 순서가 고정이므로
+  //    결정론도 그대로다. (현 6스테이지에서는 첫 후보가 언제나 판 안이다)
+  let x = 0;
+  let z = 0;
+  for (const a of [ang, -ang, 0]) {
+    const c = Math.cos(a);
+    const sn = Math.sin(a);
+    x = base.x + (dx * c - dz * sn) * stand;
+    z = base.z + (dz * c + dx * sn) * stand;
+    if (x >= 0.5 && x <= stage.gridW - 0.5 && z >= 0.5 && z <= stage.gridH - 0.5) break;
+  }
+  // 마지막 방어선 — 셋 다 판 밖이면(경로가 맵 구석에서 끝나는 미래 데이터) 좌표를 자른다.
+  // 마을 좌표가 언제나 구간 안이라 클램프는 마을 쪽으로만 민다 = 중심거리를 안 늘린다.
   e.x = clamp(x, 0.5, stage.gridW - 0.5);
   e.z = clamp(z, 0.5, stage.gridH - 0.5);
   e.prevX = e.x;

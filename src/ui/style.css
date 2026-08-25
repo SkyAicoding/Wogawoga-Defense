@@ -446,18 +446,53 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
  * "HP 가 낮다"는 사실이 시선의 위치에 달려 있고, 문간이 들어오면서 마을이 1초에 1씩
  * 조금씩 깎여 큰 신호가 한 번도 안 오는 채로 죽을 수 있게 됐다.**
  *
- * 비용: DOM 한 겹 · 드로우콜 0 · 포인터 통과. 판을 가리지 않도록 **가장자리에만**
- * 색이 있고(안쪽 52%는 완전 투명) 그 위로 HUD 가 그대로 얹힌다.
+ * 비용: DOM 한 겹 · 드로우콜 0 · 포인터 통과. `z-index: 0` 이고 HUD 열보다 **먼저**
+ * 그려지므로 3D 판만 덮고 버튼·손패는 그 위에 그대로 얹힌다 — 세게 칠해도 조작이
+ * 가려지지 않는다.
+ *
+ * ── 12단계에 다시 유도했다 (§F②) ─────────────────────────────────────────────
+ * 종전 값이 폰에서 **안 보였다**(70-phone844-danger1.png — 마을 4/25 인데 하늘색
+ * 배경에 아무 변화가 없다). 원인이 둘인데 **둘 다 불투명도가 아니었다.**
+ *
+ * ① **기하** — `ellipse at center` 의 기본 크기는 `farthest-corner` 다. 390×844 에서
+ *    모서리는 짧은 변보다 √2 배 멀어, 왼쪽·오른쪽 변의 **한가운데가 램프의 70.7%**
+ *    에 떨어진다. 곧 종전의 100% 색(alpha 0.42)은 **네 모서리에만** 닿았고 변의
+ *    한가운데는 alpha 0.16 근처였다 — 세로 화면에서 주변시에 제일 잘 들어오는 자리가
+ *    가장 옅었다. ⇒ `farthest-side` 로 바꿔 **네 변의 한가운데가 100%** 가 되게 한다
+ *    (모서리는 램프를 넘어 마지막 색으로 고정된다).
+ *
+ * ② **색상** — 어두운 팥색 `rgb(150,18,12)` 을 하늘색 `≈rgb(58,160,216)` 위에 0.42 로
+ *    얹으면 결과가 `≈rgb(97,100,130)` 이다. 채도가 죽은 **회청색** — 눈에는 "붉다"가
+ *    아니라 "어둡다"로 들어온다. 파란 배경 위에서 어두운 빨강은 색상이 아니라 명도만
+ *    바꾸기 때문이다. ⇒ **밝고 채도 높은 빨강**으로 간다. `rgb(255,60,40)` 을 0.55 로
+ *    얹으면 `≈rgb(166,98,115)` — 같은 불투명도에서 색상 자체가 붉게 돌아선다.
+ *    풀밭 `≈rgb(110,180,80)` 위에서도 `≈rgb(190,107,54)` 로 주황이 되어 판 위 어디서나
+ *    경보로 읽힌다.
+ *
+ * ③ 그리고 **또렷한 선 한 줄**을 얹는다. 부드러운 그러데이션만으로는 사진의 비네팅
+ *    (렌즈 결함)으로 읽히지 UI 경보로 안 읽힌다. 안쪽 3px 테두리가 "화면에 테를
+ *    둘렀다"는 뜻을 만든다 — 이 한 줄이 판독성의 대부분을 낸다.
+ *
+ * ⚠ 과하지 않게: **기하는 하나**로 두고 세기만 두 단계로 나눈다. 1단계(35%)는
+ *   `opacity 0.6` 이라 있는 줄은 알지만 눈이 안 아프고, 2단계(15%)만 전부를 켜고 맥동한다.
  */
 .danger-vig {
   position: absolute; inset: 0; pointer-events: none; z-index: 0;
   opacity: 0; transition: opacity 0.35s ease;
-  background: radial-gradient(ellipse at center,
-    rgba(0, 0, 0, 0) 52%, rgba(180, 30, 20, 0.16) 78%, rgba(150, 18, 12, 0.42) 100%);
+  /* 투명 끝을 **같은 색상의 alpha 0** 으로 적는다 — 회색을 거쳐 보간되지 않게 */
+  background: radial-gradient(ellipse farthest-side at 50% 50%,
+    rgba(255, 60, 40, 0) 46%,
+    rgba(255, 60, 40, 0.20) 70%,
+    rgba(240, 44, 26, 0.50) 88%,
+    rgba(200, 18, 10, 0.78) 100%);
+  box-shadow:
+    inset 0 0 0 3px rgba(255, 96, 64, 0.85),
+    inset 0 0 24px 2px rgba(255, 60, 40, 0.5);
 }
-.danger-vig.is-on { opacity: 1; }
+/* 35% 아래 — 있는 줄은 알되 눈이 안 아픈 세기 */
+.danger-vig.is-on { opacity: 0.6; }
 /* 15% 아래 — 숨이 가빠진다. 밝기만 뛰고 기하는 안 움직인다(멀미·조준 방해 회피) */
-.danger-vig.is-crit { animation: danger-pulse 1s ease-in-out infinite; }
+.danger-vig.is-crit { opacity: 1; animation: danger-pulse 1s ease-in-out infinite; }
 
 /*
  * ── 문간 띠 ──────────────────────────────────────────────────────────────────
@@ -521,6 +556,13 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   padding: 1px 7px; border-radius: 999px; background: rgba(0, 0, 0, 0.35); color: #ffd7ca;
 }
 .gate-owed.is-crit { background: var(--red); color: #fff; animation: hp-blink 0.8s ease-in-out infinite; }
+/*
+ * '오는 중 −n' — 같은 슬롯·같은 단위지만 **아직 안 맞았다**. 한 톤 낮춰(호박색 글씨)
+ * "지금 물리는 중"인 앞 얼굴과 눈으로 갈린다. 배지를 감추지 않는 것이 핵심이라
+ * 색만 다르고 자리·크기는 같다(gateband.ts 규칙 2-b).
+ */
+.gate-owed.is-soon { color: var(--gold); background: rgba(0, 0, 0, 0.3); }
+.gate-owed.is-soon.is-crit { color: #fff; background: var(--red); }
 
 /* 마을 HP — 상시 HUD 에서는 3D 바로 갔지만 문간에서는 빚과 같은 눈높이여야 한다 */
 .gate-hp {
@@ -1030,7 +1072,8 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
  *  그건 테스트 사정이 아니라 **손가락 사정이 계측기에 잡힌 것**이다.)
  */
 @keyframes gate-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes danger-pulse { 0%, 100% { opacity: 0.72; } 50% { opacity: 1; } }
+/* 아래끝을 1단계(0.6)보다 위에 둔다 — 치명이 위험보다 옅어지는 프레임이 없어야 한다 */
+@keyframes danger-pulse { 0%, 100% { opacity: 0.74; } 50% { opacity: 1; } }
 /*
  * 맥동도 **기하를 안 건드린다** — 빛(box-shadow)과 밝기(filter)만 뛴다.
  * scale(1.06)이던 것을 걷어낸 근거는 위와 같다: 56px 버튼이 6%씩 커졌다 작아지면

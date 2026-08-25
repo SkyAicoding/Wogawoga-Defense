@@ -17,11 +17,26 @@
  *    이번 설계는 한 입이 **언제나 마을 HP 정확히 1**이라 그 통로가 통째로 사라졌다.
  *    곧 이 띠는 이벤트를 놓쳐도, 배속을 바꿔도, 세이브를 복원해도 절대 어긋나지 않는다.
  * 2) **띠가 파는 사실은 두 개뿐이다.**
- *      · 문 앞의 빚 합계(Σ gateOwed) 대 마을 HP  — "저기 서 있는 것들이 다 갚으면 마을이 남는가"
+ *      · 남은 빚 합계(Σ gateOwed) 대 마을 HP  — "판 위의 저것들이 다 갚으면 마을이 남는가"
  *      · 대표 개체가 **돌파**하기까지 남은 시간   — "언제 뚫고 들어오는가"
  *    한 입 초읽기(다음 −1 까지 몇 초)는 **일부러 뺐다**: 한 입이 1로 고정된 뒤로는
  *    마을 HP 바가 1초에 한 칸씩 줄어드는 것 자체가 그 초읽기다. 같은 사실을 두 자리에
  *    그리면 390px 에서 돌파 게이지가 들어갈 칸이 없어진다.
+ * 2-b) ⚠ **빚을 문 앞만 세면 띠가 "위협 없음"을 그린다** (12단계에 실측으로 잡힌 결함).
+ *    `baseDamage 1` 인 11종은 **도착 틱에 전액을 물어**(gate.ts 규칙 5 — 첫 입은 즉시)
+ *    다음 프레임부터 `gateOwed` 가 0 이다. 곧 랩터 8마리가 문 앞을 덮고 마을이 4/25 여도
+ *    문 앞 빚 합계는 **0**이고, 그 0 에 걸려 있던 배지·HP 바 경보가 전부 꺼진다 —
+ *    실제 캡처(70-phone844-danger1.png)에서 마을 4/25 인데 띠의 HP 바가 **초록**이었다.
+ *    고침은 둘이다.
+ *      · 빚을 **판 위 전원**으로 센다. `gateOwed` 는 스폰이 `baseDamage` 로 굳히므로
+ *        (waves.ts) 살아 있는 개체의 이 값은 언제나 "이놈을 못 죽이면 마을이 앞으로
+ *        잃을 HP"다 — 걸어오는 중이든 문 앞이든 뜻이 같다. 그래서 합이 곧
+ *        **"지금 판을 그대로 두면 마을이 잃을 총액"**이 되고, 이 수는 문 앞이 다 갚아도
+ *        뒤가 걸어오는 한 0 이 아니다. (아직 **스폰 전**인 적은 판 위에 없어 못 센다 —
+ *        곧 이 값은 언제나 하한이고, 하한을 넘겨 그리지 않는다.)
+ *      · 마을 HP 바의 경보(`hpLow`)를 빚에서 **떼어 낸다**. 빚은 예보이고 HP 는 상태다.
+ *        문턱은 위급 테두리(battlehud.ts danger 1단계)와 **같은 0.35** 를 쓴다 —
+ *        한 화면의 두 경보가 서로 다른 말을 하면 안 된다(gate-wip 의 사고).
  * 3) **봉쇄·스턴은 유예이지 면제가 아니다**(gate.ts 규칙 8). 이 띠에서 가장 위험한
  *    거짓말이 "붙잡는 중 — 안 물어요"를 초록으로만 그리는 것이다 — 그 사이에도
  *    `gateTicks` 는 흐르고, 상한에서 남은 빚이 **한 방에** 떨어진다. 그래서 붙잡는
@@ -80,8 +95,18 @@ export interface GateBandModel {
   readonly defId: string;
   /** 문 앞에 선 총 마릿수 */
   readonly count: number;
-  /** Σ gateOwed — 저것들이 전부 갚으면 마을이 잃는 HP */
+  /** Σ gateOwed — **문 앞에 선 것들만**. 저것들이 전부 갚으면 마을이 잃는 HP */
   readonly owedTotal: number;
+  /**
+   * Σ gateOwed — **아직 걸어오는 것들**(판 위에 있고 문 앞이 아닌 살아 있는 적).
+   * 문 앞 빚이 0 으로 꺼져도 이 값이 남아 있으면 위협은 끝나지 않았다(규칙 2-b).
+   */
+  readonly owedIncoming: number;
+  /**
+   * `owedTotal + owedIncoming` — **지금 판을 그대로 두면 마을이 잃을 총액**.
+   * 경보(`doomed`)가 이 값으로 켜진다. 스폰 전의 적은 못 세므로 언제나 **하한**이다.
+   */
+  readonly owedAll: number;
   /**
    * 대표의 체류 상한을 아는가. false 면 돌파 게이지를 접는다 —
    * 모르는 것을 아는 척하지 않는다(holdTicksOf 주석).
@@ -101,11 +126,18 @@ export interface GateBandModel {
   /** 대표가 기절했다 (물지 않고 쿨다운도 언다) */
   readonly stunned: boolean;
   /**
-   * **마을이 이대로면 진다** — 문 앞의 빚 합계가 남은 마을 HP 이상이다.
+   * **마을이 이대로면 진다** — 판 위 전원의 빚 합계(`owedAll`)가 남은 마을 HP 이상이다.
    * 비율(30%)이 아니라 빚으로 재는 이유: 문간에서는 "몇 % 남았나"가 아니라
-   * "저기 서 있는 것을 못 죽이면 끝나는가"가 유일하게 행동을 바꾸는 사실이다.
+   * "지금 판 위에 있는 것을 못 죽이면 끝나는가"가 유일하게 행동을 바꾸는 사실이다.
    */
   readonly doomed: boolean;
+  /**
+   * **마을 HP 가 낮다** — 빚과 **무관한** 상태 경보다(규칙 2-b).
+   * `doomed` 는 예보("앞으로 이만큼 더 맞는다")라 판 위의 빚이 0 이면 꺼진다.
+   * 그때도 마을이 4/25 면 그건 여전히 위급이고, 띠의 HP 바가 초록이면 화면이
+   * 거짓말을 한다. 문턱은 위급 테두리 1단계와 같은 **0.35**다.
+   */
+  readonly hpLow: boolean;
   /** 마을 HP 바 채움 0..1 */
   readonly hpFrac: number;
   readonly baseHp: number;
@@ -117,11 +149,20 @@ export interface GateBandModel {
 /** 돌파가 이만큼 남으면 "임박"이다 (틱). 2초 — 한 번 더 탭할 수 있는 마지막 창. */
 export const GATE_BREACH_IMMINENT_TICKS = 60;
 
+/**
+ * 마을 HP 가 이 비율 **이하**면 띠의 HP 바가 붉어진다 (규칙 2-b).
+ * ⚠ 위급 테두리 1단계(battlehud.ts `danger`)와 **같은 수**여야 한다 — 한 화면의
+ *   두 경보가 서로 다른 문턱을 쓰면 "테두리는 붉은데 띠는 초록"이 나온다.
+ */
+export const GATE_HP_LOW_FRAC = 0.35;
+
 const EMPTY: GateBandModel = {
   visible: false,
   defId: '',
   count: 0,
   owedTotal: 0,
+  owedIncoming: 0,
+  owedAll: 0,
   knownBreach: false,
   breachTicks: 0,
   breachFrac: 0,
@@ -129,6 +170,7 @@ const EMPTY: GateBandModel = {
   held: false,
   stunned: false,
   doomed: false,
+  hpLow: false,
   hpFrac: 0,
   baseHp: 0,
   baseHpMax: 0,
@@ -188,12 +230,20 @@ export function gateBandModel(input: GateBandInput): GateBandModel {
 
   let count = 0;
   let owedTotal = 0;
+  let owedIncoming = 0;
   for (const e of input.enemies) {
-    if (!e.alive || e.gateTicks <= 0) continue;
-    count++;
-    owedTotal += Math.max(0, e.gateOwed);
+    if (!e.alive) continue;
+    // 규칙 2-b) 살아 있으면 문 앞이든 걸어오는 중이든 `gateOwed` 의 뜻이 같다 —
+    // "이놈을 못 죽이면 마을이 앞으로 잃을 HP". 자리만 갈라 담는다.
+    if (e.gateTicks > 0) {
+      count++;
+      owedTotal += Math.max(0, e.gateOwed);
+    } else {
+      owedIncoming += Math.max(0, e.gateOwed);
+    }
   }
   if (count === 0) return EMPTY;
+  const owedAll = owedTotal + owedIncoming;
 
   const lead = pickGateLead(input.enemies, input.holdTicksOf);
   if (lead === null) return EMPTY;
@@ -209,6 +259,8 @@ export function gateBandModel(input: GateBandInput): GateBandModel {
     defId: lead.defId,
     count,
     owedTotal,
+    owedIncoming,
+    owedAll,
     knownBreach,
     breachTicks,
     // 남은 비율이 아니라 **찬 비율**을 그린다 — 차오르다 터지는 게이지라야 다가오는
@@ -217,8 +269,10 @@ export function gateBandModel(input: GateBandInput): GateBandModel {
     imminent: knownBreach && lead.gateOwed > 0 && breachTicks <= GATE_BREACH_IMMINENT_TICKS,
     held: lead.blockerAllyId >= 0,
     stunned: isStunned(lead),
-    // 빚이 0이면 저것들은 이미 다 갚았다 — 서 있어도 마을은 더 안 깎인다.
-    doomed: owedTotal > 0 && owedTotal >= baseHp,
+    // 판 위의 빚이 0이면 지금 판에 있는 것은 다 갚았다 — 서 있어도 마을은 더 안 깎인다.
+    doomed: owedAll > 0 && owedAll >= baseHp,
+    // 빚과 **무관하게** 마을 상태만 본다 — 판 위가 다 갚아도 4/25 는 여전히 위급이다
+    hpLow: baseHp <= baseHpMax * GATE_HP_LOW_FRAC,
     hpFrac: baseHp / baseHpMax,
     baseHp,
     baseHpMax,
