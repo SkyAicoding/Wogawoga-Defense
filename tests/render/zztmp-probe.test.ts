@@ -7,6 +7,9 @@ import * as THREE from 'three';
 import { ENEMY_DEFS } from '@/data/enemies';
 import { GATE_STANDOFF_EDGE } from '@/data/balance';
 import { createBasecamp } from '@/render/meshlib/basecamp';
+import { STAGES } from '@/data/stages';
+import { buildPath } from '@/sim/path';
+import { GATE_FAN_COLS, GATE_FAN_SPACING } from '@/data/balance';
 import { ALL_ENEMY_IDS, BOSS_ENEMIES, buildEnemy, enemyGeoKey } from '@/render/meshlib/enemies';
 import { EnemyView } from '@/render/views/enemyview';
 import type { EnemyId, EnemyState } from '@/data/types';
@@ -51,14 +54,17 @@ function villageTris(): Float32Array {
 }
 
 /** 수직 광선 패리티 — 점이 닫힌 볼륨 안인가 */
-function insideCount(pts: Float32Array, tris: Float32Array): { n: number; deepest: number[] | null } {
+function insideCount(pts: Float32Array, tris: Float32Array): { n: number; deepest: number[] | null; maxDepth: number } {
   let n = 0;
   let deepest: number[] | null = null;
   let bestR = 99;
+  let maxDepth = 0;
   for (let p = 0; p < pts.length; p += 3) {
     const px = pts[p]!, py = pts[p + 1]!, pz = pts[p + 2]!;
     let cross = 0;
     let below = 0;
+    let up = 1e9;
+    let dn = 1e9;
     for (let t = 0; t < tris.length; t += 9) {
       const ax = tris[t]!, ay = tris[t + 1]!, az = tris[t + 2]!;
       const bx = tris[t + 3]!, by = tris[t + 4]!, bz = tris[t + 5]!;
@@ -71,19 +77,41 @@ function insideCount(pts: Float32Array, tris: Float32Array): { n: number; deepes
       const l3 = 1 - l1 - l2;
       if (l1 < 0 || l2 < 0 || l3 < 0) continue;
       const y = l1 * ay + l2 * by + l3 * cy;
-      if (y > py) cross++; else below++;
+      if (y > py) { cross++; if (y - py < up) up = y - py; }
+      else { below++; if (py - y < dn) dn = py - y; }
     }
     if (cross % 2 === 1 && below % 2 === 1) {
       n++;
+      const d = Math.min(up, dn);
+      if (d > maxDepth) maxDepth = d;
       const r = Math.hypot(px, pz);
-      if (r < bestR) { bestR = r; deepest = [px, py, pz, r]; }
+      if (r < bestR) { bestR = r; deepest = [px, py, pz, r, d]; }
     }
   }
-  return { n, deepest };
+  return { n, deepest, maxDepth };
 }
 
 describe('probe', () => {
   it('측정', () => {
+    // 스테이지별 실제 문간 방위 (standAt 과 같은 식: 정지선 호장에서 경로를 샘플 → 마을 기준 방위 → 부채 ±4칸)
+    for (const st of STAGES) {
+      const parts: string[] = [];
+      for (const wp of st.paths) {
+        const path = buildPath(wp);
+        for (const id of ['raptor', 'mammoth', 'trex', 'blade'] as EnemyId[]) {
+          const stand = GATE_STANDOFF_EDGE + ENEMY_DEFS[id].restReach;
+          const stop = Math.max(0, path.totalLength - stand);
+          const probe = { x: 0, z: 0, heading: 0 } as { x: number; z: number; heading: number };
+          path.sample(stop, probe as never);
+          const a0 = Math.atan2(probe.z - st.baseCell.z, probe.x - st.baseCell.x);
+          const lo = a0 + (-(GATE_FAN_COLS - 1) / 2) * (GATE_FAN_SPACING / stand);
+          const hi = a0 + ((GATE_FAN_COLS - 1) / 2) * (GATE_FAN_SPACING / stand);
+          const deg = (v: number) => ((Math.round((v * 180) / Math.PI) % 360) + 360) % 360;
+          parts.push(`${id} ${deg(lo)}~${deg(hi)}`);
+        }
+      }
+      log(`s${st.id} 문간 방위: ${parts.join(' | ')}`);
+    }
     const tris = villageTris();
     log('village tris', tris.length / 9);
     // 마을 반경대별 높이 (전 방위)
@@ -164,7 +192,8 @@ describe('probe', () => {
       }
       // 접근 방위 24 방향 — 마을 메시는 회전 대칭이 아니고(목책 문 · 망루) 스테이지마다
       // 적이 오는 쪽이 다르다. 로컬 자세는 방위와 무관하므로 점구름만 Y로 돌린다.
-      let worst = { n: 0, deep: 1e9, y: 0, azDeg: 0 };
+      let worst = { n: 0, deep: 1e9, y: 0, azDeg: 0, depth: 0 };
+      const perAz: string[] = [];
       const near = new Float32Array(pts.length);
       let nn = 0;
       for (let i = 0; i < pts.length; i += 3) {
@@ -183,16 +212,18 @@ describe('probe', () => {
           rot[i] = x * ca + z * sa; rot[i + 1] = sub[i + 1]!; rot[i + 2] = -x * sa + z * ca;
         }
         const r2 = insideCount(rot, tris);
+        perAz.push(`${Math.round((a * 180) / Math.PI)}:${r2.n}`);
         if (r2.n > worst.n || (r2.n === worst.n && r2.n > 0 && r2.deepest![3]! < worst.deep)) {
-          worst = { n: r2.n, deep: r2.deepest ? r2.deepest[3]! : 1e9, y: r2.deepest ? r2.deepest[1]! : 0, azDeg: Math.round((a * 180) / Math.PI) };
+          worst = { n: r2.n, deep: r2.deepest ? r2.deepest[3]! : 1e9, y: r2.deepest ? r2.deepest[1]! : 0, azDeg: Math.round((a * 180) / Math.PI), depth: r2.maxDepth };
         }
       }
       log(
         `${id.padEnd(8)} stand ${stand.toFixed(3)} | 정지 앞끝 r=${rr.toFixed(3)} y=${ry.toFixed(3)}` +
         ` | 물기 코끝 r=${best!.r.toFixed(3)} y=${best!.y.toFixed(3)}` +
         ` | 최악방위 ${String(worst.azDeg).padStart(3)}° 마을 안 정점 ${worst.n}` +
-        (worst.n ? ` (최심 r=${worst.deep.toFixed(3)} y=${worst.y.toFixed(3)})` : ''),
+        (worst.n ? ` (최심 r=${worst.deep.toFixed(3)} y=${worst.y.toFixed(3)} · 최대 파고듦 ${worst.depth.toFixed(4)})` : ''),
       );
+      if (worst.n > 0) log(`   ${id} 방위별: ${perAz.filter((t) => !t.endsWith(':0')).join(' ')}`);
       view.dispose(); view2.dispose();
     }
     fs.writeFileSync('/tmp/claude-0/-home-user/f4d1ce61-6230-58b9-8a9c-fa813cf20c21/scratchpad/probe.txt', LOG.join('\n'));
