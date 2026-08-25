@@ -44,12 +44,16 @@ describe('waves', () => {
     );
     sim.applyCommand({ type: 'callWave' });
     const ev: SimEvent[] = [];
-    // 250틱 — 문간 교전이 개체당 최대 GATE_HOLD_MAX_TICKS(360) 를 더할 수 있지만,
-    // 여기 raptor 는 baseDamage 1 이라 체류가 하한 90틱이다(gate.ts 규칙 7).
-    // 종전 150 + 90 = 240 이 필요하고 여유 10 을 둔다.
-    for (let i = 0; i < 250; i++) {
+    // ⚠ **웨이브가 끝난 그 틱에서 멈춘다.** 고정 틱 수로 돌면 안 된다 — 문간 체류가
+    //   `GATE_HOLD_MIN_TICKS`·`GATE_BITE_TICKS` 의 함수라, 그 상수가 움직이면 창이
+    //   prep 을 통째로 지나쳐 **다음 웨이브가 이미 시작된 상태**를 보게 된다(실측:
+    //   하한 90 → 60 에서 250틱 창이 그렇게 뒤집혔다). 재는 것은 "웨이브가 끝나고
+    //   prep 이 90틱으로 선다"이지 "몇 틱에 끝나나"가 아니다.
+    for (let i = 0; i < 2_000; i++) {
       sim.tick();
-      ev.push(...sim.drainEvents());
+      const now = sim.drainEvents();
+      ev.push(...now);
+      if (now.some((e) => e.type === 'waveCleared')) break;
     }
     const cleared = eventsOf(ev, 'waveCleared');
     expect(cleared).toHaveLength(1);

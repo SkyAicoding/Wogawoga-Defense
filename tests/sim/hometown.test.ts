@@ -103,9 +103,12 @@ describe('홈타운 반격', () => {
         //   (옛 픽스처는 반경을 안 적어 둘이 같았고, 그래서 잣대가 어쩔 수 없이 도착
         //    **순서**였다. 그 순서는 정지 호장 차이 0.05타일이 뒤집는 값이었고 실제로
         //    edge 1.15 → 1.45 에서 뒤집혔다.)
+        // ⚠ `baseDamage` 도 명시한다 — 문 앞 체류가 `baseDamage × GATE_BITE_TICKS` 라
+        //   총액 1 로 두면 하한(60틱)만 서 있다가 돌파해 **관측 창이 화살 세 발로 줄어든다**
+        //   (실측: 하한 90 → 60 에서 4발 → 3발). 4 면 240틱을 서 있어 상수가 흔들려도 남는다.
         enemyDefs: enemyDefs({
-          raptor: { hp: 100000, speed: 0.5, radius: 0.3 },
-          compy: { hp: 100000, speed: 1.5, radius: 0.22 },
+          raptor: { hp: 100000, speed: 0.5, radius: 0.3, baseDamage: 4 },
+          compy: { hp: 100000, speed: 1.5, radius: 0.22, baseDamage: 4 },
         }),
         waves: [
           wave([
