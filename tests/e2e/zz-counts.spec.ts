@@ -10,7 +10,8 @@ declare global {
   }
 }
 
-test('zz 계수: 판당 gatherRegrown / gatherDelivered', async ({ page }) => {
+for (const ups of [0, 1, 10]) {
+test(`zz 계수(마을업 ${ups}): 판당 gatherRegrown / gatherDelivered`, async ({ page }) => {
   test.setTimeout(300_000);
   await page.goto('/?test=1', { waitUntil: 'networkidle' });
   await page.mouse.click(100, 300);
@@ -18,7 +19,7 @@ test('zz 계수: 판당 gatherRegrown / gatherDelivered', async ({ page }) => {
   await page.waitForFunction(() => window.__wgd !== undefined);
   await page.waitForTimeout(900);
 
-  const out = await page.evaluate((reg: string[]) => {
+  const out = await page.evaluate(([reg, nUps]: [string[], number]) => {
     const g = window.__wgd!;
     const sim: any = g.sim;
     const log: any[] = [];
@@ -32,7 +33,7 @@ test('zz 계수: 판당 gatherRegrown / gatherDelivered', async ({ page }) => {
     g.sim.state.prepTicksLeft = 1e9; // 웨이브 정지 — 채집만 재려고
     g.setGold(9_999_999);
     // 마을을 올려 정원을 최대로 (= 채집이 가장 빠른 판 = 사건이 가장 잦은 판)
-    for (let i = 0; i < 10; i++) if (!g.upgradeBase()) break;
+    for (let i = 0; i < nUps; i++) if (!g.upgradeBase()) break;
     let trained = 0;
     for (let i = 0; i < 12; i++) {
       g.setGold(9_999_999);
@@ -101,7 +102,8 @@ test('zz 계수: 판당 gatherRegrown / gatherDelivered', async ({ page }) => {
       maxCalls,
       endTri: g.renderInfo(),
     };
-  }, REG);
-  console.log('[zz] COUNTS ' + JSON.stringify(out, null, 1));
+  }, [REG, ups] as [string[], number]);
+  console.log(`[zz] COUNTS(ups=${ups}) ` + JSON.stringify(out));
   expect(out.cells).toBeGreaterThan(0);
 });
+}
