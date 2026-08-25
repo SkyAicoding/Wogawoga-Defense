@@ -423,7 +423,17 @@ export interface ResourceCellState {
    */
   taken: boolean;
   /**
-   * **다시 자라날 절대 틱.** `0` = 이 칸은 다시 안 자란다.
+   * **재생 자격을 얻는 절대 틱.** `0` = 이 칸은 다시 안 자란다.
+   *
+   * ⚠⚠ **뜻이 한 번 옮겨졌다 — "자라는 틱"이 아니라 "자랄 수 있게 되는 틱"이다.**
+   *   재생의 방아쇠는 시간이 아니라 **밭 전체의 재고 비율**이다
+   *   (`balance.GATHER_REGROW_STOCK_FRAC` · `sim/gather.ts updateRegrow`). 이 값은 그
+   *   방아쇠가 당겨졌을 때 후보에 들어갈 자격만 정한다:
+   *     자격 = `regrowsLeft > 0`(생성 시 이미 반영) **그리고** `tick >= regrowAt`.
+   *   곧 `tick >= regrowAt` 인 칸이 **그 틱에 자란다는 보장은 없다** — 재고가 문턱 위면
+   *   얼마든지 기다린다. 반대로 재고가 문턱 아래여도 이 틱 전에는 절대 안 자란다.
+   *   **저장 형태는 안 바뀌었다**(필드가 안 늘었다) — 그래서 `battle.ts hash()` 의 접기도
+   *   그대로이고, 웨이브별 지연 차이도 이 값 하나에 굳어 해시에 실린다.
    *
    * 잔여 틱이 아니라 절대 틱인 이유 둘:
    *  ① 매 틱 40칸을 감산하지 않는다 — `tick >= regrowAt` 비교 하나로 끝난다.
@@ -431,6 +441,7 @@ export interface ResourceCellState {
    *     하나에만 걸려 있어 어긋날 자리가 없다 (R5: rng 금지 · 틱 결정론).
    *
    * 불변식: `regrowAt > 0` ⇒ `taken === true`. `taken === false` ⇒ `regrowAt === 0`.
+   * 곧 `regrowAt > 0` 은 **"아직 한 번 더 설 수 있다"** 와 같은 말이다(재생 대기 중).
    * 쓰는 자리는 `sim/gather.ts` 의 `takeCell`/`burnRegrow`/`updateRegrow` **셋뿐이다**.
    */
   regrowAt: number;
@@ -636,6 +647,23 @@ export interface GateSpec {
   holdMinTicks?: number;
 }
 
+/**
+ * **스테이지별 채집 재생 손잡이.** 적은 항목만 덮어쓰고 나머지는 `balance.ts` 기본값이다.
+ * 우선순위는 `BattleTuning`(실험 손잡이) > 이것(게임 데이터) > 모듈 상수 순이다.
+ */
+export interface GatherSpec {
+  /**
+   * 재생이 켜지는 재고 문턱 (기본 `GATHER_REGROW_STOCK_FRAC`). 0 = 재생 없음 ·
+   * 1 = 재고 게이트가 없는 순수 타이머(배포본 이전 규칙과 완전히 같다).
+   * ⚠ **이 값은 `regrowsLeft` 에 안 닿는다** — 판당 총액 항등식은 어떤 값에서도 그대로다.
+   */
+  regrowStockFrac?: number;
+  /** 자격을 얻기까지의 최소 지연 틱, 웨이브 1 기준 (기본 `GATHER_REGROW_TICKS`) */
+  regrowTicks?: number;
+  /** 웨이브마다 최소 지연이 줄어드는 비율 (기본 `GATHER_REGROW_WAVE_SPEEDUP`, 0 = 끔) */
+  regrowWaveSpeedup?: number;
+}
+
 export interface StageDef {
   id: number;
   nameKey: string;
@@ -673,6 +701,23 @@ export interface StageDef {
    * 항목이 통째로 UNPROVEN 으로 태어난다(controls.UNREACHABLE 참조).
    */
   gate?: GateSpec;
+  /**
+   * **채집 재생 손잡이** (src/sim/gather.ts). 생략하면 전부 `balance.ts` 기본값이다 —
+   * 곧 이 필드를 안 적은 여섯 스테이지의 동작은 모듈 상수가 정한다.
+   *
+   * 왜 스테이지에 두는가: `gate`·`leakDamage` 와 **정확히 같은 이유**다(그 둘의 주석 참조).
+   * 되돌리기 대조군은 데이터 주입구로만 만들어질 수 있고, 모듈 상수로만 두면 그 축의
+   * 항목이 통째로 UNPROVEN 으로 태어난다.
+   *
+   * ⚠⚠ **배포 스테이지 여섯에는 한 값도 안 적었다 — 주입구만 열었다.** 근거는 실측이다:
+   *   문턱을 바이옴별로 흔들 이유가 "척박한 바이옴"이라면 그것은 **분모가 이미 흡수한다.**
+   *   재고의 분모가 *재생종만의 value 합*이라 바이옴이 아무리 척박해도 시작 재고는 언제나
+   *   1.0 이고 문턱의 뜻이 여섯 판에서 같다(재생종 비중은 s6 17.2% ~ s1 75.8% 로 4.4배
+   *   차이인데, 그 차이가 재고 비율에는 **한 자리도** 안 들어온다).
+   *   여기에 스테이지 문턱을 더 얹으면 같은 사실을 두 번 세는 것이고, 그 값을 유도할 근거가
+   *   없다. **근거를 댈 수 있게 되면 그때 적어라** — 그때 필요한 자리는 이미 여기 있다.
+   */
+  gather?: GatherSpec;
   baseCell: Vec2;
   baseHp: number;
   startGold: number;

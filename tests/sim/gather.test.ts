@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AllyState, BattleSim, ResourceCellState, SimEvent, StageDef } from '@/data/types';
 import { createBattle } from '@/sim/battle';
-import { GATHER_DELIVER_RANGE, gatherValueFor } from '@/data/balance';
+import { GATHER_DELIVER_RANGE, GATHER_REGROW_STOCK_FRAC, gatherValueFor } from '@/data/balance';
 import { REGROWABLE_KINDS, RESOURCE_DEFS, gatherTicksFor } from '@/data/resources';
 import { allyDef, allyDefs, enemyDefs, eventsOf, options, stageDef, wave } from './fixtures';
 
@@ -54,9 +54,16 @@ interface MkOpts {
   finite?: boolean;
   /**
    * 재생 손잡이 덮어쓰기 (재생 블록 전용).
-   * ⚠ 주기를 짧게 주입하는 것은 **모양**만 바꾼다 — 총액은 재생 횟수 상한이 닫는다.
+   * ⚠ 지연을 짧게 주입하는 것은 **모양**만 바꾼다 — 총액은 재생 횟수 상한이 닫는다.
+   * ⚠ `gatherRegrowStockFrac` 은 **재고 문턱**이다. 1 이면 재고 게이트가 통째로 꺼져
+   *   재고 게이트가 들어오기 전의 순수 타이머와 완전히 같아진다.
    */
-  tuning?: { gatherRegrowMax?: number; gatherRegrowTicks?: number };
+  tuning?: {
+    gatherRegrowMax?: number;
+    gatherRegrowTicks?: number;
+    gatherRegrowStockFrac?: number;
+    gatherRegrowWaveSpeedup?: number;
+  };
   /**
    * 목 스테이지의 바이옴 (기본 grassland). 초원 가중치에는 **광물이 stone 18%뿐**이라
    * 11칸짜리 목 스테이지에서 한 칸도 안 나오는 시드가 있다 — R4("광물은 안 자란다")를
@@ -826,18 +833,30 @@ describe('채집 — ⚠ 다 캔 칸은 **사라지고 열린다** (D1 뒤집힘
 });
 
 /**
- * ── 재생 (R1~R6) ────────────────────────────────────────────────────────────
- * ⚠ 이 블록은 **재생 주기를 짧게 주입해서** 돈다(`BattleTuning.gatherRegrowTicks`).
+ * ── 재생: **칸 단위** 규칙 (R1~R6) ─────────────────────────────────────────
+ * ⚠ 이 블록은 **최소 지연을 짧게 주입해서** 돈다(`BattleTuning.gatherRegrowTicks`).
  *   배포본 9,000틱(300초)을 그대로 돌리면 항목 하나가 5분짜리가 되고, 그러면 아무도
  *   안 돌려서 규칙이 조용히 죽는다. 주입되는 것은 **모양**뿐이고 총액은 안 움직인다.
+ *
+ * ⚠⚠ **이 블록은 `gatherRegrowStockFrac: 1` 로 재고 게이트를 열어 두고 돈다.**
+ *   재생의 방아쇠는 이제 밭 전체의 **재고 비율**인데(사용자 요구), 여기서 재는 것은
+ *   방아쇠가 아니라 **칸 하나가 어떤 규칙을 지키는가**다: 같은 종·같은 값으로 돌아오는가 ·
+ *   광물은 안 자라는가 · 타워/유료 제거가 재생권을 태우는가 · 재생권은 한 번뿐인가.
+ *   방아쇠를 안 열어 두면 이 항목들이 **밭이 얼마나 비었나에 따라 켜졌다 꺼졌다** 하고,
+ *   그러면 무엇이 깨졌는지 말해 주지 못하는 계약이 된다. 방아쇠 자체는 **아래 블록**이
+ *   배포본 문턱 그대로 잰다 — 곧 두 블록이 갈라 맡는다.
+ *   (frac 1 = 재고 게이트가 없던 옛 규칙과 **완전히 같다** — 그래서 이 블록의 어서션은
+ *    재고 게이트가 들어오기 전과 한 글자도 안 달라졌다.)
  * ⚠ **판별력**: `gatherRegrowMax: 0` 을 주면 아래 재생 항목들이 전부 빨개져야 한다 —
  *   맨 아래 "재생을 끄면 안 자란다" 항목이 그 음성 대조를 **실행물로** 들고 있다.
  */
-describe('채집 — 재생 (R1~R6)', () => {
-  /** 재생을 눈으로 볼 수 있는 판 — 주기 60틱(2초) */
+describe('채집 — 재생: 칸 단위 규칙 (R1~R6)', () => {
+  /** 재생을 눈으로 볼 수 있는 판 — 최소 지연 60틱(2초) */
   const REGROW_T = 60;
-  const mkR = (over: { gatherRegrowMax?: number; gatherRegrowTicks?: number } = {}): BattleSim =>
-    mk({ tuning: { gatherRegrowTicks: REGROW_T, ...over } });
+  const mkR = (
+    over: { gatherRegrowMax?: number; gatherRegrowTicks?: number; gatherRegrowStockFrac?: number } = {},
+  ): BattleSim =>
+    mk({ tuning: { gatherRegrowTicks: REGROW_T, gatherRegrowStockFrac: 1, ...over } });
 
   /** 그 칸을 한 짐 캐게 하고, 캔 아군을 돌려준다 */
   const harvest = (sim: BattleSim, at: { x: number; z: number }): AllyState => {
@@ -887,7 +906,10 @@ describe('채집 — 재생 (R1~R6)', () => {
 
   it('R4) **광물은 안 자란다** — stone·flint·obsidian 은 캔 순간 영구히 열린다', () => {
     // 화산 바이옴: 광물 84%(flint 20 · stone 30 · obsidian 34) + wood 16% — 한 판에 둘 다 있다
-    const sim = mk({ biome: 'volcano', tuning: { gatherRegrowTicks: REGROW_T } });
+    const sim = mk({
+      biome: 'volcano',
+      tuning: { gatherRegrowTicks: REGROW_T, gatherRegrowStockFrac: 1 },
+    });
     const rocks = sim.state.resources.filter((r) => !REGROWABLE_KINDS.has(r.kind));
     const grow = sim.state.resources.filter((r) => REGROWABLE_KINDS.has(r.kind));
     // 목 스테이지에 두 종류가 다 있어야 이 항목이 헛돌지 않는다
@@ -965,6 +987,439 @@ describe('채집 — 재생 (R1~R6)', () => {
       sim.drainEvents().some((e) => e.type === 'gatherRegrown'),
       '재생 이벤트가 한 건도 안 나온다',
     ).toBe(false);
+  });
+});
+
+/**
+ * ── 재생의 **방아쇠**: 재고 비율 (사용자 요구 · R7) ─────────────────────────
+ * 사용자 문장이 이 블록의 전부다: *"전체적으로 자원의 일정 비율 이하가 되면 자원이 다시
+ * 생성 되도록 해줘."* 곧 재생은 이제 칸마다 도는 독립 타이머가 아니라 **밭 전체의 상태**가
+ * 켜고 끄는 것이고, 여기서 그 방아쇠를 **양방향으로** 잠근다(위면 안 자란다 / 아래면 자란다).
+ *
+ * ⚠ 이 블록은 `gatherRegrowStockFrac` 을 **안 주입한다** — 배포본 문턱
+ *   (`GATHER_REGROW_STOCK_FRAC`)을 그대로 재는 것이 요점이기 때문이다. 짧게 주입하는 것은
+ *   최소 지연 하나뿐이고 그것은 **모양**만 바꾼다.
+ * ⚠ **판별력**(전부 실측으로 확인했다):
+ *   · `gatherRegrowStockFrac: 1`(= 재고 게이트가 없던 옛 규칙)로 두면
+ *     "문턱 위면 안 자란다"와 "문턱에 닿을 때까지만"이 빨개진다.
+ *   · `updateRegrow` 의 문턱 비교를 지우면(= 자격만 보면) 같은 둘이 빨개진다.
+ *   · 최소 지연을 지우면(= 자격 판정을 없애면) "지연 전에는 안 자란다"가 빨개진다.
+ */
+describe('채집 — 재생의 방아쇠는 재고 비율이다 (R7)', () => {
+  /** 최소 지연 60틱(2초) — 배포본 9,000틱을 그대로 돌리면 항목 하나가 5분짜리가 된다 */
+  const T = 60;
+  const mkG = (over: MkOpts['tuning'] = {}): BattleSim =>
+    mk({ tuning: { gatherRegrowTicks: T, ...over } });
+
+  /** 재고 = 지금 **서 있는 재생종** 칸의 value 합 (`sim/gather.ts updateRegrow` ①과 같은 식) */
+  const stock = (sim: BattleSim): number => {
+    let n = 0;
+    for (const r of sim.state.resources) if (REGROWABLE_KINDS.has(r.kind) && !r.taken) n += r.value;
+    return n;
+  };
+  /**
+   * 분모 = 판 시작 시점의 재생종 value 합. **좌표만의 함수**라 판 중에 안 변한다 —
+   * 그래서 판 도중에 세도 같은 값이 나온다(이 함수가 `taken` 을 안 보는 것이 그 증거다).
+   */
+  const denom = (sim: BattleSim): number => {
+    let n = 0;
+    for (const r of sim.state.resources) if (REGROWABLE_KINDS.has(r.kind)) n += r.value;
+    return n;
+  };
+  /** 이 판에서 게이트가 열리는 재고 값 (value 단위) */
+  const needOf = (sim: BattleSim): number => GATHER_REGROW_STOCK_FRAC * denom(sim);
+
+  /**
+   * 값이 큰 칸부터 **유료로 치워** 재고를 목표 이하로 내린다.
+   *
+   * 왜 채집이 아니라 유료 제거인가: 유료 제거는 그 칸을 **영구히** 비우므로(R-f)
+   * "밭이 비었다"만 만들고 **자랄 후보는 한 칸도 안 만든다.** 그래서 아래 항목들이
+   * 자기가 심어 둔 칸만 보고 판정할 수 있다 — 캐서 비우면 비운 칸마다 자격이 따라붙어
+   * 무엇이 왜 자랐는지 말할 수 없게 된다.
+   */
+  const strip = (sim: BattleSim, keep: readonly { x: number; z: number }[], target: number): void => {
+    const kept = new Set(keep.map((c) => `${c.x},${c.z}`)); // 멤버십 검사 전용 (순회 안 한다)
+    const order = sim.state.resources
+      .filter(
+        (r) => REGROWABLE_KINDS.has(r.kind) && !r.taken && !kept.has(`${r.cellX},${r.cellZ}`),
+      )
+      .slice()
+      .sort((a, b) => b.value - a.value || a.cellZ - b.cellZ || a.cellX - b.cellX);
+    for (const r of order) {
+      if (stock(sim) <= target) break;
+      expect(
+        sim.applyCommand({ type: 'clearScenery', cellX: r.cellX, cellZ: r.cellZ }),
+        `(${r.cellX},${r.cellZ}) 유료 제거가 거부됐다`,
+      ).toBe(true);
+    }
+    expect(stock(sim), '치울 칸이 모자라 목표 재고까지 못 내렸다').toBeLessThanOrEqual(target);
+  };
+
+  /**
+   * 그 칸을 한 짐 캐게 하고 **그 일꾼을 세운다**(HOLD).
+   * ⚠ 세우지 않으면 규칙 8의 자동이 곧바로 다음 칸을 캐서 **재고를 계속 내린다** — 그러면
+   *   "문턱 위에서는 안 자란다"를 재는 항목이 자기 손으로 문턱을 넘어 버린다.
+   */
+  const harvestThenHold = (sim: BattleSim, at: { x: number; z: number }): AllyState => {
+    const a = train(sim);
+    expect(send(sim, a.id, at)).toBe(true);
+    runUntil(sim, `(${at.x},${at.z}) 한 짐`, () => a.carryCount > 0, 4000);
+    expect(send(sim, a.id, HOLD), '일손을 세운다').toBe(true);
+    return a;
+  };
+
+  const regrownOf = (evs: SimEvent[]): SimEvent[] => evs.filter((e) => e.type === 'gatherRegrown');
+
+  it('R7-a) 재고가 문턱 **위**면 자격을 얻고도 안 자란다 — 지연의 열 배를 돌려도', () => {
+    const sim = mkG();
+    const cell = cellAt(sim, NEAR);
+    harvestThenHold(sim, NEAR);
+    expect(cell.regrowAt, '자격 시각은 걸렸다 — **자격과 재생은 다른 사실이다**').toBeGreaterThan(0);
+    expect(stock(sim), '한 칸만 텄으니 재고가 문턱 위다').toBeGreaterThan(needOf(sim));
+    sim.drainEvents();
+    const evs = run(sim, T * 10);
+    expect(cell.taken, '재고가 문턱 위인 동안은 안 자란다').toBe(true);
+    expect(cell.regrowAt, '자격은 잃은 것이 아니라 **기다리는 것**이다').toBeGreaterThan(0);
+    expect(regrownOf(evs).length, '재생 이벤트가 한 건도 안 나온다').toBe(0);
+  });
+
+  it('R7-b) 재고가 문턱 **아래**로 내려가면 그 칸이 자란다 — 방아쇠는 시계가 아니라 밭이다', () => {
+    const sim = mkG();
+    const cell = cellAt(sim, NEAR);
+    const kind0 = cell.kind;
+    const value0 = cell.value;
+    harvestThenHold(sim, NEAR);
+    run(sim, T * 4); // 자격은 진작 얻었다
+    expect(cell.taken, '아직 재고가 문턱 위라 안 자랐다').toBe(true);
+    strip(sim, [NEAR], Math.ceil(needOf(sim)) - 1); // 밭을 문턱 아래로 비운다
+    sim.drainEvents();
+    const evs = run(sim, 2);
+    expect(cell.taken, '재고가 문턱 아래로 내려가자 자란다').toBe(false);
+    // R2 는 여기서도 그대로다 — 종도 값도 다시 뽑지 않는다
+    expect(cell.kind, '같은 종으로 돌아온다').toBe(kind0);
+    expect(cell.value, '같은 값으로 돌아온다').toBe(value0);
+    expect(cell.regrowAt, '자격 시각이 꺼졌다').toBe(0);
+    expect(regrownOf(evs).length, '그 칸 하나가 자랐다').toBe(1);
+    expect(sim.canPlaceAt(NEAR.x, NEAR.z), '다시 자랐으니 못 짓는다').toBe(false);
+  });
+
+  it('R7-c) 되살리기는 **문턱에 닿을 때까지**다 — 자격을 먼저 얻은 칸부터, 남는 칸은 계속 기다린다', () => {
+    const sim = mkG();
+    const first = cellAt(sim, FAR_A);
+    const second = cellAt(sim, FAR_B);
+    const a = train(sim);
+    expect(send(sim, a.id, FAR_A)).toBe(true);
+    runUntil(sim, 'FAR_A 한 짐', () => first.taken, 4000);
+    expect(send(sim, a.id, FAR_B)).toBe(true);
+    runUntil(sim, 'FAR_B 한 짐', () => second.taken, 4000);
+    expect(send(sim, a.id, HOLD)).toBe(true);
+    expect(first.regrowAt, '먼저 텄으니 자격도 먼저 얻는다').toBeLessThan(second.regrowAt);
+    run(sim, T * 4); // 둘 다 자격을 얻는다
+    expect(first.taken && second.taken, '재고가 문턱 위라 둘 다 그대로다').toBe(true);
+    // **한 칸만 되살아나도 문턱을 넘도록** 재고를 딱 그만큼만 내린다
+    strip(sim, [FAR_A, FAR_B], Math.ceil(needOf(sim)) - 1);
+    sim.drainEvents();
+    const evs = run(sim, 2);
+    expect(first.taken, '자격을 먼저 얻은 칸이 먼저 살아난다').toBe(false);
+    expect(second.taken, '문턱에 닿았으므로 **여기서 멈춘다** — 자격이 있어도 안 살아난다').toBe(true);
+    expect(second.regrowAt, '멈춘 칸은 자격을 그대로 들고 기다린다').toBeGreaterThan(0);
+    expect(regrownOf(evs).length, '한 칸만 자랐다').toBe(1);
+    expect(stock(sim), '되살린 뒤 재고가 문턱 위로 올라와 있다').toBeGreaterThanOrEqual(needOf(sim));
+  });
+
+  it('R7-d) 재고가 문턱 아래여도 **최소 지연 전에는** 안 자란다 — 캐자마자 되살아나는 판은 없다', () => {
+    const sim = mkG();
+    const cell = cellAt(sim, NEAR);
+    strip(sim, [NEAR], Math.ceil(needOf(sim)) - 1); // 시작부터 밭이 비어 있는 판
+    expect(stock(sim), '이 판은 처음부터 재고가 문턱 아래다').toBeLessThan(needOf(sim));
+    const a = train(sim);
+    expect(send(sim, a.id, NEAR)).toBe(true);
+    runUntil(sim, 'NEAR 한 짐', () => cell.taken, 4000);
+    expect(send(sim, a.id, HOLD)).toBe(true);
+    const due = cell.regrowAt;
+    expect(due, '자격 시각이 아직 앞에 있다').toBeGreaterThan(sim.state.tick);
+    expect(stock(sim), '캤으니 재고는 여전히 문턱 아래다').toBeLessThan(needOf(sim));
+    runUntil(sim, '자격 직전까지', () => sim.state.tick >= due - 1, 4000);
+    expect(cell.taken, '재고가 문턱 아래여도 지연 전에는 안 자란다').toBe(true);
+    run(sim, 2);
+    expect(cell.taken, '지연이 지나면 그때 자란다').toBe(false);
+  });
+
+  it('R7-e) 웨이브가 지날수록 **자격까지의 지연이 짧아진다** (속도만 — 횟수는 그대로)', () => {
+    /** 그 웨이브에서 한 칸을 캐고 "텄던 틱 → 자격 틱"의 간격을 잰다 */
+    const delayAtWave = (targetWave: number, speedup?: number): number => {
+      const sim = mkG(speedup === undefined ? {} : { gatherRegrowWaveSpeedup: speedup });
+      runUntil(sim, `웨이브 ${targetWave}`, () => sim.state.waveIndex >= targetWave, 60000);
+      const cell = cellAt(sim, NEAR);
+      const a = train(sim);
+      expect(send(sim, a.id, NEAR)).toBe(true);
+      runUntil(sim, 'NEAR 한 짐', () => cell.taken, 4000);
+      expect(cell.regrowsLeft, '재생권을 정확히 한 장 썼다 — 웨이브는 **횟수**를 안 바꾼다').toBe(0);
+      return cell.regrowAt - sim.state.tick;
+    };
+    const w1 = delayAtWave(1);
+    const w21 = delayAtWave(21);
+    // ⚠ `w1` 이 주입값 T와 **정확히 같지는 않다**: 캐는 데 200틱 남짓이 걸리는 동안 빈 웨이브가
+    //   한두 번 지나가 텄던 시점이 이미 웨이브 2~3이다(실측 59 = round(60 × 0.99)).
+    //   그 어긋남 자체가 웨이브 의존이 **살아 있다**는 증거라 감추지 않고 여기 적는다.
+    expect(w1, '지연은 주입값을 넘지 않는다').toBeLessThanOrEqual(T);
+    expect(w21, '웨이브가 지나면 자격이 더 빨리 온다').toBeLessThan(w1);
+    // ⚠ 되돌리기 = 판별력: 감쇠율 0이면 웨이브가 몇이든 **주입값 그대로**다
+    expect(delayAtWave(1, 0), '감쇠율 0이면 웨이브 1의 지연이 주입값이다').toBe(T);
+    expect(delayAtWave(21, 0), '감쇠율 0이면 웨이브 의존이 통째로 꺼진다').toBe(T);
+  });
+
+  it('R7-g) **광물은 재고에 안 낀다** — 바위가 가득 서 있어도 재생종이 비면 재생이 켜진다', () => {
+    // 화산 목 판: 11칸 중 재생종은 wood 한 칸(9)뿐이고 나머지 152는 전부 광물이다.
+    // ⚠⚠ **이 항목이 분모의 정의를 잠근다.** 분모를 "전체 value 합"으로 잡으면
+    //   서 있는 바위 152가 문턱(0.5 × 161 = 80.5)을 훌쩍 넘겨 **게이트가 영영 안 열리고**
+    //   이 항목이 그 자리에서 빨개진다. 배포 스테이지 s6가 정확히 그 모양이다
+    //   (재생종이 총액의 17.2%뿐) — 그래서 이것은 목 판의 사정이 아니라 **배포본의 사정**이다.
+    const sim = mk({ biome: 'volcano', tuning: { gatherRegrowTicks: T } });
+    const grow = sim.state.resources.filter((r) => REGROWABLE_KINDS.has(r.kind));
+    const rocks = sim.state.resources.filter((r) => !REGROWABLE_KINDS.has(r.kind));
+    expect(grow.length, '재생종 칸이 있다').toBeGreaterThan(0);
+    expect(rocks.length, '광물이 훨씬 많다').toBeGreaterThan(grow.length);
+    const wood = grow[0] as ResourceCellState;
+    harvestThenHold(sim, { x: wood.cellX, z: wood.cellZ });
+    expect(stock(sim), '재생종이 전부 텄으니 재고는 0이다').toBe(0);
+    let rockValue = 0;
+    for (const r of rocks) if (!r.taken) rockValue += r.value;
+    expect(rockValue, '그런데 바위는 그대로 서 있다').toBeGreaterThan(0);
+    runUntil(sim, '재고가 0이니 자란다', () => !wood.taken, T * 4);
+    expect(wood.taken, '광물의 재고는 이 판정에 한 표도 없다').toBe(false);
+  });
+
+  it('R7-g2) 분자와 분모는 **같은 집합** 위에 있다 — 광물이 62%인 판도 재생종 기준으로만 잰다', () => {
+    // 설원 목 판: 재생종 Σv 52 · 광물 Σv 84(전체의 62%). 재생종 한 칸(16)을 캐면
+    //   올바른 정의: 재고 36 / 분모 52 = 69% → 문턱 위 → **안 자란다** (이 항목이 재는 사실)
+    //   분모만 넓힌 정의: 36 / 136 = 26% → 문턱 아래 → 자란다 (빨개진다)
+    // ⚠⚠ 위 R7-g 는 **둘 다** 넓힌 변형을 잡고, 이 항목은 **분모만** 넓힌 변형을 잡는다.
+    //   실측으로 확인했다: 분모만 넓히면 R7-g 는 초록인 채로 이 항목만 빨개진다.
+    //   두 항목이 함께 있어야 "분자와 분모가 같은 집합"이 실제로 잠긴다.
+    const sim = mk({ biome: 'snow', tuning: { gatherRegrowTicks: T } });
+    const cell = cellAt(sim, FAR_B);
+    expect(REGROWABLE_KINDS.has(cell.kind), 'FAR_B 는 설원에서도 재생종이다').toBe(true);
+    let mineral = 0;
+    for (const r of sim.state.resources) if (!REGROWABLE_KINDS.has(r.kind)) mineral += r.value;
+    expect(mineral, '이 판은 광물이 재생종보다 많다').toBeGreaterThan(denom(sim));
+    harvestThenHold(sim, FAR_B);
+    expect(stock(sim), '재생종 기준으로는 아직 문턱 위다').toBeGreaterThan(needOf(sim));
+    sim.drainEvents();
+    const evs = run(sim, T * 10);
+    expect(cell.taken, '광물이 아무리 많아도 재고 판정에는 안 낀다').toBe(true);
+    expect(regrownOf(evs).length).toBe(0);
+  });
+
+  it('R7-h) **영구히 사라진 칸은 분모에 그대로 남는다** — 그래서 밭이 죽을수록 재생이 쉬워진다', () => {
+    // ⚠⚠ **이 항목이 그 선택을 잠근다.** 분모에서 죽은 칸을 빼면(= 살아 있는 칸만으로 다시
+    //   잡으면) 문턱도 함께 내려가 아래 칸이 **안 자란다**. 아래 수치가 그 창이다:
+    //     분모 고정 D=128 · 문턱 64 · 유료로 죽인 값 c=63 · 캔 칸 v=8 · 남은 재고 S=57
+    //     고정 분모 : 57 < 64        → 자란다 (이 항목이 재는 사실)
+    //     죽은 칸 제외: 57 ≥ 0.5×(128−63)=32.5 → 안 자란다 (빨개진다)
+    //   근거는 `balance.GATHER_REGROW_STOCK_FRAC` 주석의 셋이고, 방향은 사용자 요구와
+    //   같다 — 밭이 영구히 마를수록 남은 재생권이 더 쉽게 돌아온다.
+    const sim = mkG();
+    const cell = cellAt(sim, NEAR);
+    const D = denom(sim);
+    strip(sim, [NEAR], Math.ceil(needOf(sim)) - 1 + cell.value);
+    const deadValue = D - stock(sim);
+    harvestThenHold(sim, NEAR);
+    expect(stock(sim), '남은 재고가 문턱 아래다 (분모가 고정이므로)').toBeLessThan(needOf(sim));
+    expect(
+      stock(sim),
+      '⚠ 그런데 **죽은 칸을 뺀 분모**로 재면 문턱 위다 — 두 정의가 갈리는 자리에 서 있다',
+    ).toBeGreaterThanOrEqual(GATHER_REGROW_STOCK_FRAC * (D - deadValue));
+    runUntil(sim, '자란다', () => !cell.taken, T * 4);
+    expect(cell.taken, '분모가 고정이라 자란다').toBe(false);
+  });
+
+  it('R7-f) 방치 판은 재생도 0건이다 — 아무 칸도 안 텄으면 재고가 1.0이라 첫 줄에서 닫힌다', () => {
+    const sim = mkG();
+    expect(stock(sim), '시작 재고 = 분모').toBe(denom(sim));
+    sim.drainEvents();
+    const evs = run(sim, T * 20);
+    expect(regrownOf(evs).length, '`18.idleZero` 가 서 있는 자리').toBe(0);
+    expect(evs.filter((e) => e.type.startsWith('gather')).length, '채집 이벤트가 통째로 0건').toBe(0);
+  });
+});
+
+/**
+ * ── 판당 총액 항등식 — **재고 게이트가 들어와도 닫힌다** ────────────────────
+ * 봉투 `18.rateCap`("판당 배달 + 사망 손실 ≤ 스테이지1 총액 494")이 이 항등식 위에 서 있고,
+ * 그 주석이 *"넘으면 밸런스가 아니라 엔진 버그다"* 라고 적어 두었다. 그런데 봉투는
+ * **부등식 한 줄**만 재고 그것도 배포 스테이지 하나에서만 잰다 — 곧 재생이 조금 새는
+ * 회귀는 그 부등식 안쪽에 숨을 수 있다. 여기서는 **등식**으로, 그리고 **칸마다** 잠근다.
+ *
+ *     칸마다:  이미 캔 횟수 + 앞으로 캘 수 있는 횟수 == 1 + regrowsLeft@생성
+ *     판 전체: Σ value × 캔 횟수 + Σ value × 남은 횟수 == 판당 총액
+ *
+ * "앞으로 캘 수 있는 횟수" = `(서 있으면 1) + regrowsLeft + (자격을 들고 있으면 1)`.
+ * 이 값이 이 파일이 재생을 이해하는 방식 전부다 — 서 있는 한 짐 · 아직 안 쓴 재생권 ·
+ * 텄지만 돌아올 예정인 한 짐.
+ *
+ * ⚠ **재고 문턱을 어디에 두든 이 등식은 한 자리도 안 움직여야 한다.** 게이트는 "언제
+ *   자라는가"만 바꾸고 "몇 번 자라는가"는 안 바꾸기 때문이다 — 그것이 이 라운드의 설계
+ *   제약이었고, 여기가 그 제약을 실행으로 확인하는 자리다.
+ * ⚠ **판별력**(실측으로 확인했다): `updateRegrow` 가 되살리면서 `regrowsLeft++` 를 하거나
+ *   `takeCell` 의 `regrowsLeft--` 를 지우면 아래 등식이 그 자리에서 빨개진다.
+ */
+describe('채집 — 판당 총액 항등식 (재고 게이트가 들어와도 닫힌다)', () => {
+  const KEY = (r: { cellX: number; cellZ: number }): string => `${r.cellX},${r.cellZ}`;
+  /** 앞으로 이 칸을 몇 번 더 캘 수 있는가 */
+  const remainingOf = (r: ResourceCellState): number =>
+    (r.taken ? 0 : 1) + r.regrowsLeft + (r.regrowAt > 0 ? 1 : 0);
+
+  /**
+   * 일꾼 둘을 붙여 오래 굴리며 **매 검문마다** 항등식을 확인한다.
+   * 커맨드는 `trainAlly` 둘뿐이다 — 타워도 유료 제거도 안 낸다. 그 둘은 재생권을 **태우므로**
+   * 등식이 부등식이 되고(아래 마지막 항목이 그쪽을 따로 잰다), 여기서 재려는 것은 등식이다.
+   */
+  const auditRun = (
+    tuning: MkOpts['tuning'],
+    ticks: number,
+  ): { total0: number; harvested: number; harvests: number; capacity: number; cells: number } => {
+    const sim = mk({ tuning });
+    const cap0 = new Map<string, number>();
+    let total0 = 0;
+    let capacity = 0;
+    for (const r of sim.state.resources) {
+      const n = 1 + r.regrowsLeft;
+      cap0.set(KEY(r), n);
+      total0 += r.value * n;
+      capacity += n;
+    }
+    const done = new Map<string, number>();
+    let harvested = 0;
+    let harvests = 0;
+    const audit = (): void => {
+      let left = 0;
+      for (const r of sim.state.resources) {
+        const n = done.get(KEY(r)) ?? 0;
+        expect(
+          n + remainingOf(r),
+          `칸 (${r.cellX},${r.cellZ}) 의 수확 예산이 갈렸다 — 캔 ${n} + 남은 ${remainingOf(r)}`,
+        ).toBe(cap0.get(KEY(r)) as number);
+        left += r.value * remainingOf(r);
+      }
+      expect(harvested + left, '캔 값 + 남은 값 = 판당 총액').toBe(total0);
+    };
+    audit();
+    for (let i = 0; i < ticks; i++) {
+      if (i === 0) {
+        train(sim);
+        train(sim);
+      }
+      sim.tick();
+      for (const ev of sim.drainEvents()) {
+        if (ev.type !== 'gathered') continue;
+        const k = `${ev.cellX},${ev.cellZ}`;
+        done.set(k, (done.get(k) ?? 0) + 1);
+        harvested += ev.value;
+        harvests++;
+      }
+      if (i % 500 === 0) audit();
+    }
+    audit();
+    return { total0, harvested, harvests, capacity, cells: sim.state.resources.length };
+  };
+
+  it('배포본 문턱에서 닫힌다 — 그리고 판이 길면 **총액에 정확히 닿는다**(포화)', () => {
+    const r = auditRun({ gatherRegrowTicks: 60 }, 20000);
+    expect(r.harvests, '판이 길면 재생권을 남김없이 쓴다').toBe(r.capacity);
+    expect(r.harvested, '그때 캔 값의 합이 곧 판당 총액이다').toBe(r.total0);
+  });
+
+  it('문턱을 어디에 두든 **총액도 수확 횟수도 같다** — 게이트는 속도만 바꾼다', () => {
+    // 1 = 재고 게이트가 없던 옛 규칙 · 0.2 = 밭이 80% 비어야 자라는 판
+    const open = auditRun({ gatherRegrowTicks: 60, gatherRegrowStockFrac: 1 }, 20000);
+    const tight = auditRun({ gatherRegrowTicks: 60, gatherRegrowStockFrac: 0.2 }, 20000);
+    expect(open.total0, '총액은 좌표만의 함수라 문턱과 무관하다').toBe(tight.total0);
+    expect(open.harvests).toBe(open.capacity);
+    expect(tight.harvests, '문턱이 낮아도 캘 수 있는 횟수는 그대로다').toBe(tight.capacity);
+    expect(tight.harvested).toBe(tight.total0);
+  });
+
+  it('재생 횟수 상한만이 총액을 움직인다 (R=0 · 1 · 3)', () => {
+    const r0 = auditRun({ gatherRegrowTicks: 60, gatherRegrowMax: 0 }, 20000);
+    const r1 = auditRun({ gatherRegrowTicks: 60 }, 20000);
+    const r3 = auditRun({ gatherRegrowTicks: 60, gatherRegrowMax: 3 }, 20000);
+    expect(r0.capacity, 'R=0 이면 칸마다 한 번뿐이다').toBe(r0.cells);
+    expect(r1.total0, 'R=1 이 R=0 보다 크다').toBeGreaterThan(r0.total0);
+    expect(r3.total0, 'R=3 이 R=1 보다 크다').toBeGreaterThan(r1.total0);
+  });
+
+  it('타워·유료 제거는 총액을 **줄이기만** 한다 — 등식이 부등식이 되는 유일한 길', () => {
+    const sim = mk({ tuning: { gatherRegrowTicks: 60 } });
+    let total0 = 0;
+    for (const r of sim.state.resources) total0 += r.value * (1 + r.regrowsLeft);
+    let harvested = 0;
+    train(sim);
+    train(sim);
+    for (let i = 0; i < 6000; i++) {
+      sim.tick();
+      for (const ev of sim.drainEvents()) if (ev.type === 'gathered') harvested += ev.value;
+      // 판 중간에 한 번 태운다: 텄은 칸에 타워를 세우고, 서 있는 칸 하나를 돈으로 치운다
+      if (i === 3000) {
+        const opened = sim.state.resources.find((r) => r.taken && r.regrowAt > 0);
+        if (opened) {
+          expect(
+            sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: opened.cellX, cellZ: opened.cellZ }),
+          ).toBe(true);
+        }
+        const grown = sim.state.resources.find((r) => !r.taken);
+        if (grown) sim.applyCommand({ type: 'clearScenery', cellX: grown.cellX, cellZ: grown.cellZ });
+      }
+    }
+    let left = 0;
+    for (const r of sim.state.resources) {
+      left += r.value * ((r.taken ? 0 : 1) + r.regrowsLeft + (r.regrowAt > 0 ? 1 : 0));
+    }
+    expect(harvested + left, '태운 만큼은 어디에도 안 남는다 — 총액을 넘는 일은 없다').toBeLessThan(total0);
+  });
+});
+
+/**
+ * ── 결정론 — 재생이 들어와도 같은 시드·같은 커맨드열은 **같은 해시**다 ──────
+ * `battle.ts hash()` 는 칸마다 `taken`·`regrowAt`·`regrowsLeft` 셋을 접는다. 이 라운드는
+ * 상태 필드를 **한 개도 안 늘렸으므로**(재고 비율은 그 셋에서 유도되는 계산이다) 그 접기가
+ * 그대로 유효하다 — 그 사실을 말이 아니라 실행으로 확인한다.
+ * ⚠ 웨이브 의존도 여기서 함께 잡힌다: `view.waveIndex` 는 hash() 에 안 접혀 있지만,
+ *   웨이브별 지연이 `takeCell` 에서 `regrowAt` 에 굳으므로 **접혀 있는 값으로** 드러난다.
+ */
+describe('채집 — 재생의 결정론', () => {
+  const script = (sim: BattleSim): number[] => {
+    const hashes: number[] = [];
+    const a = train(sim);
+    const b = train(sim);
+    expect(send(sim, a.id, FAR_A)).toBe(true);
+    expect(send(sim, b.id, NEAR)).toBe(true);
+    for (let i = 0; i < 8000; i++) {
+      sim.tick();
+      sim.drainEvents();
+      if (i === 2000) sim.applyCommand({ type: 'moveAlly', allyId: a.id, cellX: FRONT.x, cellZ: FRONT.z });
+      if (i === 4000) sim.applyCommand({ type: 'clearScenery', cellX: FAR_B.x, cellZ: FAR_B.z });
+      if (i % 250 === 0) hashes.push(sim.hash());
+    }
+    hashes.push(sim.hash());
+    return hashes;
+  };
+
+  it('같은 커맨드열 두 판의 해시열이 **한 자리도** 안 갈린다', () => {
+    const mkD = (): BattleSim => mk({ tuning: { gatherRegrowTicks: 60 } });
+    const a = script(mkD());
+    const b = script(mkD());
+    expect(a).toEqual(b);
+    // ⚠ 그 해시가 **재생을 실제로 봤다**는 증거 — 안 그러면 이 항목은 헛돈다
+    const probe = mkD();
+    train(probe);
+    train(probe);
+    let regrown = 0;
+    for (let i = 0; i < 8000; i++) {
+      probe.tick();
+      for (const ev of probe.drainEvents()) if (ev.type === 'gatherRegrown') regrown++;
+    }
+    expect(regrown, '이 판에서 재생이 실제로 여러 번 일어났다').toBeGreaterThan(2);
   });
 });
 

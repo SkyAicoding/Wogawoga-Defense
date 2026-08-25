@@ -139,6 +139,8 @@ class Battle implements BattleSim {
       baseValue: tuning?.gatherBaseValue,
       regrowMax: tuning?.gatherRegrowMax,
       regrowTicks: tuning?.gatherRegrowTicks,
+      regrowStockFrac: tuning?.gatherRegrowStockFrac,
+      regrowWaveSpeedup: tuning?.gatherRegrowWaveSpeedup,
     });
     const groundPaths = stage.paths.map((w) => buildPath(w));
     const airPaths =
@@ -656,9 +658,17 @@ class Battle implements BattleSim {
     //  · taken       — 뜻이 하나 늘었다. 이제 이 비트가 **건설 가능 여부**이기도 하다(D1 뒤집힘).
     //                  갈리면 canPlaceAt 이 갈린 것이고, 그건 판이 통째로 갈린다.
     //  · regrowAt    — **taken 에서 유도되지 않는다.** 같은 틱에 똑같이 "텄음"인 두 칸도
-    //                  자라는 틱이 다르면 **일꾼이 다음에 어디로 가는가**(pickAutoCell)와
+    //                  자격을 얻는 틱이 다르면 **일꾼이 다음에 어디로 가는가**(pickAutoCell)와
     //                  **그 칸에 지을 수 있는 마지막 틱**이 다르다. 1틱만 어긋나도 타워 한 기의
     //                  자리가 갈리고, 그 발산은 몇 백 틱 뒤 gold 로만 보인다.
+    //                  ⚠ **재고 게이트가 들어온 뒤 이 값이 지는 짐이 하나 더 늘었다**: 재생
+    //                  선택 순서가 `(regrowAt, 셀 키)` 이고(gather.ts `updateRegrow`),
+    //                  웨이브별 지연 차이도 텄던 틱에 여기 굳는다. 곧 `view.waveIndex` 가
+    //                  hash() 에 **안 접혀 있는데도**(지금도 그렇다) 웨이브 의존의 발산이
+    //                  이 값으로 드러난다 — 해시를 넓히지 않아도 되는 이유가 그 배치다.
+    // ⚠ 재고 비율은 **접지 않는다**: `taken`·`value` 와 밭의 분모에서 남김없이 유도되고
+    //   (분모는 좌표만의 함수라 판 중에 안 변한다), 상태가 아니라 **계산**이기 때문이다.
+    //   `bountyChunks`·`kind`·`value` 를 안 접는 것과 정확히 같은 논거다.
     //  · regrowsLeft — **판당 총액의 상한 그 자체다.** 0 은 광물·유료 제거·타워 소각이 만드는
     //                  되돌릴 수 없는 사실이고, R3 소각을 한 번 빠뜨리면 이 값이 안 접힐 때
     //                  판이 끝날 때까지 아무 데서도 안 드러난다.
@@ -881,10 +891,22 @@ export interface BattleTuning {
    */
   gatherRegrowMax?: number;
   /**
-   * 재생 주기 틱 (생략 = `GATHER_REGROW_TICKS`).
-   * 총액이 아니라 **모양**만 바꾼다 — 단위 테스트가 T를 짧게 잡아 재생을 강제하는 데 쓴다.
+   * 자격을 얻기까지의 최소 지연 틱, 웨이브 1 기준 (생략 = `stage.gather` → `GATHER_REGROW_TICKS`).
+   * 총액이 아니라 **모양**만 바꾼다 — 단위 테스트가 이 값을 짧게 잡아 재생을 강제하는 데 쓴다.
    */
   gatherRegrowTicks?: number;
+  /**
+   * 재생이 켜지는 **재고 문턱** (생략 = `stage.gather` → `GATHER_REGROW_STOCK_FRAC`).
+   * ⚠ **판당 총액을 안 바꾼다** — 게이트는 "언제 자라는가"만 바꾸고 횟수는
+   * `gatherRegrowMax` 가 그대로 닫는다. 그래서 `18.rateCap` 이 이 축과 무관하게 산다.
+   * 두 끝이 그대로 대조군이다: **0 = 재생 없음** · **1 = 재고 게이트가 없던 옛 규칙**.
+   */
+  gatherRegrowStockFrac?: number;
+  /**
+   * 웨이브당 최소 지연 감쇠율 (생략 = `stage.gather` → `GATHER_REGROW_WAVE_SPEEDUP`,
+   * **0 = 웨이브 의존을 통째로 끔**). 이것도 횟수가 아니라 속도만 바꾼다.
+   */
+  gatherRegrowWaveSpeedup?: number;
 }
 
 export function createBattle(options: BattleOptions, tuning?: BattleTuning): BattleSim {

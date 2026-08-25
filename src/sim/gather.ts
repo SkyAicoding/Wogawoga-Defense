@@ -28,8 +28,13 @@
  *     `trainAlly`의 집결 이동은 `a.tgtX/tgtZ`를 직접 대입하므로 이 통로를 **안 탄다**.
  *  B) **자료구조의 순회 순서에 결정론을 걸지 않는다.** `ResourceField.list`는 생성 시
  *     셀 키 오름차순으로 굳고 그 뒤로 재정렬도 삭제도 추가도 없다 — **재생이 들어와도
- *     그대로다**(칸은 사라지지 않고 `taken` 이 false 로 돌아올 뿐이다). 그래서
- *     `updateRegrow` 의 이벤트 순서도 셀 키 오름차순으로 고정된다.
+ *     그대로다**(칸은 사라지지 않고 `taken` 이 false 로 돌아올 뿐이다).
+ *     ⚠ **재고 게이트가 들어오면서 `updateRegrow` 의 이벤트 순서가 옮겨졌다.** 셀 키
+ *     오름차순이 아니라 **`(regrowAt 오름차순, 셀 키 오름차순)`** 이다(= 자격을 먼저 얻은
+ *     칸부터). 그 순서는 `updateRegrow` 가 `list` 안에서 최솟값을 **훑어서** 고르므로
+ *     여전히 자료구조 구현과 무관하고, 동률이 셀 키로 닫히는 것은 `list` 자체가 셀 키
+ *     오름차순이고 비교가 **엄격 부등호**라서다. 그 정렬은 이제 **결정론의 일부다** —
+ *     비교식을 고치면 이벤트 순서와 해시 궤적이 함께 움직인다.
  *     아군 순회는 언제나 id 오름차순(`fillAllAllyIds`)이다.
  *  C) **`combat.ts`를 한 줄도 안 고친다.** 맞았는지는 `AllySim.gatherHpMark` 비교로 안다 —
  *     `damageAlly`가 채집을 끊어 주게 만들면 `combat ↔ gather` 값 순환이 생긴다.
@@ -47,9 +52,19 @@
  * 것이 유일하게 안전한 배치다.
  *
  * ── 재생 (R1~R6) ───────────────────────────────────────────────────────────
- * 다 캔 칸은 영구가 아니다. `GATHER_REGROW_TICKS` 뒤 **같은 종·같은 값**으로 돌아온다
- * (`updateRegrow`, 8-a). 그것이 D1을 뒤집은 대가의 완화 장치다 — 채집이 여는 칸은
- * 공짜 영구 건설칸이 아니라 **T틱짜리 창**이다.
+ * 다 캔 칸은 영구가 아니다. **같은 종·같은 값**으로 돌아온다(`updateRegrow`, 8-a).
+ * 그것이 D1을 뒤집은 대가의 완화 장치다 — 채집이 여는 칸은 공짜 영구 건설칸이 아니라
+ * **언젠가 닫히는 창**이다.
+ *
+ * ⚠⚠ **방아쇠가 시간에서 재고 비율로 옮겨졌다** (사용자 요구: *"전체적으로 자원의 일정
+ *   비율 이하가 되면 자원이 다시 생성되도록"*). 규칙은 둘로 갈린다:
+ *     **언제 켜지는가** = 밭의 재고가 문턱 아래인가 (`GATHER_REGROW_STOCK_FRAC`)
+ *     **누가 자격이 있는가** = `regrowsLeft > 0` 그리고 텄던 뒤 최소 지연이 지났는가
+ *                              (`GATHER_REGROW_TICKS`, 웨이브마다 조금씩 짧아진다)
+ *   켜지면 자격 있는 칸을 **재고가 문턱에 닿을 때까지만** 되살린다.
+ * ⚠⚠ **횟수는 안 건드린다.** 게이트는 "언제 자라는가"만 바꾸고 "몇 번 자라는가"는 그대로
+ *   `regrowsLeft` 가 정한다. 그래서 판당 총액 항등식 Σ value × (1 + regrowsLeft@생성) 이
+ *   한 자리도 안 움직이고 봉투 `18.rateCap` 이 그 자리에 그대로 선다.
  * 그 창을 영구로 바꾸는 유일한 수단이 **그 자리에 타워를 짓는 것**이고(`burnRegrow`),
  * 그것이 이 기능이 만드는 진짜 선택이다: *지금 지을까(칸을 영구히 얻고 그 자원을 태운다),
  * 두고 계속 캘까(수입은 계속되지만 T틱마다 그 칸이 다시 막힌다).*
@@ -59,8 +74,11 @@
 import {
   GATHER_BASE_VALUE,
   GATHER_DELIVER_RANGE,
+  GATHER_REGROW_DELAY_MIN_MUL,
   GATHER_REGROW_MAX,
+  GATHER_REGROW_STOCK_FRAC,
   GATHER_REGROW_TICKS,
+  GATHER_REGROW_WAVE_SPEEDUP,
   gatherValueFor,
 } from '@/data/balance';
 import {
@@ -89,10 +107,39 @@ export class ResourceField {
   private readonly index = new Map<number, ResourceCellState>();
 
   /**
-   * 재생 주기 틱 — `takeCell` 이 읽는다. 밭이 들고 있는 이유는 주입구가 여기 하나로
-   * 모여야 "되돌리는 손잡이는 하나"가 유지되기 때문이다. 기본값은 `GATHER_REGROW_TICKS`.
+   * 자격을 얻기까지의 **최소 지연**(웨이브 1 기준). `delayAt` 이 읽는다. 밭이 들고 있는
+   * 이유는 주입구가 여기 하나로 모여야 "되돌리는 손잡이는 하나"가 유지되기 때문이다.
+   * 기본값은 `GATHER_REGROW_TICKS`.
    */
   readonly regrowTicks: number;
+
+  /**
+   * **재생 가능 총량 기준값** = 판 시작 시점 재생종 칸의 value 합. 재고 비율의 **분모**다.
+   *
+   * ⚠ **좌표만의 함수다** — `resourceKindOf` 는 셀 단독 해시이고 `REGROWABLE_KINDS` 는
+   *   상수이며 `gatherValueFor` 는 마을거리의 함수다. 곧 시드에도 판 진행에도 안 걸리고,
+   *   그래서 재고는 계산이 아니라 **사실**이다(`18.rateCap` 의 총액과 같은 성질).
+   * ⚠ **광물은 분자에도 분모에도 없다.** 광물은 재생에 영영 응답하지 못하는데 분모에 넣으면
+   *   재고 천장이 영구히 내려앉는다 — s6(화산)은 재생종이 총액의 17.2%뿐이라 게이트가
+   *   **상시 켜짐**으로 굳는다. 유도 전문은 `balance.GATHER_REGROW_STOCK_FRAC` 주석.
+   * ⚠ **영구 소멸한 재생종 칸은 여기서 안 빠진다**(생성 시 굳는 값이므로 뺄 수도 없다).
+   *   그 선택의 근거 셋도 같은 주석에 있다.
+   */
+  readonly regrowDenom: number;
+
+  /**
+   * 재생을 켜는 **재고 하한을 value 단위로 옮긴 값** = `문턱 × regrowDenom`.
+   * 비율이 아니라 절대값으로 들고 있는 이유는 `updateRegrow` 가 매 틱 나눗셈을 안 하게
+   * 하려는 것이고, 그 덕에 되살릴 때마다 `standing += value` 만으로 비교가 이어진다.
+   *
+   * ⚠ `regrowDenom === 0`(재생종이 하나도 없거나 짐값이 전부 0인 밭)이면 비율이 정의되지
+   *   않는다. 그때는 `Infinity` 를 넣어 **옛 규칙(순수 타이머)** 으로 닫는다 — 게이트를
+   *   0으로 닫아 버리면 "재생이 있어야 할 밭인데 영영 안 자란다"가 되어 더 나쁘다.
+   */
+  readonly regrowNeed: number;
+
+  /** 웨이브마다 최소 지연이 줄어드는 비율 (0 = 웨이브 의존 없음). `delayAt` 이 읽는다 */
+  readonly regrowWaveSpeedup: number;
 
   /**
    * @param scenery `battle.ts`가 들고 있는 소품 셀 집합. **읽기만 한다** — 채집은
@@ -107,7 +154,14 @@ export class ResourceField {
    *   ⚠ **판당 총액을 닫는 값이 이것이다** — 곧 대조군 `gather-regrow-x3`(총액 폭주)와
    *   `gather-regrow-off`(재생 없는 세계 복원)가 이 인자 하나로 성립한다. 주입구가
    *   없으면 재생 축의 새 다리가 전부 UNPROVEN으로 태어난다.
-   * @param regrowTicks 재생 주기 (기본 `GATHER_REGROW_TICKS`). 총액이 아니라 **모양**만 바꾼다.
+   * @param regrowTicks 자격까지의 최소 지연, 웨이브 1 기준
+   *   (기본 `stage.gather?.regrowTicks` → `GATHER_REGROW_TICKS`). 총액이 아니라 **모양**만 바꾼다.
+   * @param regrowStockFrac 재생이 켜지는 재고 문턱
+   *   (기본 `stage.gather?.regrowStockFrac` → `GATHER_REGROW_STOCK_FRAC`).
+   *   ⚠ **1 이면 재고 게이트가 통째로 꺼져 배포본 이전의 순수 타이머와 완전히 같아진다** —
+   *   그것이 이 축의 되돌리기이고, 새 계약들이 실제로 빨개지는지 확인하는 손잡이이기도 하다.
+   * @param regrowWaveSpeedup 웨이브당 지연 감쇠율
+   *   (기본 `stage.gather?.regrowWaveSpeedup` → `GATHER_REGROW_WAVE_SPEEDUP`, 0 = 끔).
    */
   constructor(
     stage: StageDef,
@@ -115,10 +169,22 @@ export class ResourceField {
     {
       baseValue = GATHER_BASE_VALUE,
       regrowMax = GATHER_REGROW_MAX,
-      regrowTicks = GATHER_REGROW_TICKS,
-    }: { baseValue?: number; regrowMax?: number; regrowTicks?: number } = {},
+      // ⚠ 스테이지 주입구가 여기서 모듈 상수보다 **먼저** 읽힌다. 그리고 호출부가 값을
+      //   넘기면(= BattleTuning) 그것이 다시 앞선다 — 우선순위 tuning > stage > 상수.
+      regrowTicks = stage.gather?.regrowTicks ?? GATHER_REGROW_TICKS,
+      regrowStockFrac = stage.gather?.regrowStockFrac ?? GATHER_REGROW_STOCK_FRAC,
+      regrowWaveSpeedup = stage.gather?.regrowWaveSpeedup ?? GATHER_REGROW_WAVE_SPEEDUP,
+    }: {
+      baseValue?: number;
+      regrowMax?: number;
+      regrowTicks?: number;
+      regrowStockFrac?: number;
+      regrowWaveSpeedup?: number;
+    } = {},
   ) {
     this.regrowTicks = Math.max(1, Math.round(regrowTicks));
+    this.regrowWaveSpeedup = Math.max(0, regrowWaveSpeedup);
+    const frac = Math.min(1, Math.max(0, regrowStockFrac));
     const rmax = Math.max(0, Math.round(regrowMax));
     // ⚠ Set 순회 순서에 안 기댄다 — 정렬해서 목록의 신원을 셀 키가 정하게 한다(계약 B)
     const keys = [...scenery].sort((p, q) => p - q);
@@ -147,6 +213,29 @@ export class ResourceField {
       this.index.set(key, cell);
     }
     this.list = out;
+    // 재고의 분모 — **판 시작 시점의 재생종 value 합**. `regrowsLeft` 가 아니라 `kind` 로
+    // 재는 이유: `regrowMax` 는 실험 손잡이라 0으로도 오는데, 그때도 분모가 흔들리면
+    // "밭이 얼마나 비었나"의 뜻이 손잡이마다 달라진다. `REGROWABLE_KINDS` 는 상수다.
+    let denom = 0;
+    for (const cell of out) if (REGROWABLE_KINDS.has(cell.kind)) denom += cell.value;
+    this.regrowDenom = denom;
+    this.regrowNeed = denom > 0 ? frac * denom : Infinity;
+  }
+
+  /**
+   * 이 웨이브에서 **자격을 얻기까지의 최소 지연**(틱) — `takeCell` 이 텄던 그 틱에 부른다.
+   *
+   * ⚠ **`updateRegrow` 는 이 함수를 안 부른다.** 웨이브 의존을 매 틱 다시 읽으면 이미 텄던
+   *   칸의 자격 시점이 판 도중에 앞뒤로 움직이고, 그러면 `regrowAt` 이 더 이상 그 칸의
+   *   사실이 아니게 된다. 텄던 틱에 한 번 굳혀 `regrowAt` 에 넣는 이 배치가
+   *   **결정론 해시를 안 넓히고도** 웨이브 의존을 싣는 유일한 방법이기도 하다
+   *   (`view.waveIndex` 는 `battle.ts hash()` 에 안 접혀 있고 `regrowAt` 은 접혀 있다).
+   * ⚠ rng 없음 · 정수 반올림 하나. 유도는 `balance.GATHER_REGROW_WAVE_SPEEDUP` 주석.
+   */
+  delayAt(waveIndex: number): number {
+    const w = Math.max(1, Math.floor(waveIndex));
+    const mul = Math.max(GATHER_REGROW_DELAY_MIN_MUL, 1 - this.regrowWaveSpeedup * (w - 1));
+    return Math.max(1, Math.round(this.regrowTicks * mul));
   }
 
   /** 조회 — 그 셀에 소품이 없으면 null. **순회하지 않는다** */
@@ -180,7 +269,11 @@ export function takeCell(ctx: SimCtx, cell: ResourceCellState, burn: boolean): v
   }
   cell.regrowsLeft--;
   // ⚠ **절대 틱**이다(잔여 틱이 아니다). `view.tick` 하나에만 걸려 있어 어긋날 자리가 없다.
-  cell.regrowAt = ctx.view.tick + ctx.resources.regrowTicks;
+  // ⚠⚠ **이 값은 "자라는 틱"이 아니라 "자랄 수 있게 되는 틱"이다** — 실제로 자라는 것은
+  //   밭의 재고가 문턱 아래로 내려간 뒤이고, 그 판정은 `updateRegrow` 가 한다.
+  // ⚠ 웨이브 의존이 **여기서 한 번** 굳는다(`delayAt`). 매 틱 다시 읽지 않는 이유와
+  //   그 배치가 해시를 안 넓히는 이유는 `delayAt` 주석에 있다.
+  cell.regrowAt = ctx.view.tick + ctx.resources.delayAt(ctx.view.waveIndex);
 }
 
 /**
@@ -202,7 +295,28 @@ export function burnRegrow(cell: ResourceCellState): void {
 }
 
 /**
- * 8-a) **재생** — 다 캔 칸이 T틱 뒤 **같은 종·같은 값**으로 돌아온다 (R2).
+ * 8-a) **재생** — 밭이 **문턱보다 비면** 자격 있는 칸이 **같은 종·같은 값**으로 돌아온다 (R2).
+ *
+ * ── 규칙 (사용자 요구: "전체적으로 자원의 일정 비율 이하가 되면 다시 생성") ──────
+ *   ① **재고를 잰다** = 지금 서 있는 **재생종** 칸의 value 합 (`standing`).
+ *      분모는 판 시작 시점의 재생종 value 합(`regrowDenom`)이고 **좌표만의 함수**다.
+ *      광물이 분자·분모 어디에도 없는 이유는 `regrowDenom` 주석에 있다.
+ *   ② **문턱 위면 한 칸도 안 자란다** — `standing >= regrowNeed` 면 즉시 반환.
+ *      이 이른 반환이 방치 판을 **첫 줄에서** 닫는다(아무것도 안 텄으면 재고가 1.0이다).
+ *   ③ 아래면 자격 있는 칸을 **재고가 문턱에 닿을 때까지만** 되살린다.
+ *      자격 = `regrowAt !== 0`(= `regrowsLeft` 를 아직 한 장 들고 있다) **그리고**
+ *             `tick >= regrowAt`(= 텄던 뒤 최소 지연이 지났다).
+ *
+ * ⚠⚠ **횟수는 안 건드린다.** 이 함수는 `regrowsLeft` 에 한 글자도 안 쓴다 — 한 칸이 자랄
+ *   수 있는 횟수를 정하는 것은 `takeCell` 의 감산 하나뿐이다. 그래서 판당 총액 항등식
+ *   Σ value × (1 + regrowsLeft@생성) 이 게이트가 들어와도 그대로다(`18.rateCap`).
+ *   재고가 낮게 눌린 판에서 자원이 무한히 나오지 않는 것이 이 한 줄이다.
+ *
+ * ⚠⚠ **선택 순서가 결정론의 일부다** — `(regrowAt 오름차순, 셀 키 오름차순)`, 곧 **자격을
+ *   먼저 얻은 칸부터**. `list` 를 훑어 최솟값을 고르므로 Map/Set 순회가 끼지 않고, 동률이
+ *   셀 키로 닫히는 것은 `list` 가 셀 키 오름차순이고 비교가 **엄격 부등호**(`<`)라서다.
+ *   ⚠ 이 비교식을 고치면 **이벤트 순서와 판의 궤적이 함께 움직인다**(자란 칸을 같은 틱에
+ *     일꾼이 잡으므로 — 아래 "틱 안의 자리" 참조). 정렬을 바꾸려면 그 사실을 알고 바꿔라.
  *
  * ⚠ **rng를 한 톨도 안 쓴다**(R5). `resourceKindOf` 를 다시 부르지 **않는다** — 부르는 순간
  *   재생이 셀 해시가 아니라 **호출 횟수**에 걸리고, 그러면 같은 칸이 판마다 다른 종으로
@@ -218,25 +332,48 @@ export function burnRegrow(cell: ResourceCellState): void {
  *  · `applyCommand` 는 `tick()` **밖**에서 돈다 → "지으려는 순간 발밑에서 나무가 자라는"
  *    경합이 구조적으로 존재하지 않는다.
  *
- * ⚠ 이 함수는 **방치 판에서도 매 틱 돈다**(40칸 전부 `continue` 할 뿐). 곧 [5]·`18.idleZero`
- *   의 근거가 "코드 경로의 부재"에서 "돌지만 아무 일도 안 한다"로 한 겹 약해졌다 —
- *   그래서 이벤트 이름을 **`gatherRegrown`** 으로 못 박아 `runIdle` 의
+ * ⚠ 이 함수는 **방치 판에서도 매 틱 돈다**(재고 합을 한 번 세고 ②에서 반환할 뿐). 곧
+ *   [5]·`18.idleZero` 의 근거가 "코드 경로의 부재"에서 "돌지만 아무 일도 안 한다"로 한 겹
+ *   약해졌다 — 그래서 이벤트 이름을 **`gatherRegrown`** 으로 못 박아 `runIdle` 의
  *   `startsWith('gather')` 카운터가 그 사실을 **실행으로** 확인하게 한다.
+ *   ⚠ 방치 판에서 ②가 참인 것은 우연이 아니다: 아무 칸도 안 텄으면 `standing` 이 분모와
+ *     같으므로 재고가 정확히 1.0 이고, 문턱은 1 이하로 잘려 있다(생성자의 `frac` 클램프).
  */
 export function updateRegrow(ctx: SimCtx): void {
   const tick = ctx.view.tick;
-  // ⚠ `list` 순회다(계약 B) — 셀 키 오름차순 고정이라 이벤트 순서가 자료구조 구현과 무관하다.
-  for (const cell of ctx.resources.list) {
-    if (cell.regrowAt === 0) continue; // 안 텄거나 · 영영 안 자란다 (광물·유료 제거·타워)
-    if (tick < cell.regrowAt) continue;
-    cell.taken = false;
-    cell.regrowAt = 0;
+  const field = ctx.resources;
+  const list = field.list;
+  // ── ① 재고 — 지금 서 있는 **재생종** 칸의 value 합 ─────────────────────────
+  // ⚠ `list` 순회다(계약 B). 종 판정은 **멤버십 검사**라 Set 순회가 아니다(계약 B 안전).
+  let standing = 0;
+  for (const cell of list) {
+    if (!cell.taken && REGROWABLE_KINDS.has(cell.kind)) standing += cell.value;
+  }
+  // ── ② 문턱 위면 한 칸도 안 자란다 ─────────────────────────────────────────
+  if (standing >= field.regrowNeed) return;
+
+  // ── ③ 재고가 문턱에 닿을 때까지, 자격을 먼저 얻은 칸부터 되살린다 ──────────
+  // ⚠ 되살아난 칸은 반드시 재생종이다(`regrowAt > 0` 은 `takeCell` 이 `regrowsLeft > 0`
+  //   인 칸에만 붙인다 = 광물은 원천적으로 0). 그래서 `standing += value` 가 ①의 정의와
+  //   같은 집합 위에서 이어진다 — 재생종 판정을 여기서 다시 하지 않는 근거다.
+  while (standing < field.regrowNeed) {
+    let best: ResourceCellState | null = null;
+    for (const cell of list) {
+      if (cell.regrowAt === 0) continue; // 안 텄거나 · 영영 안 자란다 (광물·유료 제거·타워)
+      if (tick < cell.regrowAt) continue; // 아직 최소 지연이 안 지났다
+      // 엄격 부등호 = 동률이면 **앞사람(작은 셀 키)** 이 이긴다. `pickAutoCell` 과 같은 규약.
+      if (best === null || cell.regrowAt < best.regrowAt) best = cell;
+    }
+    if (best === null) return; // 자격 있는 칸이 없다 — 재고가 모자라도 여기서 끝이다
+    best.taken = false;
+    best.regrowAt = 0;
+    standing += best.value;
     ctx.events.push({
       type: 'gatherRegrown',
-      cellX: cell.cellX,
-      cellZ: cell.cellZ,
-      kind: cell.kind,
-      value: cell.value,
+      cellX: best.cellX,
+      cellZ: best.cellZ,
+      kind: best.kind,
+      value: best.value,
     });
   }
 }
