@@ -364,7 +364,10 @@ describe('총액 (§9-1 ⑦) — 이 한 줄이 D9의 감사 가능성 전부다
     const s1 = fieldOf(STAGES[0] as StageDef, B);
     const s1Denom = s1.filter((c) => REGROWABLE_KINDS.has(c.kind)).reduce((n, c) => n + c.value, 0);
     expect(s1Denom, '스테이지1 재고 분모 (= 재생종 32칸의 짐값 합)').toBe(213);
-    expect(GATHER_REGROW_STOCK_FRAC * s1Denom, '스테이지1에서 재생이 켜지는 재고').toBeCloseTo(106.5, 6);
+    // ⚠ 이 줄은 문턱이 아니라 **인쇄해서 잠그는 실측값**이다 — `GATHER_REGROW_STOCK_FRAC`
+    //   이 움직이면 여기도 따라 움직인다(분모 213 은 좌표만의 함수라 안 움직인다).
+    //   0.35 × 213 = 74.55. 곧 s1 은 재생종 짐값이 74.55 아래로 내려가야 재생이 켜진다.
+    expect(GATHER_REGROW_STOCK_FRAC * s1Denom, '스테이지1에서 재생이 켜지는 재고').toBeCloseTo(74.55, 6);
     // s6 — 분모 설계의 근거. 재생종이 총액의 **4분의 1도 안 된다**
     const s6 = fieldOf(STAGES[5] as StageDef, B);
     expect((STAGES[5] as StageDef).biome).toBe('volcano');
