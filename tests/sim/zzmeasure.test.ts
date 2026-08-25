@@ -7,7 +7,7 @@ import { makeBotSimFor, runBot, STRONG_BOT, type BotOptions } from './botharness
 
 const BLOCKS = [1000, 2000, 5000, 9000];
 const DECK: TowerId[] = ['spear', 'catapult', 'frost'];
-const ALL_DECK: TowerId[] = ['spear', 'sling', 'catapult', 'frost', 'totem', 'drum'];
+const ALL_DECK: TowerId[] = DECK;
 const BRANCH: BotOptions = { towerReserve: 600, gather: { count: 1 } };
 const STRONG_G: BotOptions = { ...STRONG_BOT, gather: { count: 2 } };
 
