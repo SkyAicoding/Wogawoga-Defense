@@ -322,6 +322,24 @@ export function createBattleHud(): Screen<GameFacade> {
   let gateBreachTxt!: HTMLElement;
   /** 띠가 지금 보이는가 — 켜짐/꺼짐 전환에만 DOM 을 만진다 */
   let gateShown = false;
+  /*
+   * ── 마을 위급 테두리 ────────────────────────────────────────────────────────
+   * 화면 가장자리에 붉은 빛이 어린다. **마을 HP 가 낮은 동안 계속** 떠 있고,
+   * 문간 띠와 달리 문 앞에 아무도 없어도 뜬다.
+   *
+   * 왜 따로 필요한가: 기지 HP 표시는 8단계에서 상단 HUD 를 떠나 **마을 지붕 위 3D 바**로
+   * 갔다(healthbars.ts kind 4). 그 바는 마을을 보고 있을 때는 훌륭하지만, 판을 넓게
+   * 보거나 손패를 고르는 동안에는 화면 한구석의 몇 픽셀이다 — 곧 **HP 가 낮다는 사실이
+   * 시선의 위치에 달려 있다.** 문간이 들어오면서 그 위험이 커졌다: 종전에는 마을이
+   * 깎이는 순간이 도달 한 번이라 흔들림이 시선을 끌어왔는데, 이제는 1초에 1씩 조금씩
+   * 깎여 **큰 신호가 한 번도 안 오는 채로 마을이 죽을 수 있다.**
+   * 가장자리는 어디를 보고 있든 주변시에 들어오는 유일한 자리다.
+   *
+   * 드로우콜 0 — DOM 한 겹이고 포인터를 통과시킨다(3D 위에 얹지 않는다).
+   */
+  let dangerVig!: HTMLElement;
+  /** 직전 프레임의 위급 단계 (0 안전 · 1 위험 · 2 치명) — 바뀔 때만 DOM 을 만진다 */
+  let lastDanger = -1;
   /** 아이콘 innerHTML 은 비싸다 — 종이 바뀔 때만 다시 그린다 */
   let lastGateDefId = '';
 
@@ -869,7 +887,14 @@ export function createBattleHud(): Screen<GameFacade> {
         h('div', { class: 'hand-row hud-item' }, handHost, refreshBtn),
       );
 
+      /*
+       * 테두리는 **HUD 열 밖**에 둔다 — 열 안에 넣으면 흐름에 자리를 차지해
+       * 손패가 밀린다. `.screen` 이 이미 절대 배치의 기준이라 여기가 유일한 자리다.
+       * 맨 앞에 두어 z 순서상 HUD 아래로 깔린다: 경보가 버튼을 덮으면 안 된다.
+       */
+      dangerVig = h('div', { class: 'danger-vig', attrs: { 'aria-hidden': 'true' } });
       root = h('div', { class: 'screen screen--battle' },
+        dangerVig,
         h('div', { class: 'col hud-col' }, top, bannerHost, side, bottom));
       mount(uiRoot(), root);
 
@@ -910,6 +935,7 @@ export function createBattleHud(): Screen<GameFacade> {
       gateHoldTicks.clear();
       gateShown = false;
       lastGateDefId = '';
+      lastDanger = -1;
     },
 
     update(facade) {
@@ -1005,6 +1031,22 @@ export function createBattleHud(): Screen<GameFacade> {
         c.setCounter(counteredBy(def, 0, entries), favoredAgainst(def, 0, entries));
       });
       setText(refreshLabel, s.refreshCost === 0 ? t('common.free') : fmt(s.refreshCost));
+
+      /*
+       * 마을 위급 단계. 문턱 0.35 / 0.15 는 **연출의 피해 단계**(fx.ts baseDamaged 가
+       * 0.6 / 0.3 에서 지붕을 무너뜨린다)보다 늦게 잡았다 — 그쪽은 "얼마나 상했나"를
+       * 그리는 상태이고 이쪽은 "지금 뭔가 해라"라는 경보다. 상하면 곧바로 비명을 지르면
+       * 경보가 배경이 된다.
+       * ⚠ 승패가 확정되면 끈다 — 진 뒤에도 화면이 붉으면 결과 화면으로 그대로 새어 나간다.
+       */
+      const ended = s.phase === 'won' || s.phase === 'lost';
+      const hpFrac = s.baseHpMax > 0 ? Math.max(0, s.baseHp) / s.baseHpMax : 1;
+      const danger = ended || hpFrac > 0.35 ? 0 : hpFrac > 0.15 ? 1 : 2;
+      if (danger !== lastDanger) {
+        lastDanger = danger;
+        cls(dangerVig, 'is-on', danger > 0);
+        cls(dangerVig, 'is-crit', danger === 2);
+      }
 
       // --- 문간 띠 ---------------------------------------------------------
       updateGateHud(b);

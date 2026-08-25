@@ -472,13 +472,16 @@ export class EnemyView {
       pitch += attackLean(atkP, aim, lean);
       /*
        * 문간 추가 기울임 — 마을 지붕을 향해 목을 꺾는다.
-       * `attackLean` 은 이 종의 던지기 각(lean)에 비례하는데 공룡은 그 값이 0이라
-       * 위 한 줄만으로는 몸이 하나도 안 기운다. 문간에서는 종을 안 가리므로
-       * (gate.ts 규칙 1) 기울임도 종을 안 가려야 한다.
+       *
+       * **공격 포즈가 없는 종(lean 0)에만** 준다. 위 `attackLean` 이 종별 던지기 각에
+       * 비례하는데 공룡·짐승은 그 값이 0이라 한 줄만으로는 몸이 하나도 안 기울기
+       * 때문이다. 반대로 던지는 종(습격대 4종)에 이걸 겹치면 **기울임이 두 겹**이 되어
+       * 던지는 순간 상체가 지면에 닿을 만큼 꺾인다.
        * sin 반주기만 쓰는 것은 위 swinging 과 같은 규약이다 — 내려칠 때만 숙이고
-       * 되돌아올 때는 자세를 세운다.
+       * 되돌아올 때는 자세를 세운다. `anim.aim` 을 곱해 서는 순간 0.15초에 걸쳐
+       * 들어가고, 문간을 떠나면 같은 속도로 풀린다.
        */
-      if (atGate) pitch -= Math.max(0, Math.sin(gateP * TAU)) * GATE_LEAN * anim.aim;
+      if (atGate && lean === 0) pitch -= Math.max(0, Math.sin(gateP * TAU)) * GATE_LEAN * anim.aim;
 
       _quat.setFromAxisAngle(AXIS_Y, -e.heading);
       _quat2.setFromAxisAngle(AXIS_Z, pitch);

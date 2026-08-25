@@ -637,8 +637,25 @@ export interface BotResult {
    * 승수는 ±2가 노이즈이지만 누수 피해는 같은 시드에서 결정론적으로 재현된다.
    */
   leaked: number;
-  /** 기지까지 흘러 들어간 적 마릿수 */
+  /**
+   * **뚫고 들어간 적 마릿수** (`enemyLeaked` 이벤트 수).
+   *
+   * ⚠ 11단계(문간 교전) 정정 — 전에는 `baseDamaged` 이벤트를 셌다. 그때는 누수 한 번이
+   *   곧 `baseDamaged` 한 번이라 같은 수였는데, 지금은 한 마리가 **총액을 초당 1씩
+   *   나눠 내므로**(gate.ts 규칙 5) `baseDamaged` 가 trex 하나에 최대 12번 나간다.
+   *   그대로 뒀으면 이 값이 조용히 "마릿수"에서 "타격 수"로 바뀌었을 것이다.
+   *   지금 봉투의 어떤 다리도 이 값을 안 읽어 원장은 안 움직인다 — 그래서 **지금** 고친다.
+   */
   leaks: number;
+  // ── 문간 계측 (11단계) — 봉투는 아직 안 읽는다. Tune 이 재유도할 때의 재료다 ─────
+  /** 문 앞에 선 개체 수 (`enemyAtGate`) — 판당 몇 마리가 문간까지 왔나 */
+  gateStints: number;
+  /** 문 앞 체류 틱의 총합 — `gateStints` 로 나누면 평균 체류다 */
+  gateTicks: number;
+  /** 문 앞에서 나간 한 입의 총 수 (= 문 앞에서 청구된 마을 HP) */
+  gateBites: number;
+  /** 문 앞에서 **죽은** 개체 수 — 이 축이 밸런스를 움직일 수 있는 유일한 자리다 */
+  gateKills: number;
   // ── 골드 배분 계측 (네 갈래가 전부 살아 있는지 재는 단위) ──────────────────
   /** 타워에 넣은 누적 골드 (배치 + 업그레이드) */
   goldTowers: number;
@@ -1238,6 +1255,15 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
   let baseDamage = 0;
   let baseKills = 0;
   let leaked = 0;
+  // 문간 계측 — `gateEnter` 는 개체별 **마지막으로 관측된 체류 틱**이다.
+  // `enemyDied` 는 체류 틱을 직접 싣지만(combat.ts) `enemyLeaked` 는 안 실으므로,
+  // 돌파한 개체의 체류는 마지막 한 입의 `gateTicks` 로 근사한다 — 상한(baseDamage × 30)
+  // 안에서 마지막 입이 나가므로 오차는 언제나 한 주기 미만이다.
+  let gateStints = 0;
+  let gateTicksSum = 0;
+  let gateBites = 0;
+  let gateKills = 0;
+  const gateEnter = new Map<number, number>();
   let leaks = 0;
   /** 적 id → 마지막으로 피해를 준 출처. enemyDied에 출처가 없어 여기서 귀속시킨다 */
   const lastHit = new Map<number, string>();
@@ -1656,7 +1682,16 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
       lostGold += investedById.get(ev.towerId) ?? 0;
     } else if (ev.type === 'baseDamaged') {
       leaked += ev.amount;
+    } else if (ev.type === 'enemyLeaked') {
       leaks++;
+      gateTicksSum += gateEnter.get(ev.enemyId) ?? 0;
+      gateEnter.delete(ev.enemyId);
+    } else if (ev.type === 'enemyAtGate') {
+      gateStints++;
+      gateEnter.set(ev.enemyId, 0);
+    } else if (ev.type === 'gateBite') {
+      gateBites += ev.amount;
+      gateEnter.set(ev.enemyId, ev.gateTicks);
     } else if (ev.type === 'baseFired') {
       baseShots++;
     } else if (ev.type === 'allyDied') {
@@ -1667,6 +1702,11 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     } else if (ev.type === 'enemyDied') {
       if (lastHit.get(ev.enemyId) === 'hometown') baseKills++;
       lastHit.delete(ev.enemyId);
+      if (ev.gateTicks !== undefined) {
+        gateKills++;
+        gateTicksSum += ev.gateTicks;
+      }
+      gateEnter.delete(ev.enemyId);
     }
   };
   const onEvent = opts.onEvent;
@@ -1783,6 +1823,10 @@ export function runBot(sim: BattleSim, stage: StageDef, opts: BotOptions = {}): 
     baseDamage,
     baseKills,
     leaked,
+    gateStints,
+    gateTicks: gateTicksSum,
+    gateBites,
+    gateKills,
     leaks,
     goldTowers,
     goldAllies,

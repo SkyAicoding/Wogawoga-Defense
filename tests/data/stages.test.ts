@@ -7,6 +7,7 @@ import type { EnemyId, StageDef, TowerId } from '@/data/types';
 import { STAGES } from '@/data/stages';
 import { TOWER_DEFS } from '@/data/towers';
 import { ENEMY_DEFS } from '@/data/enemies';
+import { buildPath } from '@/sim/path';
 
 const LEGAL_CHARS = new Set(['.', '~', 'o', '#']);
 const BOSS_IDS: EnemyId[] = ['spino', 'trex'];
@@ -199,6 +200,42 @@ describe('stages', () => {
       });
     });
   }
+
+  /**
+   * ⚠⚠ **문간 교전의 데이터 전제** (src/sim/gate.ts 규칙 2).
+   *
+   * 문 앞 좌표는 "정지선 호장에서 경로를 한 번 샘플해 **접근 방향**을 얻고, 거리는
+   * 마을 중심에서 다시 잰다"로 만든다. 이 구성이 성립하려면 데이터가 둘을 만족해야 한다:
+   *  ① **모든 경로가 마을 셀에서 끝난다** — 안 그러면 '문 앞'이 마을 앞이 아니다.
+   *  ② 정지선(경로 끝에서 최대 1.95타일 뒤)의 샘플이 마을과 **겹치지 않는다** —
+   *     겹치면 방향 벡터가 퇴화해 `gate.standAt` 의 폴백 가지로 떨어진다. 그 가지는
+   *     지금 데이터에서 **도달 불가능**해야 하고, 이 계약이 그것을 잠근다.
+   * ⚠ 이 계약은 "마지막 N타일이 직진이다"를 요구하지 **않는다** — 그것이 호장 대신
+   *   마을 중심을 원점으로 쓴 이유다(gate.ts 규칙 2의 ⚠). 경로를 굽혀도 안 깨진다.
+   */
+  it('문간 — 모든 경로(지상·공중)가 마을 셀에서 끝나고 정지선이 마을과 안 겹친다', () => {
+    /** trex 반경 0.80 + GATE_STANDOFF_EDGE 1.15 — 가장 뒤에 서는 종의 정지선 */
+    const MAX_STANDOFF = 1.95;
+    for (const stage of STAGES) {
+      const lanes = [...stage.paths, ...(stage.airPaths ?? [])];
+      // 공중 레인이 없으면 sim 이 `buildStraight(스폰, baseCell)` 로 만든다 — 그건 정의상 ①을 만족한다
+      for (const [i, way] of lanes.entries()) {
+        const end = way[way.length - 1]!;
+        expect(
+          Math.hypot(end.x - stage.baseCell.x, end.z - stage.baseCell.z),
+          `s${stage.id} 경로#${i} 끝점이 마을 셀이 아니다`,
+        ).toBeLessThan(1e-9);
+        const p = buildPath(way);
+        expect(p.totalLength, `s${stage.id} 경로#${i} 가 정지선보다 짧다`).toBeGreaterThan(MAX_STANDOFF);
+        const out = { x: 0, z: 0, heading: 0 };
+        p.sample(p.totalLength - MAX_STANDOFF, out);
+        expect(
+          Math.hypot(out.x - stage.baseCell.x, out.z - stage.baseCell.z),
+          `s${stage.id} 경로#${i} 정지선이 마을과 겹친다 — 방향 벡터가 퇴화한다`,
+        ).toBeGreaterThan(0.5);
+      }
+    }
+  });
 
   it('예산/체력/호박 커브가 스테이지 순으로 상승', () => {
     for (let i = 1; i < STAGES.length; i++) {
