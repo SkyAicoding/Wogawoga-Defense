@@ -326,8 +326,8 @@ class Battle implements BattleSim {
       if (e.siegeWalkLeft > 0) e.siegeWalkLeft--;
       e.dist += sp * TICK_DT;
       const path = pathFor(ctx, e);
-      // 정지선 = 문간이 켜져 있으면 `totalLength − (GATE_STANDOFF_EDGE + radius)`,
-      // 꺼져 있으면 경로 끝. (숫자를 베끼지 않는다 — 그 상수는 이 라운드에 1.15 → 1.45 로 갔다)
+      // 정지선 = 문간이 켜져 있으면 `totalLength − (GATE_STANDOFF_EDGE + def.restReach)`,
+      // 꺼져 있으면 경로 끝. (숫자를 베끼지 않는다 — 잣대가 `radius` → `restReach` 로 갔다)
       // **갈림은 이 한 곳뿐이다** (gate.ts 규칙 1) — `leakEnemy` 안에 두면 combat → gate
       // 순환 참조가 생기고, 새 호출자가 조용히 규칙을 우회한다.
       const stop = stopDistFor(ctx, e, path);

@@ -98,6 +98,12 @@ export function enemyDef(id: EnemyId, partial?: Partial<EnemyDef>): EnemyDef {
     bounty: 5,
     baseDamage: 1,
     radius: 0.3,
+    /**
+     * 문간 정지선의 잣대 (gate.ts 규칙 2 — `edge + restReach`).
+     * ⚠ 목 기본값을 `radius` 와 **일부러 다르게** 둔다. 같으면 "정지선이 어느 필드를
+     *   읽는가"를 이 픽스처로 구분할 수 없어, `radius` 로 되돌리는 회귀가 조용히 통과한다.
+     */
+    restReach: 0.5,
     cost: 1,
     ...partial,
   };

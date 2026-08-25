@@ -48,6 +48,7 @@ import {
   ALL_ENEMY_IDS,
   ALLY_TINT,
   BOSS_ENEMIES,
+  BOSS_RENDER_SCALE,
   allyAttackAnim,
   allyGeoKey,
   allyRig,
@@ -55,6 +56,7 @@ import {
   buildAlly,
   buildEnemy,
   enemyAttackLean,
+  enemyGateLean,
   enemyGeoKey,
   enemyRig,
   enemyVariant,
@@ -98,12 +100,21 @@ const ATTACK_LEAN = 0.22;
  * 실제로도 개체의 한 입 시각은 **도착한 틱**이 정하므로 제각각이다.
  */
 const GATE_SWING_PERIOD = 1;
-/**
- * 문간에서 무는 동작의 최대 앞기울임(rad). 타워를 두들길 때(ATTACK_LEAN 0.22)보다 깊다 —
- * 마을 지붕은 타워 몸통보다 낮고, 대형 공룡은 목을 아래로 꺾어야 문다.
- * 0.34 는 trex(반경 0.80)가 마을 바닥판 밖에 서서도 주둥이가 지붕 선에 닿는 각이다.
+/*
+ * ── ⚠⚠ 옛 `GATE_LEAN = 0.34` 이 여기 있었다. 상수를 지운 이유 ────────────────
+ * 그 각은 `swinging`(ATTACK_LEAN 0.22)과 **겹쳐** 있었다 — 아래 `marking` 이
+ * `lean === 0 && (atGate || …)` 이라 문간에서 언제나 참이었기 때문이다. 곧 문간의
+ * 실제 최대 앞기울임은 0.56 이었고, **각이 하나뿐이라 물기 깊이가 모델 높이에 비례**했다:
+ * 코끝이 trex 0.738 · spino 0.937 · golem 0.941 · shaman 0.954 로 구조물 중심선 1.0 보다
+ * 깊이 들어갔다(= 지붕 관통). 옛 주석이 "주둥이가 지붕 선에 닿는 각"이라고 적은 것은
+ * 참이었지만, 그 문장이 **한 종(trex)에 대해서만** 참이었다.
+ *
+ * 그래서 각을 상수로 두는 대신 **겹침폭 `GATE_BITE_DEPTH` 를 상수로 두고 각을 메시에서
+ * 역산**한다(meshlib/enemies.ts `enemyGateLean`). 코끝이
+ * `GATE_STANDOFF_EDGE − GATE_BITE_DEPTH` 로 전 종 동일해진다.
+ * ⚠ 그 역산이 뜻을 가지려면 문간에서 `ATTACK_LEAN` 이 **겹치면 안 된다** — 아래
+ *   `marking && !atGate` 가 그 한 줄이다. 두들기기(타워)에는 그대로 남는다.
  */
-const GATE_LEAN = 0.34;
 /** "멈춰 있다"로 보는 한 틱 이동거리 상한 (타일) */
 const STOPPED_EPS = 1e-4;
 /**
@@ -425,7 +436,7 @@ export class EnemyView {
           : 0;
       // 문간에서는 던지는 포즈가 없는 종(공룡·짐승)도 상체를 쓴다 — 아래 swing 과
       // 합쳐 "제자리 걸음 + 앞으로 물어뜯기"가 된다. lean 0 인 종은 attackLean 이
-      // 0을 돌려주므로 기울임은 뒤의 GATE_LEAN 이 따로 준다.
+      // 0을 돌려주므로 기울임은 뒤의 `enemyGateLean` 이 따로 준다.
       const aim = atGate || lean > 0 ? anim.aim : 0;
       /*
        * 멈춰 서서 때리는 중 — 공격 포즈가 없는 종만 위상을 시간으로 굴린다.
@@ -434,8 +445,8 @@ export class EnemyView {
        * **통째로 얼어붙는다**. 이 게임에서 가장 오래 보이는 정지 장면이 그거라면
        * 사용자 요구("문 앞에서 서로 때린다")가 화면에 도착하지 않는다.
        */
-      const swinging = lean === 0 && (atGate || (e.towerTargetId >= 0 && step < STOPPED_EPS));
-      const swing = swinging ? this.time * ATTACK_SWING_RATE : 0;
+      const marking = lean === 0 && (atGate || (e.towerTargetId >= 0 && step < STOPPED_EPS));
+      const swing = marking ? this.time * ATTACK_SWING_RATE : 0;
       const gait = rigged
         ? wrapGait(travel * rig.gaitPerDist + off + swing)
         : (travel / Math.max(0.5, e.radius * 3.2)) * TAU + off + swing;
@@ -443,7 +454,7 @@ export class EnemyView {
       // 스폰 팝 스케일 (접지 보정보다 먼저 — 보정은 모델 단위라 스케일을 먹여야 한다)
       const pop = anim.age < 0.28 ? easeOutBack(anim.age / 0.28) : 1;
       const boss = BOSS_ENEMIES.has(e.defId);
-      const scale = pop * (boss ? 1.15 : 1);
+      const scale = pop * (boss ? BOSS_RENDER_SCALE : 1);
 
       let pitch = 0;
       let roll = 0;
@@ -467,21 +478,37 @@ export class EnemyView {
       }
       // 내려치는 반주기(sin>0)에만 앞으로 기운다 — 되돌아올 땐 자세를 세운다.
       // pitch(+z축 회전)는 +x(정면)를 위로 드는 방향이라 앞으로 숙이려면 음수다.
-      if (swinging) pitch -= Math.max(0, Math.sin(gait)) * ATTACK_LEAN;
+      //
+      // ⚠⚠ **문간에서는 안 겹친다**(`!atGate`). 문간 각은 `enemyGateLean` 이 메시에서
+      //   역산한 값이라 여기서 0.22 가 더해지면 역산이 통째로 무의미해진다 — 옛 구현이
+      //   정확히 그 상태였고(0.22 + 0.34 = 0.56 이 문간의 실제 각이었다), 그래서 물기
+      //   깊이가 종마다 제각각이었다. 제자리 걸음(`marking` → `swing` → `gait`)은 그대로
+      //   남으므로 다리는 계속 움직인다 — 대열이 얼어붙지 않는다.
+      if (marking && !atGate) pitch -= Math.max(0, Math.sin(gait)) * ATTACK_LEAN;
       // 온몸으로 던진다 — 젖힐 때 뒤로, 놓을 때 앞으로. 셰이더와 **같은 포락선**을 쓴다.
       pitch += attackLean(atkP, aim, lean);
       /*
-       * 문간 추가 기울임 — 마을 지붕을 향해 목을 꺾는다.
+       * 문간 물기 — 마을을 향해 목을 꺾는다. **각이 종마다 다르다**(meshlib
+       * `enemyGateLean`): `reach(L) − restReach = GATE_BITE_DEPTH` 를 메시에서 역산한
+       * 값이라, 코끝이 `GATE_STANDOFF_EDGE − GATE_BITE_DEPTH` = 1.25 로 전 종 같아진다.
+       * 상수 하나였을 때는 같은 각에서 **모델이 높을수록 더 나가** trex 코끝이 0.738 까지
+       * 들어갔다(마을 구조물 중심선이 1.0 이다).
        *
        * **공격 포즈가 없는 종(lean 0)에만** 준다. 위 `attackLean` 이 종별 던지기 각에
        * 비례하는데 공룡·짐승은 그 값이 0이라 한 줄만으로는 몸이 하나도 안 기울기
-       * 때문이다. 반대로 던지는 종(습격대 4종)에 이걸 겹치면 **기울임이 두 겹**이 되어
-       * 던지는 순간 상체가 지면에 닿을 만큼 꺾인다.
-       * sin 반주기만 쓰는 것은 위 swinging 과 같은 규약이다 — 내려칠 때만 숙이고
+       * 때문이다. 반대로 던지는 종(습격대 4종 + warrior)에 이걸 겹치면 **기울임이 두
+       * 겹**이 되어 던지는 순간 상체가 지면에 닿을 만큼 꺾인다.
+       *   ⚠ 그 다섯은 문간에서도 던지기 각 그대로다(`0.3 × enemyAttackLean`). 겹침폭이
+       *     0.033~0.173 으로 작아 코끝이 1.277~1.417 에 남는다 — 곧 목표선 1.25 보다
+       *     **얕게** 문다. 안전 성질("아무도 1.25 보다 깊이 안 들어간다")을 이미 만족하므로
+       *     건드리지 않는다(`tests/render/gatepose.test.ts` §2 가 다섯도 함께 잰다).
+       * sin 반주기만 쓰는 것은 위 `marking` 과 같은 규약이다 — 내려칠 때만 숙이고
        * 되돌아올 때는 자세를 세운다. `anim.aim` 을 곱해 서는 순간 0.15초에 걸쳐
        * 들어가고, 문간을 떠나면 같은 속도로 풀린다.
        */
-      if (atGate && lean === 0) pitch -= Math.max(0, Math.sin(gateP * TAU)) * GATE_LEAN * anim.aim;
+      if (atGate && lean === 0) {
+        pitch -= Math.max(0, Math.sin(gateP * TAU)) * enemyGateLean(e.defId) * anim.aim;
+      }
 
       _quat.setFromAxisAngle(AXIS_Y, -e.heading);
       _quat2.setFromAxisAngle(AXIS_Z, pitch);

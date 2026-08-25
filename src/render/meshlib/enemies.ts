@@ -18,6 +18,7 @@
 import type * as THREE from 'three';
 import type { AllyId, EnemyId } from '@/data/types';
 import { ALLY_DEFS } from '@/data/allies';
+import { GATE_BITE_DEPTH, GATE_LEAN_MAX } from '@/data/balance';
 import { clamp } from '@/core/mathx';
 import { C } from '../palette';
 import { buildParts, cachedGeo, type PartSpec } from './factory';
@@ -2116,6 +2117,89 @@ const ATTACK_LEANS: Readonly<Partial<Record<EnemyId, number>>> = {
 /** 그 종의 몸통 기울임 배율 (0 = 기울지 않는다) */
 export function enemyAttackLean(id: EnemyId): number {
   return ATTACK_LEANS[id] ?? 0;
+}
+
+/**
+ * 보스를 그리는 배율. `views/enemyview.ts` 가 `pop * (boss ? BOSS_RENDER_SCALE : 1)` 로 쓴다.
+ *
+ * ⚠ 여기 두는 이유: 문간 정지선(`EnemyDef.restReach`)과 물기 포즈(`enemyGateLean`)가
+ *   **월드 타일 단위**라 이 배율을 먹여야 뜻이 맞는다. 뷰에 숫자로 박혀 있으면 잣대가
+ *   둘이 되어 보스만 조용히 어긋난다(`tests/render/gatepose.test.ts` 가 같은 출처를 읽는다).
+ */
+export const BOSS_RENDER_SCALE = 1.15;
+
+/** 이 종을 그리는 배율 (보스 1.15, 나머지 1) */
+export function enemyRenderScale(id: EnemyId): number {
+  return BOSS_ENEMIES.has(id) ? BOSS_RENDER_SCALE : 1;
+}
+
+/**
+ * 앞기울임 `L`(rad)일 때 몸 **앞끝**이 개체 중심에서 앞으로 뻗는 거리 (월드 타일).
+ *
+ * 뷰는 앞으로 숙일 때 로컬 Z 축으로 `pitch = −L` 을 준다(enemyview.ts). 그 회전에서
+ * 모델 정점 `(x, y)` 의 전방 성분은 `x·cos L + y·sin L` 이므로, 앞끝은 그 최댓값이다.
+ * **모델이 높을수록 같은 각에서 더 나간다** — 각을 상수로 두면 물기 깊이가 종마다
+ * 제각각이 되는 이유가 이것이고, `enemyGateLean` 이 거꾸로 푸는 이유이기도 하다.
+ */
+export function enemyReachAt(id: EnemyId, lean: number): number {
+  const p = buildEnemy(id).getAttribute('position').array as ArrayLike<number>;
+  const c = Math.cos(lean);
+  const sn = Math.sin(lean);
+  let m = 0;
+  for (let i = 0; i < p.length; i += 3) {
+    const v = p[i]! * c + p[i + 1]! * sn;
+    if (v > m) m = v;
+  }
+  return m * enemyRenderScale(id);
+}
+
+/** 정지 자세(각 0)의 앞끝 도달 — `EnemyDef.restReach` 가 베껴 든 값의 **원본**이다 */
+export function enemyRestReach(id: EnemyId): number {
+  return enemyReachAt(id, 0);
+}
+
+const gateLeans = new Map<EnemyId, number>();
+
+/**
+ * 문간에서 마을을 **무는 순간의 앞기울임**(rad) — 메시에서 역산한다.
+ *
+ * 푸는 식은 한 줄이다: `reach(L) − restReach = GATE_BITE_DEPTH`.
+ * 그러면 코끝이 `(edge + rest) − (rest + depth)` = **`edge − depth` 로 전 종 동일**해진다
+ * (balance.ts `GATE_BITE_DEPTH`). 각이 아니라 폭을 고정하는 것이 이 함수의 존재 이유다.
+ *
+ * ── 닫힌 해 (수치 탐색이 아니다) ─────────────────────────────────────────
+ * 정점 `(x, y)` 를 극좌표 `R = hypot(x, y)` · `φ = atan2(y, x)` 로 보면 전방 성분이
+ * `R·cos(L − φ)` 다. 곧 그 정점이 목표 `T = rest + depth` 를 넘기는 각의 구간은
+ * `|L − φ| ≤ acos(T/R)` 이고, 그 구간의 **왼쪽 끝**이 그 정점이 목표에 처음 닿는 각이다.
+ * 전체 답은 정점별 왼쪽 끝의 **최솟값**이므로 정점 배열 한 번 훑기로 정확히 나온다
+ * (이분법은 `reach` 가 단조라는 보장이 없어 첫 교차를 놓칠 수 있다 — 그래서 안 쓴다).
+ *
+ * ── ⚠⚠ 못 닿는 종이 있다. 잘라서 돌려준다 ────────────────────────────────
+ * 낮고 납작한 종은 `R` 최댓값 자체가 `T` 보다 작아 **어떤 각으로도** 목표 폭에 못 닿는다
+ * (실측 상한: ankylo 0.069 · ptera 0.100 · boar 0.136 · compy 0.159 < 0.20). 그때는
+ * `GATE_LEAN_MAX` 를 그대로 돌려주는데, 그 값이 옛 구현의 최대 앞기울임과 같아
+ * **오늘과 한 라디안도 다르지 않은 포즈**가 된다. 곧 이 함수가 자세를 바꾸는 종은
+ * 목표보다 **더 깊이 물던 종뿐**이다.
+ */
+export function enemyGateLean(id: EnemyId): number {
+  let v = gateLeans.get(id);
+  if (v !== undefined) return v;
+  const scale = enemyRenderScale(id);
+  // 모델 단위로 푼다 — 월드 폭을 배율로 나눠 목표를 옮긴다
+  const target = enemyRestReach(id) / scale + GATE_BITE_DEPTH / scale;
+  const p = buildEnemy(id).getAttribute('position').array as ArrayLike<number>;
+  let best = GATE_LEAN_MAX;
+  for (let i = 0; i < p.length; i += 3) {
+    const x = p[i]!;
+    const y = p[i + 1]!;
+    const r = Math.hypot(x, y);
+    if (r < target) continue; // 이 정점은 어떤 각에서도 목표에 못 닿는다
+    const lo = Math.atan2(y, x) - Math.acos(Math.min(1, target / r));
+    if (lo < best) best = Math.max(0, lo);
+  }
+  v = Math.min(GATE_LEAN_MAX, best);
+  gateLeans.set(id, v);
+  return v;
 }
 
 /**

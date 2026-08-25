@@ -59,6 +59,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 8,
     baseDamage: 1,
     radius: 0.3,
+    restReach: 0.7200,
     /**
      * 흩어짐 〽 — 폭발 부가 피해 ×0.70. 무리로 몰려오는 종이라 "뭉친 것을 한 번에"가
      * 가장 잘 듣던 자리다.
@@ -90,6 +91,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 4,
     baseDamage: 1,
     radius: 0.22,
+    restReach: 0.4025,
     cost: 5,
   },
   trike: {
@@ -161,6 +163,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 36,
     baseDamage: 2,
     radius: 0.52,
+    restReach: 0.8629,
     cost: 45,
   },
   ptera: {
@@ -173,6 +176,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 14,
     baseDamage: 1,
     radius: 0.32,
+    restReach: 0.8020,
     cost: 18,
   },
   ankylo: {
@@ -185,6 +189,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 32,
     baseDamage: 2,
     radius: 0.48,
+    restReach: 0.6300,
     cost: 40,
   },
   boar: {
@@ -197,6 +202,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 18,
     baseDamage: 1,
     radius: 0.38,
+    restReach: 0.6400,
     // 저체력 격노 — 40% 이하에서 1.8배 가속
     enrage: { hpPct: 0.4, speedMul: 1.8 },
     /**
@@ -227,6 +233,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 24,
     baseDamage: 1,
     radius: 0.34,
+    restReach: 0.4000,
     /**
      * 타워 공격 — **습격대는 아니지만 타워를 때리는 종**이라 개편 대상에 들어간다.
      * (사용자의 "남은 애들도 모두"를 *타워를 때리는 적 전부*로 읽었다. 근거는
@@ -294,6 +301,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 24,
     baseDamage: 1,
     radius: 0.34,
+    restReach: 0.4225,
     // 주변 힐 — 반경 2, 0.5초마다 hpPerStatusTick × 시전자 hpMul 회복 (자신 제외).
     // hpMul 스케일 덕에 중후반 웨이브에서도 힐러 메커니크가 유효하다 (sim/status.ts).
     healAura: { radius: 2, hpPerStatusTick: 8 },
@@ -311,6 +319,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 16,
     baseDamage: 1,
     radius: 0.26,
+    restReach: 0.4180,
     /**
      * **투창병** — 짧은 창을 연달아 던진다. 습격대의 기준선이자 최단 사거리(2.4)다.
      * 3 / 0.667초 = 4.5 dps. 간격이 전 종 최소라, 정지 구간에서 holdTicks 75 동안
@@ -353,6 +362,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 22,
     baseDamage: 1,
     radius: 0.28,
+    restReach: 0.4180,
     /**
      * **큰창잡이** — 무거운 장창을 한 발씩 던진다. 습격대 최장 정지(90)이자 유일한 장갑 종.
      * holdTicks 90은 전 종 최장이라 타워 사거리 안에 가장 오래 서 있는다(규칙 4-a).
@@ -406,6 +416,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 21,
     baseDamage: 1,
     radius: 0.24,
+    restReach: 0.4180,
     /**
      * **궁수** — 활을 당겨 쏜다. 사거리 3.2로 습격대 상위이고 holdTicks 75.
      * 4 / 1.33초 = 3 dps.
@@ -504,6 +515,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 27,
     baseDamage: 1,
     radius: 0.26,
+    restReach: 0.4180,
     /**
      * 역할 = **침묵(저주)**. 단순 딜러가 아니라 습격대의 열쇠다.
      *
@@ -549,6 +561,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 72,
     baseDamage: 3,
     radius: 0.62,
+    restReach: 1.0581,
     cost: 90,
   },
   spino: {
@@ -563,6 +576,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 240,
     baseDamage: 5,
     radius: 0.7,
+    restReach: 1.4248,
     cost: 300,
   },
   trex: {
@@ -599,6 +613,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
      */
     baseDamage: 12,
     radius: 0.8,
+    restReach: 1.5381,
     cost: 600,
   },
   golem: {
@@ -611,6 +626,7 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     bounty: 88,
     baseDamage: 2,
     radius: 0.5,
+    restReach: 0.4799,
     cost: 110,
   },
 };
