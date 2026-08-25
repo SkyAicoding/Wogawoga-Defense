@@ -348,7 +348,7 @@ export const RAID_ATTACK_ANIM_TICKS = 12;
  *   `baseDamage 최댓값 × 주기` 아래로 내려가면 큰 종이 총액을 다 못 물고 잘려,
  *   `tests/data/validate.test.ts` 의 `baseDamage ≤ 상한/주기` 계약이 빨개진다.
  */
-export const GATE_BITE_TICKS = 66;
+export const GATE_BITE_TICKS = 60;
 /**
  * **한 입의 크기 — 마을 HP 정확히 1.** 종에 따라 달라지지 않는다.
  *
@@ -419,7 +419,7 @@ export const GATE_HOLD_MIN_TICKS = 60;
  * 끝을 정하는 것이 **가장 느린 보행자**이지 문 앞에 가장 오래 서는 개체가 아니기 때문이다
  * (같은 표를 wavetermination.test.ts 헤더도 들고 있고, 그쪽이 매 실행 다시 잰다).
  */
-export const GATE_HOLD_MAX_TICKS = 792;
+export const GATE_HOLD_MAX_TICKS = 720;
 /**
  * **문 앞에 서는 자리** — 몸 **앞끝**이 마을 중심에서 이만큼 떨어진 곳에 선다.
  * 곧 개체 중심은 `GATE_STANDOFF_EDGE + def.restReach` 다 (gate.ts 규칙 2).
