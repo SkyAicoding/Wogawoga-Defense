@@ -20,6 +20,7 @@ import type { EnemyId, SimEvent, StatusInstance } from '@/data/types';
 import {
   GATE_BITE_AMOUNT,
   GATE_BITE_TICKS,
+  GATE_FAN_COLS,
   GATE_HOLD_MAX_TICKS,
   GATE_HOLD_MIN_TICKS,
   GATE_STANDOFF_EDGE,
@@ -27,6 +28,10 @@ import {
 import { ENEMY_DEFS } from '@/data/enemies';
 import { BASE_LEVELS } from '@/data/hometown';
 import { STAGES } from '@/data/stages';
+// ⚠ 렌더 상수를 **직접 읽는다.** 옛 잣대는 이 숫자를 손으로 베낀 `1.0` 이었고 그 값은
+//   구조물이 놓인 **중심 고리**라 마을 바깥끝(1.45)과 0.45 만큼 어긋나 있었다 —
+//   그래서 적 메시가 움막을 뚫는데 이 파일은 초록이었다. 베끼면 같은 착오가 다시 통과한다.
+import { BASECAMP_MAX_RADIUS } from '@/render/meshlib/basecamp';
 import { createBattle } from '@/sim/battle';
 import { allyDefs, enemyDefs, options, runTicks, stageDef, wave } from './fixtures';
 import { makeBotSimFor } from './botharness';
@@ -300,11 +305,19 @@ describe('② 총량 항등식 — Σ(한 입) + 잔액 = baseDamage', () => {
 // ---------------------------------------------------------------------------
 describe('③ 기하 — 6스테이지 전 종이 마을 Lv1 사거리 안에 선다', () => {
   const LV1_RANGE = BASE_LEVELS[0]!.range;
-  /** 마을 구조물 고리 반경 — 이 안으로 몸 앞끝이 들어오면 메시가 움막을 관통한다 */
-  const STRUCTURE_RING = 1.0;
+  /**
+   * **마을 메시의 바깥끝** — 이 안으로 몸 앞끝이 들어오면 적이 움막·목책을 관통한다.
+   *
+   * ⚠⚠ 옛 값은 `1.0`(하드코딩)이었고 그것은 구조물이 **놓인 고리**(중심선)였다.
+   *   같은 파일의 실제 바깥끝은 `BASECAMP_MAX_RADIUS` = 1.45 이고 목책만 해도
+   *   `WALL_R` = 1.28 이다. 곧 이 잣대는 0.45 만큼 안쪽을 재고 있었고, `GATE_STANDOFF_EDGE`
+   *   1.15 는 목책보다도 0.13 안쪽이라 **테스트는 초록인데 그림이 틀렸다**.
+   *   이제 렌더 상수를 직접 읽으므로 마을 메시가 커지면 이 계약이 먼저 빨개진다.
+   */
+  const STRUCTURE_RING = BASECAMP_MAX_RADIUS;
 
   for (const stage of STAGES) {
-    it(`s${stage.id}: 중심거리 = 1.15 + radius · Lv1 사거리 ${LV1_RANGE} 안 · 앞끝 ≥ ${STRUCTURE_RING}`, () => {
+    it(`s${stage.id}: 중심거리 = ${GATE_STANDOFF_EDGE} + radius · Lv1 사거리 ${LV1_RANGE} 안 · 앞끝 ≥ ${STRUCTURE_RING}`, () => {
       const sim = makeBotSimFor(stage, 777, ['spear', 'catapult', 'frost']);
       let n = 0;
       for (let w = 0; w < 12; w++) {
@@ -317,14 +330,15 @@ describe('③ 기하 — 6스테이지 전 종이 마을 Lv1 사거리 안에 �
             n++;
             const r = ENEMY_DEFS[x.defId].radius;
             const d = Math.hypot(x.x - stage.baseCell.x, x.z - stage.baseCell.z);
-            // 규칙 2 — 중심거리가 **정확히** 1.15 + radius 다 (클램프가 걸린 자리는 더 가깝다)
+            // 규칙 2 — 중심거리가 **정확히** `GATE_STANDOFF_EDGE + radius` 다.
+            //   부채는 회전이라 길이를 안 바꾸고, 판 밖이면 좌표를 자르는 대신 접는다 —
+            //   곧 위아래 두 줄이 함께 "정확히 같다"를 잠근다.
+            expect(d, `${x.defId} 중심거리`).toBeGreaterThanOrEqual(GATE_STANDOFF_EDGE + r - 1e-6);
             expect(d, `${x.defId} 중심거리`).toBeLessThanOrEqual(GATE_STANDOFF_EDGE + r + 1e-6);
-            // 규칙 2 — 클램프의 최대 이동량(맵 경계까지)조차 0.1타일을 못 넘는다
-            expect(d, `${x.defId} 중심거리(하한)`).toBeGreaterThan(GATE_STANDOFF_EDGE + r - 0.1);
             // ⚠⚠ 이 한 줄이 "홈타운이 적을 공격한다"를 첫 레벨에서 성립시킨다
             expect(d, `${x.defId} 가 Lv1 사거리 밖이다`).toBeLessThan(LV1_RANGE);
-            // ⚠ 메시가 움막을 관통하지 않는다 (gate-wip 지적 2-b 가 기하로 닫히는 자리)
-            expect(d - r, `${x.defId} 몸 앞끝`).toBeGreaterThanOrEqual(STRUCTURE_RING);
+            // ⚠⚠ 메시가 **마을 바깥끝 밖**에 선다. 이 한 줄이 "적이 움막을 뚫는다"를 닫는다
+            expect(d - r, `${x.defId} 몸 앞끝`).toBeGreaterThanOrEqual(STRUCTURE_RING - 1e-6);
             // 맵 밖으로 나가지 않는다
             expect(x.x).toBeGreaterThanOrEqual(0.5);
             expect(x.x).toBeLessThanOrEqual(stage.gridW - 0.5);
@@ -337,6 +351,47 @@ describe('③ 기하 — 6스테이지 전 종이 마을 Lv1 사거리 안에 �
       expect(n, `s${stage.id}: 문 앞에 선 적이 0마리 — 공허한 검증이다`).toBeGreaterThan(0);
     }, 120_000);
   }
+
+  /**
+   * ── §D) 같은 종이 픽셀 단위로 포개지지 않는다 ────────────────────────────
+   * 자리는 (종의 반경 → 중심거리) × (id → 부채 자리) 두 값이 정한다. 같은 종은 반경이
+   * 같으므로 **부채 자리가 같아지는 순간 좌표가 비트 단위로 일치**한다. 옛 3줄에서는
+   * 랩터 여덟 마리가 3·3·2 로 세 자리에 겹쳐, 띠에는 "랩터 ×8"인데 화면에는 실루엣이
+   * 셋만 보였다 — 이 다리가 그 회귀를 잡는다.
+   *
+   * 잣대를 "겹치지 않는다"가 아니라 **"같은 자리가 아니다"** 로 두는 이유: 큰 종은
+   * 몸통 지름이 호장보다 커서 일부 겹치는 것이 정상이고(그건 무리로 읽힌다),
+   * 문제였던 것은 좌표의 **완전 일치**다.
+   */
+  it('연속으로 스폰된 같은 종 아홉 마리가 문 앞에서 전부 다른 자리에 선다 (§D)', () => {
+    const N = GATE_FAN_COLS;
+    // ⚠ 판을 세로로 넉넉히 준다. 좁은 판에서는 **부채 접기**(규칙 2-b)가 바깥 자리를
+    //   반대쪽으로 되접어 두 마리가 한 자리에 설 수 있다 — 그건 이 다리가 재는 것이
+    //   아니라 "메시가 마을을 안 뚫는다"를 지키려고 일부러 치르는 대가다.
+    const wide = stageDef({
+      waveCount: 1,
+      baseHp: 1e9,
+      gridH: 9,
+      layout: Array.from({ length: 9 }, () => 'oooooooooo'),
+      paths: [[{ x: 0, z: 4 }, { x: 9, z: 4 }]],
+      baseCell: { x: 9, z: 4 },
+    });
+    const sim = createBattle(
+      options({
+        enemyDefs: enemyDefs({ raptor: { hp: 1e6, speed: 3, baseDamage: 4, radius: 0.3 } }),
+        stage: wide,
+        waves: [wave([{ enemyId: 'raptor', count: N, intervalTicks: 2 }])],
+      }),
+    );
+    sim.applyCommand({ type: 'callWave' });
+    const at = eventsOf(runTicks(sim, 900), 'enemyAtGate');
+    expect(at, `${N}마리가 전부 문 앞에 서야 이 검증이 공허하지 않다`).toHaveLength(N);
+    const spots = at.map((a) => `${a.x.toFixed(6)},${a.z.toFixed(6)}`);
+    expect(new Set(spots).size, `같은 종이 같은 자리에 겹쳤다 — ${spots.join(' | ')}`).toBe(N);
+    // 그리고 부채는 **원 위**다 — 자리가 갈려도 중심거리는 한 톨도 안 흔들린다
+    const ds = at.map((a) => Math.hypot(a.x - wide.baseCell.x, a.z - wide.baseCell.z));
+    for (const d of ds) expect(d, '부채가 중심거리를 바꿨다').toBeCloseTo(ds[0]!, 6);
+  });
 
   it('공중(ptera)도 같은 규칙 — 예외 분기가 없다 (G3)', () => {
     const sim = createBattle(
@@ -370,10 +425,34 @@ describe('④ [5] 방치 판 — 유도를 직접 잠근다', () => {
     expect(GATE_HOLD_MIN_TICKS).toBeLessThanOrEqual(120);
   });
 
-  it('아무것도 안 하는 판에서 문 앞의 적이 한 마리도 안 죽는다 (마을 Lv1 단독으로는 못 죽인다)', () => {
-    const sim = makeBotSimFor(STAGES[0]!, 20260825, ['spear']);
-    let gateKills = 0;
+  /**
+   * ── ⚠⚠ 이 유도는 `GATE_BITE_TICKS` 30 → 60 에서 **다시 썼다** ────────────────
+   * 옛 문장은 "마을 Lv1 은 문 앞에서 **한 마리도 못 죽인다**"였고 근거는
+   *   s1 방치 w3 의 compy 실HP 43 대 (체류 90틱 = 3발 24) + 접근 8 = 32 < 43
+   * 이었다. 주기가 60 이 되면서 compy(s1 `leakDamage` 덮어쓰기로 총액 3)의 체류가
+   * `3 × 60` = **180틱** 이 되고, 마을은 그 안에 5~6발을 쏜다 — 실측으로 **죽인다**
+   * (w3 compy 1마리, `gateTicks = 132`).
+   *
+   * ── 그런데 `5.wave` 는 안 움직였다. 왜인가 (실측이 확정한 새 유도) ──────────
+   * 옛 문장이 지키려던 것은 "문 앞의 죽음"이 아니라 **그 웨이브의 누수 총액**이다.
+   * 총액은 `gateOwed` 잔액 방식이라 **다 물고 나면 더 줄지 않는다**: 총액 `n` 인 개체의
+   * 마지막 한 입은 `gateTicks = (n − 1) × 주기 + 1` 에 나가고, 그 뒤의 죽음은 청구서에
+   * 한 글자도 안 남긴다. compy 는 1·61·**121** 틱에 3 을 전부 물었고 마을은 **132틱**에
+   * 죽였다 — 곧 **빚을 다 받은 뒤의 죽음**이라 누수가 한 톨도 안 줄었다.
+   * 실측 HP 궤적도 그대로다: w1시작 25 → w2 23 → w3 21 → w4 **9** → w4 에서 패배.
+   *
+   * 그래서 이 테스트가 잠그는 문장을 **누수가 줄지 않는다**로 옮긴다. "안 죽는다"는
+   * 그것의 옛 충분조건 하나였을 뿐이고, 주기가 바뀌면 성립하지 않는 우연이었다.
+   * 새 형태는 주기·체류·마을 화력이 어떻게 바뀌어도 뜻이 같다.
+   */
+  it('방치 판의 문 앞 죽음은 언제나 **총액을 다 문 뒤**다 (누수 총액이 안 줄어 5.wave 가 안 밀린다)', () => {
+    const stage = STAGES[0]!;
+    const sim = makeBotSimFor(stage, 20260825, ['spear']);
+    /** 이 스테이지에서 이 종이 실제로 청구하는 총액 (`StageDef.leakDamage` 덮어쓰기 반영) */
+    const owedOf = (id: EnemyId): number => stage.leakDamage?.[id] ?? ENEMY_DEFS[id].baseDamage;
     let arrivals = 0;
+    let gateKills = 0;
+    const early: string[] = [];
     let lostWave = -1;
     for (let w = 0; w < 8 && lostWave < 0; w++) {
       if (sim.state.phase === 'prep') sim.applyCommand({ type: 'callWave' });
@@ -381,7 +460,12 @@ describe('④ [5] 방치 판 — 유도를 직접 잠근다', () => {
         sim.tick(); // 타워 0기 · 부족원 0명 · 레벨업 0회 = 완전 방치
         for (const x of sim.drainEvents()) {
           if (x.type === 'enemyAtGate') arrivals++;
-          if (x.type === 'enemyDied' && x.gateTicks !== undefined) gateKills++;
+          if (x.type === 'enemyDied' && x.gateTicks !== undefined) {
+            gateKills++;
+            // 마지막 한 입의 틱 = (총액 − 1) × 주기 + 1. 그보다 **뒤**에 죽어야 빚이 다 걷힌다
+            const lastBite = (owedOf(x.defId) - 1) * GATE_BITE_TICKS + 1;
+            if (x.gateTicks < lastBite) early.push(`${x.defId} ${x.gateTicks} < ${lastBite}`);
+          }
           if (x.type === 'battleEnded' && !x.won) lostWave = x.wave;
         }
         if (lostWave >= 0) break;
@@ -389,9 +473,13 @@ describe('④ [5] 방치 판 — 유도를 직접 잠근다', () => {
       }
     }
     expect(arrivals, '방치 판인데 문 앞에 선 적이 0 — 공허한 검증이다').toBeGreaterThan(0);
-    // ⚠⚠ 이 한 줄이 [5] 의 유도다. 하나라도 죽으면 그 웨이브의 누수 총합이 줄어
-    //   `5.wave` 가 밀린다 — 다리를 깨는 것이 아니라 다리가 재는 대상이 옮겨진다.
-    expect(gateKills, '마을 Lv1 이 문 앞에서 적을 죽였다 → [5] 의 유도가 무너진다').toBe(0);
+    // ⚠⚠ 이 한 줄이 [5] 의 새 유도다. 총액을 다 물기 **전에** 죽는 개체가 하나라도
+    //   생기면 그 웨이브의 누수가 줄고 `5.wave` 가 밀린다 — 다리를 깨는 것이 아니라
+    //   다리가 재는 대상이 옮겨진다.
+    expect(early, '문 앞의 적이 총액을 다 물기 전에 죽었다 → [5] 의 유도가 무너진다').toEqual([]);
+    // 그리고 그 죽음이 실제로 일어나야 이 검증이 공허하지 않다 (주기 60 의 실측)
+    expect(gateKills, '문 앞에서 아무도 안 죽으면 위 검사가 공허하다 — 유도가 통째로 바뀐 것이다')
+      .toBeGreaterThan(0);
     // 총량이 불변이므로 지는 웨이브도 그대로다
     expect(lostWave, '방치 패배 웨이브').toBe(4);
   }, 120_000);
@@ -411,7 +499,10 @@ describe('⑤ 되돌리기 대조군과 풀 재사용', () => {
         }),
       );
       sim.applyCommand({ type: 'callWave' });
-      return runTicks(sim, 600);
+      // ⚠ 창은 **주기의 함수**다. 총액 12 를 다 물려면 마지막 한 입이 11 × 주기 + 1 에
+      //   나가므로, 접근 시간까지 덮으려면 그보다 넉넉해야 한다(600 고정이면 주기가
+      //   30 → 60 이 된 순간 9 번만 세고 조용히 빨개진다 — 실제로 그랬다).
+      return runTicks(sim, 12 * GATE_BITE_TICKS + 400);
     };
     const off = mk(false);
     expect(eventsOf(off, 'enemyAtGate'), '꺼졌으면 문 앞에 안 선다').toHaveLength(0);

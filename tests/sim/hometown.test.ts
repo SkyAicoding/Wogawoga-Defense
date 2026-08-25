@@ -97,9 +97,15 @@ describe('홈타운 반격', () => {
       options({
         stage: stageDef({ startGold: 1000, baseHp: 999, waveCount: 9 }),
         baseLevels: baseLevels([{ dmg: 5, cooldownTicks: 30, range: 2 }]),
+        // ⚠ **반경을 명시한다.** 문 앞 정지선이 `GATE_STANDOFF_EDGE + radius` 라
+        //   반경이 같으면 두 놈이 **같은 거리에 나란히 선다** — 그러면 "더 가까운 적"이
+        //   원리적으로 생기지 않아 이 테스트가 재려는 상황 자체가 없어진다.
+        //   (옛 픽스처는 반경을 안 적어 둘이 같았고, 그래서 잣대가 어쩔 수 없이 도착
+        //    **순서**였다. 그 순서는 정지 호장 차이 0.05타일이 뒤집는 값이었고 실제로
+        //    edge 1.15 → 1.45 에서 뒤집혔다.)
         enemyDefs: enemyDefs({
-          raptor: { hp: 100000, speed: 0.5 },
-          compy: { hp: 100000, speed: 1.5 },
+          raptor: { hp: 100000, speed: 0.5, radius: 0.3 },
+          compy: { hp: 100000, speed: 1.5, radius: 0.22 },
         }),
         waves: [
           wave([
@@ -109,18 +115,50 @@ describe('홈타운 반격', () => {
         ],
       }),
     );
-    const ev = play(sim, 530);
-    const shots = eventsOf(ev, 'baseFired');
+    // ⚠ **틱마다 직접 본다.** 화살이 나간 그 틱에 "더 가까운 적이 있었는가"를 재려면
+    //   사건만으로는 부족하다 — 위치는 상태에만 있고, 창이 끝난 뒤에 보면 이미 늦다
+    //   (실측: 느린 놈은 창이 끝나기 전에 문간 상한에 닿아 돌파해 목록에서 빠진다).
+    const shots: { targetId: number }[] = [];
+    let overtaken = 0; // 화살이 나간 틱에 **표적이 최근접이 아니었던** 횟수
+    const ev: SimEvent[] = [];
+    sim.applyCommand({ type: 'callWave' });
+    for (let t = 0; t < 530; t++) {
+      sim.tick();
+      const tickEv = sim.drainEvents();
+      ev.push(...tickEv);
+      const fired = eventsOf(tickEv, 'baseFired');
+      if (fired.length === 0) continue;
+      const d = (e: { x: number; z: number }): number => Math.hypot(e.x - 9, e.z - 2);
+      let nearest = -1;
+      let best = Infinity;
+      for (const e of sim.state.enemies) {
+        if (!e.alive) continue;
+        const dd = d(e);
+        if (dd < best) { best = dd; nearest = e.id; }
+      }
+      for (const f of fired) {
+        shots.push({ targetId: f.targetId });
+        if (nearest >= 0 && f.targetId !== nearest) overtaken++;
+      }
+    }
     expect(shots.length).toBeGreaterThan(3);
     const slowId = eventsOf(ev, 'enemySpawned')[0]?.enemyId;
     // 느린 놈이 살아 있고 사거리 안인 내내 화살은 전부 그놈에게 간다
     expect(shots.every((s) => s.targetId === slowId)).toBe(true);
-    // 추월이 실제로 일어났는지 못 박는다 — 빠른 놈이 먼저 기지에 닿았다는 것은
-    // 사거리 안에서 한동안 **더 가까웠다**는 뜻이다. 이게 없으면 이 테스트는 공허해진다
-    // (11단계 — "기지에 닿았다"의 사건이 `enemyLeaked`에서 `enemyAtGate`로 바뀌었다.
-    //  적은 이제 사라지지 않고 문 앞에 선다. 재는 것은 **도착 순서**로 그대로다)
-    const arrivals = eventsOf(ev, 'enemyAtGate');
-    expect(arrivals[0]?.defId).toBe('compy');
+    // 추월이 실제로 일어났는지 못 박는다. 이게 없으면 이 테스트는 공허해진다.
+    //
+    // ⚠ 옛 잣대는 **도착 순서**(`enemyAtGate` 의 첫 사건이 compy)였다. 그 잣대는
+    //   `GATE_STANDOFF_EDGE` 가 1.15 → 1.45 로 나가면서 **뒤집혔다** — 정지선이
+    //   `edge + radius` 라 몸이 큰 놈일수록 경로를 덜 걷고, 느린 raptor(radius 0.30)의
+    //   정지 호장이 빠른 compy(0.22)보다 0.08 짧아져 435틱 대 447틱으로 먼저 선다.
+    //   곧 옛 잣대는 "누가 추월했나"가 아니라 **"누구의 몸이 큰가"** 를 재고 있었다.
+    //   이 규칙(타깃 고정)과는 아무 상관이 없는 축이다.
+    //
+    //   그래서 재는 것을 규칙의 문장 그대로 옮긴다: **창이 끝난 시점에 빠른 놈이 실제로
+    //   더 가깝다**(= 사거리 안에 더 가까운 적이 있는데도 화살은 느린 놈에게 갔다).
+    //   이 형태는 정지선·반경·경로 길이가 바뀌어도 뜻이 같다.
+    expect(overtaken, '화살이 나간 어떤 틱에도 표적이 최근접이었다 — 추월이 안 일어나 검증이 공허하다')
+      .toBeGreaterThan(0);
   });
 
   it('타워가 전부 침묵해도 홈타운은 계속 쏜다 (규칙 5)', () => {

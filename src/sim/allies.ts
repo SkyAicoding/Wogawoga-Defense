@@ -142,6 +142,7 @@ import {
   ALLY_BLOCK_CAPACITY,
   ALLY_MUSTER_COLS,
   ALLY_MUSTER_FORWARD,
+  ALLY_MUSTER_ROW_GAP,
   ALLY_MUSTER_SPACING,
   BRAWL_BRUSH_RANGE,
   BRAWL_COOLDOWN_TICKS,
@@ -206,7 +207,10 @@ function musterPoint(ctx: SimCtx, n: number): { x: number; z: number } {
   const pz = f.dx;
   const col = (n % ALLY_MUSTER_COLS) - (ALLY_MUSTER_COLS - 1) / 2;
   const row = Math.floor(n / ALLY_MUSTER_COLS);
-  const forward = ALLY_MUSTER_FORWARD - row * ALLY_MUSTER_SPACING;
+  // ⚠ 줄은 마을에서 **앞으로** 깊어진다(옛 식은 `− row × …` 라 뒷줄이 마을 쪽이었다).
+  //   유도는 balance.ts `ALLY_MUSTER_ROW_GAP` 주석 — 뒷줄이 문간선에 안 닿으면
+  //   정원을 늘려도 붙잡을 것이 안 남는다(봉투 [11-b]).
+  const forward = ALLY_MUSTER_FORWARD + row * ALLY_MUSTER_ROW_GAP;
   return {
     x: base.x + f.dx * forward + px * col * ALLY_MUSTER_SPACING,
     z: base.z + f.dz * forward + pz * col * ALLY_MUSTER_SPACING,

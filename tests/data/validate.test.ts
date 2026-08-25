@@ -210,6 +210,44 @@ describe('enemies', () => {
   });
 
   /**
+   * ── §E) 체류 하한의 **데이터 계약** — 종료 증명이 데이터의 선의에 안 기대게 ────
+   *
+   * `holdTicksFor` 는 `clamp(baseDamage × 주기, 하한, 상한)` 이었는데 `clamp` 는 하한을
+   * 나중에 적용해 **하한이 상한을 이긴다**. 곧 `StageDef.gate.holdMinTicks` 를 크게 주면
+   * 체류가 상한을 넘고 gate.ts 보조정리 A 의 문장("모든 적의 문간 체류 ≤
+   * GATE_HOLD_MAX_TICKS")이 **거짓**이 된다 — 실측으로 5,000 을 주입하면 4,999틱을
+   * 서 있었다. 코드 쪽은 `Math.min` 한 줄로 닫았고(그쪽이 1차 방어선이다), 여기서는
+   * **애초에 그런 값이 데이터에 못 들어오게** 한 겹 더 잠근다.
+   *
+   * 구간 [60, 120] 의 근거는 balance.ts `GATE_HOLD_MIN_TICKS` 주석의 유도다(잡졸이 화면에
+   * 한 순간도 안 서 있는 것을 막는 하한 · [5] 방치 판의 누수 회계를 흔들지 않는 상한).
+   * ⚠ 배포 데이터는 한 스테이지도 이 필드를 안 적는다 — 그래서 이 계약은 **지금 아무것도
+   *   막지 않고**, 누군가 처음 적는 날 처음 일한다. 그 사람이 유도를 안 읽어도 걸린다.
+   */
+  it('문간 — 스테이지가 덮어쓰는 holdMinTicks 는 [60, 120] · biteTicks 는 1 이상이다 (§E)', () => {
+    const MIN_LO = 60;
+    const MIN_HI = 120;
+    for (const s of STAGES) {
+      const g = s.gate;
+      if (!g) continue;
+      if (g.holdMinTicks !== undefined) {
+        expect(Number.isInteger(g.holdMinTicks), `s${s.id} holdMinTicks 정수`).toBe(true);
+        expect(g.holdMinTicks, `s${s.id} holdMinTicks 하한`).toBeGreaterThanOrEqual(MIN_LO);
+        expect(g.holdMinTicks, `s${s.id} holdMinTicks 상한`).toBeLessThanOrEqual(MIN_HI);
+        // 그리고 그 상한은 **절대 상한 아래**여야 뜻이 있다 (clamp 순서 결함의 데이터 쪽)
+        expect(g.holdMinTicks, `s${s.id} holdMinTicks 가 절대 상한을 넘는다`)
+          .toBeLessThanOrEqual(GATE_HOLD_MAX_TICKS);
+      }
+      if (g.biteTicks !== undefined) {
+        expect(g.biteTicks, `s${s.id} biteTicks`).toBeGreaterThanOrEqual(1);
+      }
+    }
+    // 배포 데이터의 현 상태를 함께 못박는다 — "계약이 공허한가"를 사람이 안 세게 한다
+    expect(STAGES.filter((s) => s.gate?.holdMinTicks !== undefined).length,
+      '배포 스테이지가 holdMinTicks 를 적기 시작했다면 위 구간의 유도를 다시 읽어라').toBe(0);
+  });
+
+  /**
    * towerAttack을 가진 적 = 사람 부족뿐이다 (공룡/짐승은 기지로 직행).
    * 1단계는 warrior 하나로 메커니즘을 증명했고, 2단계가 습격대 4종을 추가했다.
    */
