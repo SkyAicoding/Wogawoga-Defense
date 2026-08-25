@@ -234,7 +234,10 @@ function biteTicks(ctx: SimCtx): number {
 
 /**
  * 체류의 하한(틱). 하한 1 — 0이면 진입 틱에 곧바로 상한이 걸려 문간이 통째로 사라진다.
- * ⚠ 상향 허용 구간은 [60, 120] 이다 (balance.GATE_HOLD_MIN_TICKS 주석의 유도).
+ * ⚠ 허용 구간은 [60, 120] 이다 (balance.GATE_HOLD_MIN_TICKS 주석의 유도). 그 구간은
+ *   **데이터 계약으로도 잠겨 있다** — tests/data/validate.test.ts 의 §E 다리. 여기의
+ *   `Math.max(1, …)` 은 그 계약 밖의 값이 들어와도 0 으로는 안 떨어지게 하는 방어선이고,
+ *   상한 쪽 방어선은 `holdTicksFor` 의 `Math.min` 이다.
  */
 function holdMinTicks(ctx: SimCtx): number {
   return Math.max(1, Math.round(ctx.opts.stage.gate?.holdMinTicks ?? GATE_HOLD_MIN_TICKS));
