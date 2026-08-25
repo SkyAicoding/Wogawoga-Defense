@@ -7,8 +7,8 @@
  *     여기가 빨개진다. (gate.ts §종료 증명의 **실행 가능한 형태**다)
  *  ② **총량 항등식** — Σ(한 입) + (뚫고 들어갈 때의 잔액) = `e.baseDamage`. 언제나, 정확히.
  *     이것이 성립하는 동안 밸런스는 근사가 아니라 **정의상** 보존된다.
- *  ③ **기하** — 6스테이지 전 종이 마을 Lv1 사거리(2.0) 안에 서고, 몸 앞끝이 구조물
- *     고리(1.0) 밖이다. 실제 판에서 나온 `enemyAtGate` 좌표로 잰다.
+ *  ③ **기하** — 6스테이지 전 종이 **몸 앞끝을 마을 바깥끝(1.45)에 대고** 선다.
+ *     실제 판에서 나온 `enemyAtGate` 좌표로 잰다.
  *  ④ **[5] 방치 판의 유도** — `5.wave = 4` 는 "w3 compy 가 문 앞에서 **안 죽는다**"라는
  *     11HP 여유 위에 서 있다. 문턱을 지키는 게 아니라 **문턱이 서 있는 유도**를 지킨다.
  *  ⑤ **되돌리기** — `stage.gate.enabled = false` 면 종전 동작으로 정확히 돌아간다.
@@ -26,7 +26,6 @@ import {
   GATE_STANDOFF_EDGE,
 } from '@/data/balance';
 import { ENEMY_DEFS } from '@/data/enemies';
-import { BASE_LEVELS } from '@/data/hometown';
 import { STAGES } from '@/data/stages';
 // ⚠ 렌더 상수를 **직접 읽는다.** 옛 잣대는 이 숫자를 손으로 베낀 `1.0` 이었고 그 값은
 //   구조물이 놓인 **중심 고리**라 마을 바깥끝(1.45)과 0.45 만큼 어긋나 있었다 —
@@ -303,8 +302,7 @@ describe('② 총량 항등식 — Σ(한 입) + 잔액 = baseDamage', () => {
 // ---------------------------------------------------------------------------
 // ③ 기하 — 실제 판에서 나온 좌표로 잰다
 // ---------------------------------------------------------------------------
-describe('③ 기하 — 6스테이지 전 종이 마을 Lv1 사거리 안에 선다', () => {
-  const LV1_RANGE = BASE_LEVELS[0]!.range;
+describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝에 대고 선다', () => {
   /**
    * **마을 메시의 바깥끝** — 이 안으로 몸 앞끝이 들어오면 적이 움막·목책을 관통한다.
    *
@@ -316,8 +314,20 @@ describe('③ 기하 — 6스테이지 전 종이 마을 Lv1 사거리 안에 �
    */
   const STRUCTURE_RING = BASECAMP_MAX_RADIUS;
 
+  /**
+   * ⚠⚠ **"Lv1 사거리 안" 줄이 여기서 빠졌다 — 완화가 아니라 이사다.**
+   * 옛 계약은 `중심거리 < BASE_LEVELS[0].range` 였다. 그 줄은 "마을이 문 앞의 적을 쏜다"를
+   * **숫자 우연**으로 재고 있었고, 정지선 잣대가 `radius` → `restReach` 로 바뀌면서
+   * 최대 중심거리가 2.25 → **2.988**(trex) 이 되어 어떤 Lv1 사거리로도 못 덮게 됐다.
+   * 사거리를 올려 되찾는 길은 "Lv1 < 쏘는 타워 최소(frost T1 2.4)" 계약이 막는다.
+   *
+   * 그래서 그 성질을 **규칙**으로 옮겼다 — `updateHometown` 이 `atGate` 인 적을 사거리와
+   * 무관하게 표적 후보로 삼는다(hometown.ts 규칙 2-b). 잠그는 자리도 같이 옮겼다:
+   * `tests/sim/hometown.test.ts` 의 "문간에 선 16종 전부가 Lv1 마을의 표적이 된다".
+   * 그쪽은 **실제로 화살이 나가는지**를 재므로 여기 숫자 대리보다 강한 잣대다.
+   */
   for (const stage of STAGES) {
-    it(`s${stage.id}: 중심거리 = ${GATE_STANDOFF_EDGE} + radius · Lv1 사거리 ${LV1_RANGE} 안 · 앞끝 ≥ ${STRUCTURE_RING}`, () => {
+    it(`s${stage.id}: 중심거리 = ${GATE_STANDOFF_EDGE} + restReach · 앞끝 ≥ ${STRUCTURE_RING}`, () => {
       const sim = makeBotSimFor(stage, 777, ['spear', 'catapult', 'frost']);
       let n = 0;
       for (let w = 0; w < 12; w++) {
@@ -328,15 +338,16 @@ describe('③ 기하 — 6스테이지 전 종이 마을 Lv1 사거리 안에 �
           for (const x of sim.drainEvents()) {
             if (x.type !== 'enemyAtGate') continue;
             n++;
-            const r = ENEMY_DEFS[x.defId].radius;
+            // ⚠ 잣대는 `radius`(충돌 반지름)가 아니라 `restReach`(메시 앞끝 도달)다.
+            //   그 둘의 비가 0.96~2.51배로 흩어져 있어 서로를 대신하지 못한다 —
+            //   `tests/render/gatepose.test.ts` §1 이 이 값 16개를 메시와 대조한다.
+            const r = ENEMY_DEFS[x.defId].restReach;
             const d = Math.hypot(x.x - stage.baseCell.x, x.z - stage.baseCell.z);
-            // 규칙 2 — 중심거리가 **정확히** `GATE_STANDOFF_EDGE + radius` 다.
+            // 규칙 2 — 중심거리가 **정확히** `GATE_STANDOFF_EDGE + restReach` 다.
             //   부채는 회전이라 길이를 안 바꾸고, 판 밖이면 좌표를 자르는 대신 접는다 —
             //   곧 위아래 두 줄이 함께 "정확히 같다"를 잠근다.
             expect(d, `${x.defId} 중심거리`).toBeGreaterThanOrEqual(GATE_STANDOFF_EDGE + r - 1e-6);
             expect(d, `${x.defId} 중심거리`).toBeLessThanOrEqual(GATE_STANDOFF_EDGE + r + 1e-6);
-            // ⚠⚠ 이 한 줄이 "홈타운이 적을 공격한다"를 첫 레벨에서 성립시킨다
-            expect(d, `${x.defId} 가 Lv1 사거리 밖이다`).toBeLessThan(LV1_RANGE);
             // ⚠⚠ 메시가 **마을 바깥끝 밖**에 선다. 이 한 줄이 "적이 움막을 뚫는다"를 닫는다
             expect(d - r, `${x.defId} 몸 앞끝`).toBeGreaterThanOrEqual(STRUCTURE_RING - 1e-6);
             // 맵 밖으로 나가지 않는다

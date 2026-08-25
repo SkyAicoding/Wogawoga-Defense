@@ -70,7 +70,13 @@ function measure(level: number, foes: readonly EnemyState[], frames = 6) {
   return drawables(s3.scene);
 }
 
-/** 걷는 무리 → 같은 무리를 문 앞에 세운 것 (부채 ±0.6 은 gate.ts 규칙 2-b) */
+/**
+ * 걷는 무리 → 같은 무리를 문 앞에 세운 것.
+ * ⚠ 여기 ±0.6 은 **드로우콜을 재려고 벌려 놓은 목 좌표**이지 부채 식이 아니다.
+ *   실제 부채는 마을 중심 원 위의 **회전**이고 이웃 간격이 호장 `GATE_FAN_SPACING`
+ *   0.46 × `GATE_FAN_COLS` 9줄이다(gate.ts 규칙 2-b). 이 파일이 재는 것은 드로우콜/
+ *   삼각형이라 좌표의 정확한 값과 무관하다 — 겹치지만 않으면 된다.
+ */
 function gated(foes: readonly EnemyState[]): EnemyState[] {
   return foes.map((e, i) => ({
     ...e,

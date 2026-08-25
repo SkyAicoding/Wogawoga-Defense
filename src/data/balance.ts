@@ -348,7 +348,7 @@ export const RAID_ATTACK_ANIM_TICKS = 12;
  *   `baseDamage 최댓값 × 주기` 아래로 내려가면 큰 종이 총액을 다 못 물고 잘려,
  *   `tests/data/validate.test.ts` 의 `baseDamage ≤ 상한/주기` 계약이 빨개진다.
  */
-export const GATE_BITE_TICKS = 60;
+export const GATE_BITE_TICKS = 66;
 /**
  * **한 입의 크기 — 마을 HP 정확히 1.** 종에 따라 달라지지 않는다.
  *
@@ -419,7 +419,7 @@ export const GATE_HOLD_MIN_TICKS = 60;
  * 끝을 정하는 것이 **가장 느린 보행자**이지 문 앞에 가장 오래 서는 개체가 아니기 때문이다
  * (같은 표를 wavetermination.test.ts 헤더도 들고 있고, 그쪽이 매 실행 다시 잰다).
  */
-export const GATE_HOLD_MAX_TICKS = 720;
+export const GATE_HOLD_MAX_TICKS = 792;
 /**
  * **문 앞에 서는 자리** — 몸 **앞끝**이 마을 중심에서 이만큼 떨어진 곳에 선다.
  * 곧 개체 중심은 `GATE_STANDOFF_EDGE + def.restReach` 다 (gate.ts 규칙 2).
@@ -438,7 +438,8 @@ export const GATE_HOLD_MAX_TICKS = 720;
  * ── ⚠⚠ 그러고도 안 닫혔다 : **잣대(`radius`)가 앞끝이 아니었다** ────────────
  * 1.45 로 옮긴 뒤에도 랩터 주둥이가 움막에 박혔다. `standoffFor` 가
  * `edge + e.radius` 였는데 `radius` 는 **충돌 반지름**이고 메시가 앞으로 뻗는 길이가
- * 아니기 때문이다 — 실측 배율이 1.2~3.4배다(raptor 0.30 대 0.72 · trex 0.80 대 1.54).
+ * 아니기 때문이다 — 실측 배율이 **0.96~2.51배로 흩어져** 있다(golem 0.50 대 0.48 ·
+ * ptera 0.32 대 0.80 · raptor 0.30 대 0.72). 곧 상수를 곱해 대신할 수도 없다.
  * 곧 계약은 초록인데 재는 자리가 몸 앞끝이 아니었다. 이제 잣대가
  * **`EnemyDef.restReach`**(메시 bbox 앞끝 × 렌더 스케일)이고, `tests/render/gatepose.test.ts`
  * §1 이 그 값 16개를 메시와 직접 대조한다.
@@ -535,8 +536,10 @@ export const GATE_LEAN_MAX = 0.56;
  *      id 가 9 만큼 떨어진 두 마리가 동시에 서 있으면 다시 겹친다(그때 늘려야 한다).
  *      `tests/sim/gate.test.ts` 의 §D 다리가 이 수만큼을 실제로 세운다.
  *  · 위   — 부채의 반각이 `4 × GATE_FAN_SPACING / 중심거리` 다. 가장 안쪽에 서는
- *    compy(중심 1.67)에서 **63°**, 가장 바깥의 trex(중심 2.25)에서 **47°** 라 아직
- *    "마을 앞"이다. 열한 줄이면 compy 가 79° 로 **마을 옆구리**가 되어 그림이 깨진다.
+ *    warrior(중심 1.850)에서 **57°**, 가장 바깥의 trex(중심 2.988)에서 **35°** 라 아직
+ *    "마을 앞"이다. 열한 줄이면 warrior 가 71° 로 **마을 옆구리**가 되어 그림이 깨진다.
+ *    ⚠ 정지선 잣대가 `radius` → `restReach` 로 가면서 중심거리가 전 종 **멀어져**
+ *      부채가 오히려 좁아졌다(옛 63°/47° → 57°/35°). 위 한계는 그만큼 여유가 늘었다.
  */
 export const GATE_FAN_COLS = 9;
 /**
@@ -665,8 +668,10 @@ export const ALLY_COST_GROWTH = 1.05;
  * 더 크면 "마을 앞"이 아니라 "길에 나가 있는" 그림이 되고, 더 작으면 지붕에 겹친다.
  *
  * ⚠ 이것은 **첫 줄**의 자리다. 둘째 줄은 여기서 `ALLY_MUSTER_ROW_GAP` 만큼 **더 앞**에
- *   선다(2.0). 그래서 두 줄이 문간선(`GATE_STANDOFF_EDGE` + 반경 = 1.67~2.25)을 앞뒤로
- *   감싼다 — 옛 식은 둘째 줄을 마을 쪽 0.8 로 밀어 그 선에 안 닿게 만들고 있었다.
+ *   선다(2.0). 그래서 두 줄이 문간선(`GATE_STANDOFF_EDGE` + `restReach` = 1.85~2.99)을
+ *   앞뒤로 감싼다 — 앞줄(1.4)이 근접 사거리 1.0~1.15 로 2.40~2.55 까지, 뒷줄(2.0)이
+ *   3.00~3.15 까지 닿아 두 줄이 합쳐 16종을 전부 덮는다(가장 먼 trex 가 2.988).
+ *   옛 식은 둘째 줄을 마을 쪽 0.8 로 밀어 그 선에 아예 안 닿게 만들고 있었다.
  */
 export const ALLY_MUSTER_FORWARD = 1.4;
 /**
@@ -675,7 +680,8 @@ export const ALLY_MUSTER_FORWARD = 1.4;
  *
  * ── 왜 뒤가 아니라 앞인가 (봉투 [11-b] 재유도의 뼈대) ──────────────────────
  * 옛 식은 `forward = 1.4 − row × 0.6` 이라 뒷줄이 마을 쪽 **0.8** 에 섰다. 그 자리는
- * 문간선(`GATE_STANDOFF_EDGE + radius` = 1.67~2.25)에서 0.87~1.45 떨어져 있어,
+ * 문간선(당시 `GATE_STANDOFF_EDGE + radius` = 1.67~2.25 · 지금은 `+ restReach` =
+ * 1.85~2.99)에서 0.87~1.45(지금이면 1.05~2.19) 떨어져 있어,
  * 뒷줄 셋은 근접 사거리로는 문 앞의 적에 **닿지 않는다**. 곧 정원을 2 → 6 으로 올려도
  * 늘어난 셋은 앞줄이 이미 붙잡은 것을 볼 뿐이고, 그것이 [11-b] 봉쇄비가 1 근처에서
  * 안 움직이던 기전이다. 실측(창 `cap` · 정원 2 → 정원 6 의 아군 가동률):

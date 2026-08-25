@@ -8,7 +8,7 @@ import { TICK_RATE } from '@/data/types';
 import { createBattle } from '@/sim/battle';
 import { BASE_LEVELS } from '@/data/hometown';
 import { ALLY_MAX_ACTIVE } from '@/data/balance';
-import { ALLY_DEFS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
+import { ALL_ENEMY_IDS, ALLY_DEFS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
 import { baseLevels, enemyDefs, eventsOf, options, runTicks, stageDef, wave } from './fixtures';
 
 /**
@@ -97,18 +97,18 @@ describe('홈타운 반격', () => {
       options({
         stage: stageDef({ startGold: 1000, baseHp: 999, waveCount: 9 }),
         baseLevels: baseLevels([{ dmg: 5, cooldownTicks: 30, range: 2 }]),
-        // ⚠ **반경을 명시한다.** 문 앞 정지선이 `GATE_STANDOFF_EDGE + radius` 라
-        //   반경이 같으면 두 놈이 **같은 거리에 나란히 선다** — 그러면 "더 가까운 적"이
+        // ⚠ **`restReach` 를 명시한다.** 문 앞 정지선이 `GATE_STANDOFF_EDGE + restReach` 라
+        //   그 값이 같으면 두 놈이 **같은 거리에 나란히 선다** — 그러면 "더 가까운 적"이
         //   원리적으로 생기지 않아 이 테스트가 재려는 상황 자체가 없어진다.
-        //   (옛 픽스처는 반경을 안 적어 둘이 같았고, 그래서 잣대가 어쩔 수 없이 도착
-        //    **순서**였다. 그 순서는 정지 호장 차이 0.05타일이 뒤집는 값이었고 실제로
-        //    edge 1.15 → 1.45 에서 뒤집혔다.)
+        //   (옛 픽스처는 이 자리에 `radius` 를 적었다. 정지선의 잣대가 `radius` →
+        //    `restReach` 로 바뀌면서 그 두 줄이 아무것도 안 벌리게 됐고, 목 기본값이
+        //    같아져 실제로 `overtaken 0` 으로 빨개졌다. 값은 실제 종의 값을 쓴다.)
         // ⚠ `baseDamage` 도 명시한다 — 문 앞 체류가 `baseDamage × GATE_BITE_TICKS` 라
         //   총액 1 로 두면 하한(60틱)만 서 있다가 돌파해 **관측 창이 화살 세 발로 줄어든다**
         //   (실측: 하한 90 → 60 에서 4발 → 3발). 4 면 240틱을 서 있어 상수가 흔들려도 남는다.
         enemyDefs: enemyDefs({
-          raptor: { hp: 100000, speed: 0.5, radius: 0.3, baseDamage: 4 },
-          compy: { hp: 100000, speed: 1.5, radius: 0.22, baseDamage: 4 },
+          raptor: { hp: 100000, speed: 0.5, radius: 0.3, restReach: 0.72, baseDamage: 4 },
+          compy: { hp: 100000, speed: 1.5, radius: 0.22, restReach: 0.4025, baseDamage: 4 },
         }),
         waves: [
           wave([
@@ -162,6 +162,60 @@ describe('홈타운 반격', () => {
     //   이 형태는 정지선·반경·경로 길이가 바뀌어도 뜻이 같다.
     expect(overtaken, '화살이 나간 어떤 틱에도 표적이 최근접이었다 — 추월이 안 일어나 검증이 공허하다')
       .toBeGreaterThan(0);
+  });
+
+  /**
+   * ── 규칙 2-b) **문 앞에 선 적은 사거리와 무관하게 표적이 된다** ──────────────
+   *
+   * ⚠⚠ 이 테스트가 **숫자 대리를 대신한다.** 옛 잠금은 `tests/sim/gate.test.ts` 의
+   *   `중심거리 < BASE_LEVELS[0].range` 한 줄이었다. 그건 "마을이 문 앞의 적을 쏜다"를
+   *   두 표(정지선·사거리)가 우연히 겹치는지로 재고 있었고, 정지선 잣대가
+   *   `radius` → `restReach` 로 바뀌면서 최대 중심거리가 2.25 → **2.988**(trex) 이 되어
+   *   그 겹침이 깨졌다. 사거리를 올려 되찾는 길은 "Lv1 < frost T1 2.4" 계약이 막는다.
+   *
+   * **완화가 아니라 강화다.** 옛 줄은 좌표만 봤고, 이 줄은 **화살이 실제로 나가는지**를
+   * 본다 — 조준 코드가 문간을 안 보면(규칙 2-b 를 되돌리면) 즉시 빨개진다.
+   * 16종을 전부 세우는 이유는 이 성질이 "종을 안 가린다"이기 때문이다(gate.ts 규칙 1).
+   *
+   * ⚠ 공허해지지 않게 **정지선이 Lv1 사거리 밖인 종이 실제로 있다**는 것도 함께 못 박는다.
+   *   그 종이 하나도 없으면 이 테스트는 옛 숫자 우연을 다시 재는 것이 된다.
+   */
+  it('문간에 선 16종 전부가 Lv1 마을의 표적이 된다 (규칙 2-b)', () => {
+    const lv1 = BASE_LEVELS[0] as BaseLevelDef;
+    let outOfRange = 0;
+    for (const id of ALL_ENEMY_IDS) {
+      // **실제 데이터**로 세운다 — 목 정의를 쓰면 `restReach` 가 목 값이라 아무것도 안 잰다
+      const defs = { ...ENEMY_DEFS, [id]: { ...ENEMY_DEFS[id], hp: 1e9, speed: 3 } };
+      const sim = createBattle(
+        options({
+          stage: stageDef({ baseHp: 1e9, waveCount: 9 }),
+          baseLevels: BASE_LEVELS,
+          enemyDefs: defs,
+          waves: [wave([{ enemyId: id, count: 1 }])],
+        }),
+      );
+      sim.applyCommand({ type: 'callWave' });
+      let gateId = -1;
+      let hit = false;
+      let dist = 0;
+      for (let t = 0; t < 900 && !hit; t++) {
+        sim.tick();
+        for (const ev of sim.drainEvents()) {
+          if (ev.type === 'enemyAtGate') {
+            gateId = ev.enemyId;
+            dist = Math.hypot(ev.x - 9, ev.z - 2);
+          } else if (ev.type === 'baseFired' && gateId >= 0 && ev.targetId === gateId) {
+            hit = true;
+          }
+        }
+      }
+      expect(gateId, `${id} 가 문 앞에 서지 않았다 — 이 종은 아무것도 안 쟀다`).toBeGreaterThanOrEqual(0);
+      expect(hit, `${id}: 문 앞에 섰는데 마을이 한 발도 안 쐈다 (중심거리 ${dist.toFixed(3)})`).toBe(true);
+      if (dist > lv1.range) outOfRange++;
+    }
+    // mammoth 2.508 · spino 2.875 · trex 2.988 이 Lv1 사거리 2.3 밖이다 — 규칙이 없으면
+    // 이 셋은 문 앞에 서서도 영영 안 맞는다. 셋이 사라지면 이 테스트가 공허해진다.
+    expect(outOfRange, '문간선이 전부 Lv1 사거리 안이다 — 규칙 2-b 가 무엇도 사지 않는다').toBeGreaterThanOrEqual(3);
   });
 
   it('타워가 전부 침묵해도 홈타운은 계속 쏜다 (규칙 5)', () => {

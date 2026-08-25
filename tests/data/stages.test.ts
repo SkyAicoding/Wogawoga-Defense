@@ -217,12 +217,14 @@ describe('stages', () => {
    */
   it('문간 — 모든 경로(지상·공중)가 마을 셀에서 끝나고 정지선이 마을과 안 겹친다', () => {
     /**
-     * 가장 뒤에 서는 종의 정지선 = `GATE_STANDOFF_EDGE` + **최대 반경**.
-     * ⚠ 숫자를 베끼지 마라 — 옛 코드는 `1.95` 를 손으로 적어 뒀고, 정지선이 1.45 + 0.80 =
-     *   **2.25** 로 나간 뒤에도 그 값이 그대로여서 계약이 **엉뚱한 자리**를 재고 있었다.
+     * 가장 뒤에 서는 종의 정지선 = `GATE_STANDOFF_EDGE` + **최대 `restReach`**.
+     * ⚠ 숫자를 베끼지 마라 — 옛 코드는 `1.95` 를 손으로 적어 뒀고, 정지선이 나간 뒤에도
+     *   그 값이 그대로여서 계약이 **엉뚱한 자리**를 재고 있었다. 잣대도 두 번 틀렸다:
+     *   `radius` 는 충돌 반지름이라 메시 앞끝이 아니다(gate.ts 규칙 2). 지금 값은
+     *   1.45 + trex 1.5381 = **2.9881** 이다.
      */
     const MAX_STANDOFF =
-      GATE_STANDOFF_EDGE + Math.max(...ALL_ENEMY_IDS.map((id) => ENEMY_DEFS[id].radius));
+      GATE_STANDOFF_EDGE + Math.max(...ALL_ENEMY_IDS.map((id) => ENEMY_DEFS[id].restReach));
     for (const stage of STAGES) {
       const lanes = [...stage.paths, ...(stage.airPaths ?? [])];
       // 공중 레인이 없으면 sim 이 `buildStraight(스폰, baseCell)` 로 만든다 — 그건 정의상 ①을 만족한다

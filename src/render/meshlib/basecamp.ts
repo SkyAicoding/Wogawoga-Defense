@@ -101,8 +101,14 @@ const HALL: [number, number] = [0.86, 0.04]; // 0°   큰 장옥
 const TOTEM: [number, number] = [0.36, 0.68]; // 45°  토템 (입구 옆)
 const RACK: [number, number] = [-0.9, -0.02]; // 180° 가죽 건조대
 const ARCH_Z = 0.92; // 90°  뼈 아치 입구
-/** 목책 호의 반경 — 말뚝 머리까지 바닥판(1.45) 안에 들어오는 값 */
-const WALL_R = 1.28;
+/**
+ * 목책 호의 반경 — 말뚝 머리까지 바닥판(1.45) 안에 들어오는 값.
+ *
+ * ⚠ 내보내는 이유: 문간 물기 포즈의 코끝선(`GATE_STANDOFF_EDGE − GATE_BITE_DEPTH`)이
+ *   **이 호를 넘어야** 화면에서 "문다"로 읽힌다. `tests/render/gatepose.test.ts` §3 이
+ *   그 관계를 잠그므로, 목책을 옮기면 물기 폭도 함께 다시 유도해야 한다.
+ */
+export const WALL_R = 1.28;
 /** 마을 전체가 넘어서는 안 되는 반경 (tests/render/basecamp.test.ts가 잠근다) */
 export const BASECAMP_MAX_RADIUS = 1.45;
 

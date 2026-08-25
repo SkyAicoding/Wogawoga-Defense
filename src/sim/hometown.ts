@@ -8,7 +8,7 @@
  *    (셀 중심 ↔ 적 중심, dist2). 즉 홈타운은 "칸을 먹지 않는 타워 한 기"가 아니라
  *    **경로 끝에 붙박인 마지막 한 겹**이다.
  *
- *    사거리는 Lv1 2.0(쏘는 타워 전부보다 짧다) → 만렙 4.6(발리스타 5.5보다 짧다)이다.
+ *    사거리는 Lv1 2.3(쏘는 타워 전부보다 짧다) → 만렙 4.6(발리스타 5.5보다 짧다)이다.
  *    홈타운이 **최장 사거리 자리**를 빼앗으면 "기지 근처에만 짓는" 단일해가 생기므로
  *    상한은 발리스타가 잡는다. 수치 근거 전문은 src/data/hometown.ts.
  *
@@ -31,14 +31,40 @@
  *
  *    ⚠ **11단계(문간 교전) — 이 규칙을 한 글자도 안 바꿨는데 화면이 달라졌다.**
  *    적은 이제 마을 문 앞에 **줄지어 선다**(src/sim/gate.ts 규칙 2). 정지 중심거리가
- *    `1.15 + radius` 라 반경에 비례하므로, "최근접"이 곧 **가장 작은 놈**이 된다:
- *      compy 1.37 · raptor 1.45 · ptera 1.47 · trike 1.67 · spino 1.85 · **trex 1.95**
+ *    `1.45 + restReach` 라 **몸 앞끝 도달**에 비례하므로, "최근접"이 곧 **가장 작은 놈**이 된다:
+ *      warrior 1.850 · compy 1.853 · 습격대 1.868 · shaman 1.873 · golem 1.930 ·
+ *      ankylo 2.080 · boar 2.090 · raptor 2.170 · ptera 2.252 · trike 2.313 ·
+ *      mammoth 2.508 · spino 2.875 · **trex 2.988**
  *    곧 티라노가 코앞에 서 있어도 마을은 그 앞의 콤피부터 쏜다. **의도적이다** —
  *    마을 화력은 어떤 레벨에서도 보스를 못 죽이므로(Lv5 168dps 로도 w50 trex 실HP
  *    37,998 에 12초 체류 = 4.8%), 마을이 실제로 잡을 수 있는 것을 잡고 보스는 타워가
  *    맡는 분업이 데이터와 일치한다.
  *    바꾸고 싶다면 손잡이는 한 줄이다 — **문 앞의 적은 몸 앞끝 거리로 잰다**
- *    (전원 1.15 동률 → 낮은 id 타이브레이크). 그러면 "먼저 온 놈부터"가 된다.
+ *    (전원 1.45 동률 → 낮은 id 타이브레이크). 그러면 "먼저 온 놈부터"가 된다.
+ *
+ * 2-b) **문 앞에 선 적은 사거리와 무관하게 표적 후보다.** ← 규칙이지 숫자가 아니다
+ *    `atGate(e)` 인 적은 `r2` 검사를 건너뛴다. 가장 가까운 것을 고르는 규칙(규칙 2)도,
+ *    고정(lock) 규약도 그대로다 — **후보 집합만 넓어진다.**
+ *
+ *    근거 셋:
+ *     ① **사용자 요구가 "홈타운은 적을 공격하고 적도 홈타운을 공격한다"** 이다. 서로
+ *       때리는 그림이 성립하는지가 사거리 표의 숫자 우연에 걸려 있으면 안 된다.
+ *     ② **밸런스 변화가 아니라 현 동작의 보존이다.** 배포본(정지선 `edge 1.15 + radius`)
+ *       에서는 최대 중심거리가 1.95 < Lv1 사거리 2.0 이라 **16종이 이미 전부 사거리
+ *       안**이었다. 정지선이 `edge 1.45 + restReach` 로 나가 최대 2.988 이 되면서
+ *       (mammoth 2.508 · spino 2.875 · trex 2.988) 그 사실이 깨졌을 뿐이다.
+ *       사거리를 올려 되찾는 길은 막혀 있다 — "Lv1 사거리 < 쏘는 타워 최소(frost T1
+ *       2.4)"가 계약이라 2.988 을 덮을 수 없다. **그래서 규칙으로 옮긴다.**
+ *     ③ **메시가 바뀌어도 조용히 안 깨진다.** `restReach` 는 메시에서 나오는 값이라
+ *       모델을 다시 그리면 정지선이 움직인다. 숫자 대리(`edge + 최대 도달 < 사거리`)로
+ *       두면 그날 조용히 거짓이 되고, 화면에서는 "마을이 문 앞의 적을 안 쏜다"로 나타난다.
+ *
+ *    ⚠ **순환 참조 없음** (확인함): hometown → gate → {combat, status→combat, entities,
+ *      path} 인데 그중 어느 것도 hometown 을 값으로 임포트하지 않는다(entities 의
+ *      `HometownSim` 은 `import type` 이라 런타임에 지워진다). `atGate` 는
+ *      `e.gateTicks > 0` 한 줄이다.
+ *    ⚠ 마을 Lv1 사거리는 **2.3 그대로**다. 이 규칙이 하한 제약(문간을 덮어야 한다)을
+ *      없애므로 그 칸은 더 이상 [2.25, 2.4) 에 갇혀 있지 않다 — 상한 2.4 만 남는다.
  *
  * 3) **공중도 쏜다.**
  *    아군 부족원은 근접이라 공중을 절대 막지 못하고(allies.ts 규칙 5), 공중 전용 레인은
@@ -95,6 +121,7 @@ import { ALLY_MAX_ACTIVE, baseMaxHpFor } from '@/data/balance';
 import { dist2 } from '@/core/mathx';
 import { addGold } from './combat';
 import type { EnemySim, SimCtx } from './entities';
+import { atGate } from './gate';
 
 /**
  * 화살이 빌려 쓰는 투사체 지오메트리 (규칙 6). 발리스타 볼트 = 뼈촉 화살이라
@@ -233,22 +260,37 @@ export function upgradeBase(ctx: SimCtx): boolean {
   return true;
 }
 
+/**
+ * 규칙 2·2-b) 이 적이 **표적 후보인가** — 사거리 안이거나, 문 앞에 서 있거나.
+ *
+ * ⚠ 두 항의 순서에 뜻이 있다: `atGate` 가 먼저다. 문 앞의 적은 사거리 판정을 아예 안
+ *   거치므로 `def.range` 를 어떻게 고쳐도(0 만 아니면) 그 적은 계속 표적이 된다.
+ *   사거리 0(무장 해제) 테이블은 `updateHometown` 이 이 함수보다 앞에서 걸러 낸다 —
+ *   통제 실험(arena.ts)이 "마을 화력만 끈다"를 계속 뜻하게 하려면 그 순서라야 한다.
+ */
+function isTargetable(e: EnemySim, bx: number, bz: number, r2: number): boolean {
+  return atGate(e) || dist2(bx, bz, e.x, e.z) <= r2;
+}
+
 /** 규칙 2) 고정 타깃이 여전히 유효하면 반환, 아니면 null (재조준 필요) */
 function lockedEnemy(ctx: SimCtx, ht: HometownSim, bx: number, bz: number, r2: number): EnemySim | null {
   if (ht.targetId < 0) return null;
   const e = ctx.world.findEnemy(ht.targetId);
   if (!e || !e.alive) return null;
-  return dist2(bx, bz, e.x, e.z) <= r2 ? e : null;
+  return isTargetable(e, bx, bz, r2) ? e : null;
 }
 
-/** 규칙 2) 사거리 내 최근접 적 (동점은 낮은 id — 완전 결정론). 규칙 3) 공중도 센다 */
+/**
+ * 규칙 2) 후보 중 **최근접** 적 (동점은 낮은 id — 완전 결정론). 규칙 3) 공중도 센다.
+ * 규칙 2-b) 후보 집합에 문 앞의 적이 사거리와 무관하게 들어온다 — **고르는 규칙은 그대로**다.
+ */
 function nearestEnemy(ctx: SimCtx, bx: number, bz: number, r2: number): EnemySim | null {
   let best: EnemySim | null = null;
   let bestD2 = Infinity;
   for (const e of ctx.world.enemies.items) {
     if (!e.alive) continue;
+    if (!isTargetable(e, bx, bz, r2)) continue;
     const d2 = dist2(bx, bz, e.x, e.z);
-    if (d2 > r2) continue;
     if (d2 < bestD2 || (d2 === bestD2 && best !== null && e.id < best.id)) {
       best = e;
       bestD2 = d2;
