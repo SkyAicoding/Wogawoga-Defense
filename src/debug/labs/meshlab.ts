@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import type { AllyId, EnemyId, TowerId } from '@/data/types';
 import { ALL_ALLY_IDS } from '@/data/allies';
+import { ALL_TOWER_IDS } from '@/data/towers';
 import { flatMat, glowMat } from '@/render/palette';
 import {
   ALL_ENEMY_IDS,
@@ -26,9 +27,13 @@ import { assembleTower, buildTower, towerTierScale } from '@/render/meshlib/towe
 import { PROJECTILE_TOWERS, buildProjectile } from '@/render/meshlib/projectiles';
 import { BASECAMP_LAYER_COUNT, createBasecamp } from '@/render/meshlib/basecamp';
 
-const TOWER_IDS: readonly TowerId[] = [
-  'spear', 'catapult', 'lightning', 'brazier', 'frost', 'poison', 'ballista', 'drum',
-];
+/*
+ * ⚠ **사본을 두지 마라 — 원본에서 가져온다.**
+ * 여기에는 8개짜리 리터럴이 박혀 있었고, 2라운드 2-c 로 타워가 11종이 되자 이 갤러리에만
+ * 새 셋이 **안 나왔다**. `Record<TowerId, …>` 가 아니라 배열이라 tsc 가 못 잡는다 —
+ * 같은 이유로 `tests/sim/fixtures.ts` 도 같은 사고를 냈다(같은 커밋에서 고쳤다).
+ */
+const TOWER_IDS: readonly TowerId[] = ALL_TOWER_IDS;
 
 interface Item {
   name: string;
