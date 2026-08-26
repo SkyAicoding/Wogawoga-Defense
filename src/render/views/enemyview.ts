@@ -257,6 +257,29 @@ function uploadRange(attr: THREE.BufferAttribute | THREE.InstancedBufferAttribut
   attr.needsUpdate = true;
 }
 
+/** `EnemyView` 생성 옵션 */
+export interface EnemyViewOptions {
+  /**
+   * 보스 머티리얼 예열을 켠다 (기본 **true**).
+   *
+   * 예열은 보스 슬롯 `BOSS_WARM_SLOTS` 개를 미리 만들어 전투 첫 프레임에 한 번 그려
+   * GL 프로그램을 링크시키는 장치다(BOSS_WARM_FRAMES 주석). 그 값은 **보스가 나올 수
+   * 있는 씬**에서만 있다 — 타이틀·로비 뒤에서 도는 디오라마 배경은 적을 한 마리도
+   * 그리지 않으므로 예열 슬롯이 순수 낭비다.
+   *
+   * 그런데 그 낭비를 **끄는 코드가 `update()` 안에만** 있다(warm 카운터). 배경은
+   * `Stage3D.update()` 만 돌고 `EnemyView.update()` 를 부르지 않으므로 슬롯은 영영
+   * `visible=true · frustumCulled=false` 로 남아 매 프레임 그려졌다.
+   * 실측(s1 정적 배경, 씬 그래프 잣대): 18콜 / 32,417삼각형 중 예열 4메시가
+   * **8콜(컬러 4 + 그림자 4) / 10,824삼각형** = 드로우콜의 44% · 삼각형의 33%.
+   *
+   * 기본값이 true 인 것은 **안전한 쪽이 기본**이기 때문이다. 새 호출부가 이 옵션을
+   * 잊으면 최악이 "비전투 씬이 8콜 더 무겁다"이고, 반대로 기본을 false 로 두면
+   * 잊은 전투 씬이 **보스 등장 프레임에 셰이더 링크 스톨**을 맞는다.
+   */
+  readonly warmBoss?: boolean;
+}
+
 export class EnemyView {
   /** 키 = 지오메트리 키(enemyGeoKey) — 부족 습격대 4종은 한 메시를 공유한다 */
   private meshes = new Map<string, THREE.InstancedMesh>();
@@ -269,13 +292,23 @@ export class EnemyView {
   private anims = new Map<number, Anim>();
   private group = new THREE.Group();
   private time = 0;
-  private warm = BOSS_WARM_FRAMES;
+  private warm: number;
 
-  constructor(scene: THREE.Scene) {
+  constructor(scene: THREE.Scene, opts?: EnemyViewOptions) {
+    // 예열은 **전투 씬의 장치**다 — 끄면 warm 카운터도 0에서 시작해야 update() 가
+    // 곧바로 예열 이후의 상태(컬링 복구)로 돈다.
+    const warmBoss = opts?.warmBoss !== false;
+    this.warm = warmBoss ? BOSS_WARM_FRAMES : 0;
     this.group.name = 'enemies';
     for (const id of ALL_ENEMY_IDS) {
       if (BOSS_ENEMIES.has(id)) {
         this.bossPool.set(id, []);
+        // 보스가 나올 수 없는 씬은 슬롯을 **아예 만들지 않는다**. 만들어 두고
+        // visible=false 로 숨기는 길도 있지만, 그러면 그 숨김이 update() 끝의
+        // `pool.forEach(m.visible = ...)` 와 갈리는 두 번째 진실이 된다 — 지금 새고 있는
+        // 버그가 바로 "가시성의 주인이 update() 하나뿐인데 그 함수가 안 불린다"였다.
+        // 만들지 않으면 그 씬은 보스를 그릴 **수단 자체가 없다**(지오메트리 굽는 값도 아낀다).
+        if (!warmBoss) continue;
         // 프로그램 링크를 보스 등장 프레임에서 전투 시작 프레임으로 앞당긴다.
         // 첫 슬롯을 미리 만들어 두면 실제 등장 때 그대로 재사용된다.
         for (let i = 0; i < BOSS_WARM_SLOTS; i++) {

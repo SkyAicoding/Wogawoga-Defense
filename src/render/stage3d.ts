@@ -76,7 +76,22 @@ export interface Stage3D {
   dispose(): void;
 }
 
-export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
+/** `build()` 옵션 — **씬의 쓰임새**를 알린다 (품질 플래그와 갈린다: 그쪽은 기기 성능) */
+export interface Stage3DOptions {
+  /**
+   * 이 씬에서 전투가 벌어지는가 (기본 **true**).
+   *
+   * `false` 면 **전투에서만 뜻이 있는 준비 작업**을 뺀다. 지금은 하나 —
+   * 보스 머티리얼 예열(views/enemyview.ts `EnemyViewOptions.warmBoss`).
+   * 타이틀·로비 뒤 디오라마 배경(game/app.ts `buildBackdrop`)이 유일한 `false` 호출부다.
+   *
+   * ⚠ 예열 자체를 없애는 것이 아니다 — 전투 씬은 기본값 그대로 예열한다.
+   *   여기서 빼는 것은 "보스가 등장할 수 없는 씬"의 몫뿐이다.
+   */
+  readonly combat?: boolean;
+}
+
+export function build(stage: StageDef, quality?: QualityFlags, opts?: Stage3DOptions): Stage3D {
   const q = quality ?? flagsFor('high');
   const pal = BIOMES[stage.biome];
   const scene = new THREE.Scene();
@@ -164,7 +179,7 @@ export function build(stage: StageDef, quality?: QualityFlags): Stage3D {
   }
 
   // --- 뷰 계층 ---
-  const enemies = new EnemyView(scene);
+  const enemies = new EnemyView(scene, { warmBoss: opts?.combat !== false });
   const towers = new TowerView(scene, terrain.cellToWorld);
   const projectiles = new ProjectileView(scene, terrain.cellToWorld);
   const healthbars = new HealthBarView(scene);

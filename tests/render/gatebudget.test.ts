@@ -15,10 +15,11 @@
  *   여기서 읽어야 하는 것은 절대값이 아니라 **두 팔의 차이**다.
  */
 import { describe, expect, it } from 'vitest';
-import * as THREE from 'three';
 import { build } from '@/render/stage3d';
 import { STAGES } from '@/data';
 import type { EnemyId, EnemyState } from '@/data/types';
+// 그리기 잣대는 비전투 배경 예산(warmup.test.ts)과 **같은 것**을 쓴다 — drawcount.ts 주석 참조
+import { drawables } from './drawcount';
 
 const Q = { shadows: true, particles: 1, antialias: true, dpr: 2 } as never;
 
@@ -30,32 +31,6 @@ function foe(o: Partial<EnemyState>): EnemyState {
     flying: false, x: 9, z: 11.5, prevX: 9, prevZ: 11.5, heading: 0, statuses: [],
     bounty: 1, baseDamage: 1, radius: 0.3, alive: true, hpMul: 1, ...o,
   };
-}
-
-/**
- * three 가 실제로 그리게 되는 것 = visible 한 Mesh 중 InstancedMesh 는 count > 0 인 것.
- * 그림자 캐스터는 **컬러 패스 + 그림자 패스 두 번** 그려지므로 두 번 센다
- * (enemyview.ts UNIT_SHADOW 주석이 같은 잣대를 쓴다).
- */
-function drawables(scene: THREE.Object3D): { calls: number; tris: number } {
-  let calls = 0;
-  let tris = 0;
-  scene.traverseVisible((o) => {
-    const m = o as THREE.Mesh & { isMesh?: boolean; isInstancedMesh?: boolean; count?: number };
-    if (m.isMesh !== true) return;
-    const n = m.isInstancedMesh === true ? (m.count ?? 0) : 1;
-    if (n <= 0) return;
-    const g = m.geometry;
-    const idx = g.getIndex();
-    const t = ((idx ? idx.count : (g.getAttribute('position')?.count ?? 0)) / 3) * n;
-    calls++;
-    tris += t;
-    if (m.castShadow) {
-      calls++;
-      tris += t;
-    }
-  });
-  return { calls, tris: Math.round(tris) };
 }
 
 /** 새 장면을 세우고 같은 적 집합으로 N 프레임 돌린 뒤 잰다 — 두 팔을 완전히 격리한다 */
@@ -139,12 +114,30 @@ describe('문간 예산', () => {
    * 적은 인스턴싱이라 드로우콜에는 안 실리지만 삼각형에는 실린다 — 그래서
    * 홍수 웨이브의 상한(WAVE_MAX_SPAWNS 60)을 통째로 문 앞에 세워 두고 잰다.
    * 예산은 프레임 150,000 이고 여기에 타워·체력바·투사체가 더 붙는다.
+   *
+   * ── 드로우콜 문턱을 다시 유도한 자리 (이전: `calls <= 90`) ──────────────────
+   * 90은 **e2e 최악 프레임**(실제 렌더러 · 타워 12기 · 적 56 · 아군 6)의 예산이다.
+   * 그 수를 이 파일에 그대로 옮겨 적은 것이 잘못이었다 — 여기는 WebGL 없는 씬 그래프
+   * 잣대이고 타워·투사체·체력바가 아예 없어서 실측이 **16콜**이다. 여유 74로는
+   * "적 60마리가 60콜이 됐다"는 파국 말고는 아무것도 못 잡는다.
+   *
+   * 무엇을 재는 프레임인가: s1 Lv1 · 스폰 상한 60마리 전원 문 앞 · 타워 0.
+   * 실측 유도: 적 0 프레임 11콜 + MIX 6종이 실제로 쓰는 인스턴스 메시 5개 = **16콜**
+   *   (부족 습격대 blade·lancer 는 지오메트리를 공유해 한 메시다 — enemyGeoKey)
+   * 문턱 20 = 실측 16 + 여유 4. 실측에 딱 붙이지 않는 이유는 MIX 에 종이 한둘 더
+   * 붙어도 그건 회귀가 아니기 때문이다. 반대로 **유닛 그림자 부활**(UNIT_SHADOW 폐기)은
+   * 인스턴스 메시 5개가 전부 두 패스가 되어 +5 → 21콜이므로 이 문턱이 잡는다(실측).
    */
   // 실측: 60마리 전원 문 앞 = 16콜 / **71,377삼각형** (프레임 예산 150,000의 48%)
   it('스폰 상한 60마리를 통째로 문 앞에 세워도 예산 안이다', () => {
-    const all = gated(crowd(60));
-    const m = measure(1, all);
-    expect(m.calls).toBeLessThanOrEqual(90);
+    const m = measure(1, gated(crowd(60)));
+    expect(m.calls, `60마리 문 앞 ${m.calls}콜`).toBeLessThanOrEqual(20);
+    /*
+     * 이 파일의 진짜 주장은 절대값이 아니라 **마릿수가 콜에 안 실린다**는 것이다.
+     * 6마리는 MIX 6종을 한 번씩 다 쓰므로 60마리와 **메시 집합이 같다** — 곧 인스턴싱이
+     * 살아 있는 한 두 프레임의 콜은 같아야 한다. 인스턴싱이 깨지면 60쪽만 뛴다.
+     */
+    expect(m.calls, '6마리와 60마리의 드로우콜이 같다').toBe(measure(1, gated(crowd(6))).calls);
     // 적 60마리(그림자 없음 — UNIT_SHADOW)가 실린 프레임. 실제 최악 프레임의
     // 천장을 만드는 것은 타워 수라는 실측이 있으므로(enemyview.ts 헤더) 여기서는
     // **적이 예산의 절반을 안 먹는가**만 잠근다.

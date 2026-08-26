@@ -89,7 +89,10 @@ export function createApp(): void {
     const stage = backdropStage();
     if (backdrop && backdropStageId === stage.id) return;
     backdrop?.dispose();
-    backdrop = build(stage, qm.flags);
+    // combat:false — 배경에는 적이 한 마리도 안 서므로 보스 예열 슬롯을 만들지 않는다.
+    // 예열을 끄는 코드는 EnemyView.update() 안에만 있고 배경은 그 함수를 안 부르므로,
+    // 켜 두면 예열 4메시가 **영영** 그려진다(실측 8콜 / 10,824삼각형 = 이 씬의 44% · 33%).
+    backdrop = build(stage, qm.flags, { combat: false });
     backdropStageId = stage.id;
     fitBackdrop();
   };
