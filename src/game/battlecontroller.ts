@@ -604,6 +604,19 @@ export class BattleController {
         this.sim.applyCommand({ type: 'placeTower', handIndex, cellX: x, cellZ: z }),
       callWave: (): boolean => this.sim.applyCommand({ type: 'callWave' }),
       drawCalls: (): number => this.renderer.gl.info.render.calls,
+      /*
+       * **계측의 증인** — 이 프레임을 잰 조건이 정말 우리가 재려던 조건인가.
+       *  · shadowsOn : three 의 실제 상태(gl.shadowMap.enabled). false 면 그림자 패스가
+       *    안 돈 것이고, 그 표본의 삼각형은 "그림자 포함 최악"이 아니다.
+       *  · degradeCount : 측정 중 품질 강등이 몇 번 불렸나. 0 이 아니면 표본 사이에
+       *    조건이 바뀐 것이라 **곡선을 나란히 읽을 수 없다**.
+       * 둘 다 재현 조건을 묻는 것이지 값이 아니다 — 예산 어서션 옆에 같이 건다.
+       */
+      // 최악 프레임 레시피가 **해금 덱과 무관하게** 전 종을 세우기 위한 목록.
+      // 신규 프로필 덱은 3종뿐이라 이것 없이는 나머지가 한 기도 안 선다.
+      allTowerIds: (): readonly string[] => ALL_TOWER_IDS,
+      shadowsOn: (): boolean => this.renderer.gl.shadowMap.enabled,
+      degradeCount: (): number => this.renderer.degradeCount,
       renderInfo: (): { calls: number; triangles: number; geometries: number; textures: number } => ({
         calls: this.renderer.gl.info.render.calls,
         triangles: this.renderer.gl.info.render.triangles,

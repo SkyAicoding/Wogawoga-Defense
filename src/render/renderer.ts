@@ -38,6 +38,17 @@ export class GameRenderer {
   private height = 1;
   private maxDpr = 2;
   private contextAlive = true;
+  /**
+   * **품질 강등이 몇 번 일어났는가** — 계측의 증인이다.
+   *
+   * ⚠ 이 저장소가 실제로 당한 사고: 최악 프레임을 재는 중에 `onPersistentlySlow` 가
+   *   불려 티어가 low 로 떨어지면 `shadows:false` 가 되어 **그림자 패스가 통째로 사라진다**.
+   *   그러면 "타워를 늘렸는데 드로우콜과 삼각형이 줄어드는" 거짓 곡선이 나온다.
+   *   지워진 zzsweep.spec.ts 가 `gl.viewport` 를 후킹해 표본마다 그림자 패스를 증언하게
+   *   했던 이유가 그것이고, 그 증인이 사라진 채로 남은 두 예산 테스트는 **강등을 못 본다.**
+   *   여기서 세면 후킹 없이도 "이 측정 중에 강등이 있었나"를 한 수로 물을 수 있다.
+   */
+  degradeCount = 0;
 
   constructor(canvas: HTMLCanvasElement, quality?: QualityFlags) {
     this.gl = new THREE.WebGLRenderer({
@@ -116,6 +127,7 @@ export class GameRenderer {
           ) {
             this.lastPersistSlowMs = now;
             this.persistSlowFor = 0;
+            this.degradeCount++;
             this.onPersistentlySlow?.();
           }
         } else {

@@ -65,6 +65,9 @@ declare global {
       place(handIndex: number, x: number, z: number): boolean;
       callWave(): boolean;
       drawCalls(): number;
+      allTowerIds?(): readonly string[];
+      shadowsOn(): boolean;
+      degradeCount(): number;
       renderInfo(): { calls: number; triangles: number };
       selectCard(i: number | null): void;
       pause(v: boolean): void;
@@ -230,8 +233,9 @@ function maxFrame(page: Page, frames = 20): Promise<{ calls: number; tris: numbe
  */
 async function buildWorstFrame(
   page: Page,
-): Promise<{ towers: number; enemies: number; allies: number }> {
-  const built = await page.evaluate(() => {
+  towerTarget = 12,
+): Promise<{ towers: number; enemies: number; allies: number; kinds: number }> {
+  const built = await page.evaluate((target: number) => {
     const g = window.__wgd!;
     const sim = g.sim;
     const st = sim.state as unknown as {
@@ -245,16 +249,44 @@ async function buildWorstFrame(
       enemies: { defId: string; hp: number; maxHp: number; dist: number }[];
       allies: { hp: number; maxHp: number }[];
     };
-    // 1) 만렙 T5 타워 12기
+    /*
+     * 1) 만렙 T5 타워 `target` 기 — **종을 돌려 가며** 세운다.
+     *
+     * ⚠ 옛 판본이 재던 것은 "최악"이 아니었다. 두 가지가 겹쳐 있었다:
+     *  (가) `continue outer` 가 **z 루프**를 넘겨서 한 행에 최대 1기만 섰다. 12를 늘려도
+     *       `gridH`(15~16)가 천장이었다 — 판당 빈칸이 84~101개인데 그 8분의 1이다.
+     *  (나) 신규 프로필 덱에는 타워가 **3종**(spear·catapult·frost)뿐이라
+     *       lightning·brazier·poison·ballista·drum 은 한 기도 안 섰다. 설정의
+     *       '모든 스테이지 열기'는 스테이지만 열지 타워 해금과 무관하다.
+     *       게다가 손패 드로우는 `Date.now()` 시드라 **종 조합이 실행마다 달랐다.**
+     *
+     * 그래서 라벨을 x 루프로 옮기고(행 안에서 계속 채운다), 손패에 **0골드 합성 카드**를
+     * 꽂아 전 종을 순서대로 세운다. 합성 카드는 결정적이라 실행마다 같은 조합이 나온다.
+     * (지워진 zzbreak.spec.ts 가 쓰던 방법이다 — 그 파일이 사라지며 함께 사라졌다)
+     */
+    const ALL_TOWERS = (g.allTowerIds?.() ?? []) as string[];
     let n = 0;
-    outer: for (let z = 0; z < 40 && n < 12; z++) {
-      for (let x = 0; x < 40 && n < 12; x++) {
+    let kinds = 0;
+    for (let z = 0; z < 60 && n < target; z++) {
+      for (let x = 0; x < 60 && n < target; x++) {
         if (!sim.canPlaceAt(x, z)) continue;
         st.gold = 99_999_999;
+        if (ALL_TOWERS.length > 0) {
+          // 0골드 합성 카드를 손패 0번에 꽂는다 — 덱 해금과 무관하게 전 종을 돌린다
+          (st.hand as unknown as { towerId: string; cost: number }[])[0] = {
+            towerId: ALL_TOWERS[n % ALL_TOWERS.length]!,
+            cost: 0,
+          };
+          if (g.place(0, x, z)) {
+            n++;
+            if (n <= ALL_TOWERS.length) kinds++;
+            continue;
+          }
+        }
         for (let h = 0; h < st.hand.length; h++) {
           if (g.place(h, x, z)) {
             n++;
-            continue outer;
+            break;
           }
         }
       }
@@ -322,8 +354,13 @@ async function buildWorstFrame(
       st.gold = 99_999_999;
       g.trainAlly((['clubber', 'slinger', 'guardian'] as const)[i % 3]!);
     }
-    return { towers: st.towers.length, enemies: st.enemies.length, allies: st.allies.length };
-  });
+    return {
+      towers: st.towers.length,
+      enemies: st.enemies.length,
+      allies: st.allies.length,
+      kinds,
+    };
+  }, towerTarget);
 
   // 스폰 팝(0.28초)이 끝나도록 실시간을 흘린 뒤 얼린다 — 팝 중에는 스케일이 0에 가깝다
   await page.waitForTimeout(1000);
@@ -2302,6 +2339,65 @@ async function enterStageWithUnlockAll(page: Page, stageId: number): Promise<num
  * 소품이 달라져 표와 나란히 읽을 수도 없다. 모바일 프레임 예산은 위 '최악 프레임 예산'
  * 테스트가 두 프로젝트 모두에서 계속 지킨다.
  */
+/**
+ * **파괴점 스윕** — 타워를 몇 기까지 세우면 예산을 깨는가. `WGD_SWEEP=1` 일 때만 돈다.
+ *
+ * 왜 상시로 안 도는가: 표본 하나마다 **페이지를 새로 열어야** 해서 느리다(아래 참조).
+ * 왜 있어야 하는가: 위 두 예산 테스트는 타워를 12기만 세우는데 판당 건설 가능 빈칸은
+ * 84~101개다(약 8분의 1). 곧 "최악 프레임"이라 부르면서 최악의 8분의 1을 재고 있다.
+ * 이 스윕이 그 나머지를 재고, **레시피(`buildWorstFrame`)를 위 둘과 공유**하므로
+ * 잣대가 갈라질 수 없다 — 지워진 zzsweep.spec.ts 가 잣대를 따로 들고 있다가
+ * 표가 서로 어긋났던 것이 이 파일이 실제로 겪은 사고다.
+ *
+ * ⚠ **표본마다 페이지를 새로 연다.** 한 세션에서 타워를 계속 늘리며 재면 swiftshader 가
+ *   중간에 느려져 품질 강등이 걸리고, `shadows:false` 가 되어 **그림자 패스가 통째로
+ *   사라진다** — "타워를 늘렸는데 삼각형이 줄어드는" 거짓 곡선이 나온다. 이 저장소가
+ *   실제로 당했다. 그래도 안심하지 않고 표본마다 `shadowsOn`·`degradeCount` 를 함께
+ *   남긴다 — 침묵이 성공처럼 보이면 안 된다.
+ *
+ * 돌리는 법: `WGD_SWEEP=1 npx playwright test -g 파괴점 --project=desktop`
+ */
+test('파괴점 스윕 — 타워 수를 늘리며 삼각형/드로우콜을 잰다 (WGD_SWEEP=1)', async ({
+  browser,
+}, testInfo) => {
+  test.skip(!process.env['WGD_SWEEP'], 'WGD_SWEEP=1 일 때만 돈다 (표본마다 새 페이지라 느리다)');
+  test.skip(testInfo.project.name !== 'desktop', '1280×800 에서만 잰다');
+  test.setTimeout(3_600_000);
+
+  const COUNTS = (process.env['WGD_SWEEP_COUNTS'] ?? '12,20,30,40,60,80,100')
+    .split(',')
+    .map((x) => Number(x.trim()));
+  const STAGES = (process.env['WGD_SWEEP_STAGES'] ?? '1,3,6').split(',').map((x) => Number(x.trim()));
+  const rows: string[] = ['stage | 타워 | 종 | 적 | 콜 | 삼각형 | 예산대비 | 그림자 | 강등'];
+
+  for (const stageId of STAGES) {
+    for (const target of COUNTS) {
+      // 표본마다 새 페이지 — 앞 표본의 강등이 다음 표본으로 새지 않게
+      const page = await browser.newPage();
+      await page.goto('/?test=1', { waitUntil: 'networkidle' });
+      await page.mouse.click(100, 300);
+      await page.waitForTimeout(400);
+      await turnOnUnlockAll(page);
+      const entered = await enterStageWithUnlockAll(page, stageId);
+      expect(entered, `s${stageId} 진입`).toBe(stageId);
+
+      const built = await buildWorstFrame(page, target);
+      const worst = await maxFrame(page, 30);
+      const shadows = await page.evaluate(() => window.__wgd?.shadowsOn());
+      const degrades = await page.evaluate(() => window.__wgd?.degradeCount());
+      rows.push(
+        `s${stageId} | ${built.towers} | ${built.kinds} | ${built.enemies} | ${worst.calls} | ` +
+          `${worst.tris} | ${((worst.tris / 150_000) * 100).toFixed(1)}% | ${shadows} | ${degrades}`,
+      );
+      await page.close();
+    }
+  }
+  const table = rows.join('\n');
+  testInfo.annotations.push({ type: '스윕', description: table });
+  // eslint-disable-next-line no-console
+  console.log('\n' + table);
+});
+
 test('스테이지별 최악 프레임 예산 — s1~s6 전부 삼각형 150,000 / 드로우콜 56', async ({
   page,
 }, testInfo) => {
@@ -2333,6 +2429,16 @@ test('스테이지별 최악 프레임 예산 — s1~s6 전부 삼각형 150,000
     expect(built.enemies, msg).toBeGreaterThanOrEqual(40);
     expect(built.allies, msg).toBeGreaterThanOrEqual(6);
     expect(worst.tris, msg).toBeGreaterThan(50_000);
+    /*
+     * ⚠ **계측의 증인** — 이 표본이 정말 우리가 재려던 조건에서 나왔는가.
+     * 품질 자동 강등(app.ts onPersistentlySlow → quality low)이 측정 중에 끼어들면
+     * `shadows:false` 가 되어 **그림자 패스가 통째로 사라지고**, 그러면 "타워를 늘렸는데
+     * 삼각형이 줄어드는" 거짓 곡선이 나온다. 이 저장소가 실제로 당한 사고이고,
+     * 그것을 증언하던 코드(zzsweep.spec.ts 의 gl.viewport 후킹)는 지워졌다.
+     * 값이 아니라 **재현 조건**을 묻는 두 줄이라 예산 어서션 바로 옆에 둔다.
+     */
+    expect(await page.evaluate(() => window.__wgd?.shadowsOn()), msg + ' — 그림자 패스가 꺼졌다').toBe(true);
+    expect(await page.evaluate(() => window.__wgd?.degradeCount()), msg + ' — 측정 중 품질 강등').toBe(0);
 
     expect(worst.tris, msg).toBeLessThanOrEqual(150_000);
     // 문턱 56의 유도는 위 '최악 프레임 예산' 테스트의 어서션 주석에 있다 (실측 41~43)
