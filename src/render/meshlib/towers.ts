@@ -68,6 +68,43 @@ interface Parts {
 const ROPE = 0xa8823f;
 const ROPE_D = 0x7a5c2c;
 
+// ---------------------------------------------------------------------------
+// 색 조합 — palette.ts 를 늘리지 않고 C 두 색을 섞어 이 파일에서만 쓴다
+// ---------------------------------------------------------------------------
+/**
+ * C 는 여섯 바이옴·적·소품·타워가 함께 보는 표라, 타워 한 종을 위해 항목을 늘리면
+ * 그 색이 어디서 쓰이는지 추적이 끊긴다. 그래서 **표는 그대로 두고 조합만 여기서** 한다.
+ * 모듈 로드에 한 번 도는 상수 계산이라 빌드 비용에 얹히지 않는다.
+ */
+const _mixA = new THREE.Color();
+const _mixB = new THREE.Color();
+function mix(a: number, b: number, k: number): number {
+  return _mixA.setHex(a).lerp(_mixB.setHex(b), k).getHex();
+}
+
+/** 잠재우는 청록 — 얼음(0xa8ecff)·번개(0x8fe6ff)의 하늘색과 갈리도록 초록을 3할 섞는다 */
+const HUSH = mix(C.crystal, C.leaf, 0.34);
+/** 그 심지 (발광 파트용) */
+const HUSH_LIT = mix(HUSH, C.ice, 0.5);
+/** 조가비 — 뼈에 청록기가 도는 색 */
+const SHELL = mix(C.bone, C.crystal, 0.28);
+/** 북면 가죽 (표백된 생가죽) */
+const MEMBRANE = mix(C.hide, C.bone, 0.55);
+/** 눌러 씌운 덮개 가죽 — 몸통보다 한 단 어둡다 */
+const HIDE_MUTE = mix(C.hideDark, C.black, 0.45);
+/** 젖은 흙 — 파낸 자리/박은 자리의 둔덕 */
+const EARTH_WET = mix(C.bark, C.black, 0.4);
+/** 힘줄 — 밧줄보다 희고 팽팽하다 */
+const SINEW = mix(C.bone, ROPE, 0.35);
+/** 휘어 놓은 어린 나무 (덫 스프링) */
+const SPRING_WOOD = mix(C.wood, C.leafDark, 0.25);
+/** 정전기 — 번개 토템의 시안과 갈리게 보라를 섞는다 */
+const STATIC = mix(C.ice, C.purple, 0.35);
+/** 방전 심지 — 백열 */
+const SPARK = mix(C.white, C.ice, 0.4);
+/** 흑요석 — 이 파일이 T4+ 에서 쓰는 값과 같은 색 */
+const OBSIDIAN = 0x2e2430;
+
 /** 원주 n등분 반복 — 회전 대칭 장식 배치의 기본기 */
 function around(n: number, phase: number, fn: (a: number, i: number) => void): void {
   for (let i = 0; i < n; i++) fn((i / n) * Math.PI * 2 + phase, i);
@@ -1479,6 +1516,543 @@ function drum(t: number): Parts {
   return { base, action, actionPivot: [0, 0.36 + h, 0] };
 }
 
+/**
+ * 주술 방해 토템 — 적 주술사의 오라를 반경 안에서 잠재운다. 회전 없음(base + glow action).
+ *
+ * 형태의 논지는 **전쟁북의 반대말**이다. drum 은 북면이 열려 있고 그 위에 북채가 얹혀
+ * "친다"가 읽히지만, 이쪽은 같은 가죽 몸통 위에 덮개 가죽을 한 겹 더 씌우고 밧줄로
+ * 눌러 묶은 다음 누름돌과 뼈 가로대를 올렸다 — 소리를 내는 물건이 아니라 **소리를 먹는
+ * 물건**이다. 다리도 없앴다: drum 은 통나무 다리 셋으로 몸통을 띄워 울림통을 만들지만
+ * 이쪽은 돌 자리에 눌러앉혀 지면에 붙여 놨다. 둘이 같은 갈색 가죽 계열이라 실루엣
+ * (띄운 북 ↔ 눌러앉힌 통)과 정수리(북채 ↔ 덮개+관)로 갈라 놓는 것이 유일한 방법이다.
+ *
+ * 발광은 파일 머리 규칙 1 대로 둘로 나눈다 — 몸통에 새긴 홈은 **밝은 청록 버텍스 컬러로
+ * base 병합**, 진짜 발광은 덮개 위에 낮게 깔리는 잠재우기 파문(action + glowMat)만.
+ * 티어: T2 염료 쐐기 → T3 가죽 치마 + 뼈 이빨/부적 → T4 흑요석 가시 + 기표대 → T5 금테(색 교체) + 호박.
+ */
+function hushtotem(t: number): Parts {
+  const base: PartSpec[] = [];
+  groundRim(base, 0.58, t, EARTH_WET, C.stoneDark, C.stone);
+
+  // 돌 자리 — 다리 없이 지면에 눌러앉는다(울리지 않는다는 뜻이 여기서 진다)
+  base.push({
+    kind: 'cyl',
+    pos: [0, 0.11, 0],
+    scale: [0.92, 0.13, 0.92],
+    color: C.stoneDark,
+    seg: 8,
+    hueJitter: 0.025,
+  });
+
+  const r = 0.3 + t * 0.02;
+  const h = 0.36 + t * 0.028;
+  const bodyY = 0.17;
+  const topY = bodyY + h;
+
+  // 가죽 몸통 + 상하 테 (T5는 지오메트리 추가 없이 테만 금으로 바뀐다)
+  base.push(
+    { kind: 'cyl', pos: [0, bodyY + h / 2, 0], scale: [r * 2, h, r * 2], color: C.hideDark, seg: 8, hueJitter: 0.022 },
+    {
+      kind: 'cyl',
+      pos: [0, bodyY + 0.035, 0],
+      scale: [r * 2.12, 0.07, r * 2.12],
+      color: t >= 4 ? C.gold : C.bark,
+      seg: 8,
+    },
+    {
+      kind: 'cyl',
+      pos: [0, topY - 0.035, 0],
+      scale: [r * 2.14, 0.07, r * 2.14],
+      color: t >= 4 ? C.gold : C.bark,
+      seg: 8,
+    },
+  );
+  hideSeams(base, bodyY + h / 2, h * 0.82, r * 1.02, 4, C.hide);
+  // 결속 끈 — drum 의 지그재그보다 성글게(북처럼 팽팽히 조이지 않는다)
+  around(4, 0.4, (a, i) => {
+    base.push({
+      kind: 'box',
+      pos: [Math.cos(a) * r * 1.02, bodyY + h * 0.5, Math.sin(a) * r * 1.02],
+      rot: [0, -a, i % 2 === 0 ? 0.3 : -0.3],
+      scale: [0.03, h * 0.8, 0.03],
+      color: ROPE_D,
+    });
+  });
+  // 소리를 먹는 홈 — 몸통에 파인 세로 홈이 청록으로 조용히 빛난다 (병합 발광)
+  around(3 + Math.min(t, 3), 0.95, (a) => {
+    base.push({
+      kind: 'box',
+      pos: [Math.cos(a) * r * 1.03, bodyY + h * 0.52, Math.sin(a) * r * 1.03],
+      rot: [0, -a, 0],
+      scale: [0.045, h * 0.46, 0.06],
+      color: HUSH,
+    });
+  });
+
+  // 덮개 — 북면 위에 어두운 가죽을 한 겹 더 씌우고 밧줄로 눌러 묶었다
+  base.push(
+    {
+      kind: 'cyl',
+      pos: [0, topY + 0.025, 0],
+      scale: [r * 2.04, 0.05, r * 2.04],
+      color: MEMBRANE,
+      seg: 8,
+      hueJitter: 0.015,
+    },
+    {
+      kind: 'cyl',
+      pos: [0, topY + 0.07, 0],
+      scale: [r * 1.82, 0.06, r * 1.82],
+      color: HIDE_MUTE,
+      seg: 8,
+      hueJitter: 0.02,
+    },
+  );
+  ropeRing(base, 0, topY + 0.03, 0, r * 1.04, 5, 0.045, t >= 1 ? dye(t) : ROPE_D);
+  // 누름돌 + 뼈 가로대 — 가죽을 눌러 울림을 죽이는 부위. 이 셋이 "음소거"의 전부다
+  base.push(
+    { kind: 'ico', pos: [0, topY + 0.12, 0], rot: [0.4, 0.7, 0.2], scale: [0.3, 0.16, 0.3], color: C.stoneDark },
+    { kind: 'box', pos: [0, topY + 0.1, 0], rot: [0, 0.4, 0], scale: [r * 1.7, 0.05, 0.07], color: C.bone },
+    {
+      kind: 'box',
+      pos: [0, topY + 0.1, 0],
+      rot: [0, 0.4 + Math.PI / 2, 0],
+      scale: [r * 1.7, 0.05, 0.07],
+      color: C.boneDark,
+    },
+  );
+
+  // 조가비/뼈 관 — 반경의 표식. 티어마다 한 짝씩 늘고 실루엣이 옆으로 벌어진다
+  around(3 + Math.min(t, 3), 0.3, (a, i) => {
+    base.push({
+      kind: 'ico',
+      pos: [Math.cos(a) * r * 1.12, topY + 0.02 + (i % 2) * 0.04, Math.sin(a) * r * 1.12],
+      rot: [Math.sin(a) * 0.5, -a, -Math.cos(a) * 0.5],
+      scale: [0.16, 0.2, 0.09],
+      color: i % 2 === 0 ? SHELL : C.bone,
+    });
+  });
+
+  // T2 — 덮개 상면 염료 쐐기 (누름돌을 피해 바깥쪽에 둔다)
+  if (t >= 1) {
+    around(3, 0.6, (a) => {
+      base.push({
+        kind: 'box',
+        pos: [Math.cos(a) * r * 0.92, topY + 0.101, Math.sin(a) * r * 0.92],
+        rot: [0, -a, 0],
+        scale: [r * 0.8, 0.02, 0.07],
+        color: dye(t),
+      });
+    });
+  }
+  // T3 — 가죽 치마 한 단 + 관에 매단 뼈 이빨/부적 (흔들려도 소리가 안 나게 가죽에 붙여 맸다)
+  if (t >= 2) {
+    base.push({
+      kind: 'cyl',
+      pos: [0, bodyY + 0.02, 0],
+      scale: [r * 2.5, 0.14, r * 2.5],
+      color: C.hide,
+      seg: 8,
+      hueJitter: 0.02,
+    });
+    around(3, 1.1, (a) => {
+      base.push({
+        kind: 'cone',
+        pos: [Math.cos(a) * r * 1.16, topY - 0.07, Math.sin(a) * r * 1.16],
+        rot: [Math.sin(a) * 0.3, 0, Math.PI],
+        scale: [0.07, 0.2, 0.07],
+        color: C.bone,
+        seg: 4,
+      });
+    });
+    boneCharm(base, r * 1.1, topY - 0.12, -r * 0.5, 0.1);
+    boneCharm(base, -r * 1.1, topY - 0.08, r * 0.4, 0.09, 0.3);
+  }
+  // T4 — 관에서 솟은 흑요석 가시
+  if (t >= 3) {
+    around(4, 0.75, (a) => {
+      base.push({
+        kind: 'cone',
+        pos: [Math.cos(a) * r * 1.06, topY + 0.13, Math.sin(a) * r * 1.06],
+        rot: [Math.sin(a) * 0.42, 0, -Math.cos(a) * 0.42],
+        scale: [0.08, 0.3, 0.08],
+        color: OBSIDIAN,
+        seg: 4,
+      });
+    });
+  }
+  // T5 — 관에 박은 호박 (금테는 위 상하 테 색 교체가 이미 진다)
+  if (t >= 4) {
+    around(2, 1.15, (a, i) => {
+      base.push({
+        kind: 'ico',
+        pos: [Math.cos(a) * r * 1.2, topY + 0.06 + i * 0.03, Math.sin(a) * r * 1.2],
+        rot: [i * 1.2, i * 0.7, 0.3],
+        scale: 0.13,
+        color: AMBER,
+      });
+    });
+  }
+  // 기표대는 관 뒤쪽 가장자리에 세운다 — 정수리는 잠재우기 파문 자리라 비워 둔다
+  tierFinial(base, -r * 0.9, topY + 0.04, -r * 0.5, t, 0.72);
+
+  // 액션(발광): 잠재우기 파문 — 덮개 위에 **낮게 눌린** 청록 원반과 파문 조각.
+  // 불꽃(brazier)처럼 위로 솟으면 안 된다. 끄는 물건이라 실루엣이 납작해야 뜻이 맞는다.
+  const gs = 0.3 + t * 0.04;
+  const action: PartSpec[] = [
+    { kind: 'cyl', pos: [0, 0, 0], scale: [gs * 2.2, 0.035, gs * 2.2], color: HUSH, seg: 7 },
+    { kind: 'ico', pos: [0, 0.05, 0], rot: [0.3, 0.5, 0.2], scale: [gs * 1.25, gs * 0.5, gs * 1.25], color: HUSH_LIT },
+  ];
+  around(3 + Math.min(t, 2), 0.5, (a, i) => {
+    action.push({
+      kind: 'cone',
+      pos: [Math.cos(a) * gs * 1.25, 0.04 + (i % 2) * 0.05, Math.sin(a) * gs * 1.25],
+      rot: [Math.sin(a) * 1.3, 0, -Math.cos(a) * 1.3],
+      scale: [gs * 0.5, gs * 0.85, gs * 0.16],
+      color: i % 2 === 0 ? HUSH_LIT : HUSH,
+      seg: 4,
+    });
+  });
+  if (t >= 3) {
+    action.push({ kind: 'cyl', pos: [0, 0.1, 0], scale: [gs * 1.5, 0.03, gs * 1.5], color: HUSH_LIT, seg: 7 });
+  }
+  return { base, action, actionMat: 'glow', actionPivot: [0, topY + 0.24, 0] };
+}
+
+/**
+ * 연타 함정 — 땅에 박아 놓고 아주 짧은 간격으로 물어뜯는 덫. 회전 없음(base + flat action).
+ *
+ * 저장소에서 **가장 낮고 가장 넓은** 실루엣이다. 다른 타워가 위로 자라 등급을 알리는
+ * 자리에서 이쪽만 옆으로 자란다 — "덫은 땅에 있다"를 지키는 값이라 여기서만 티어 언어를
+ * 한 줄 어긴다: tierFinial(깃대)을 쓰지 않는다. 깃대를 세우는 순간 덫이 아니라 말뚝이
+ * 된다. T4 의 "실루엣이 위로 자란다"는 대신 **낮게 휜 표식 막대**와 이빨/돌조각의 증식으로
+ * 진다(높이는 T5 에서도 0.6 언저리 — 창 망루의 4분의 1이다).
+ *
+ * 발광 없음. 덫에는 빛나는 부위가 없다 — 규칙 2 는 "진짜 발광이 필요한 부위만" glow 로
+ * 그리라는 규칙이고, 이 타워의 답은 **하나도 없음**이다. 그래서 action 도 flat 으로 두고
+ * drum 과 같은 스프링 스쿼시 자리(윗턱)를 얹는다. 연타는 그 스쿼시의 주기로 읽힌다.
+ * 티어: T2 염료 무늬 → T3 뼈 이빨(색 교체) + 안쪽 이빨 한 줄 → T4 흑요석 파편 + 표식 막대 → T5 금테 + 호박 걸쇠.
+ */
+function rattletrap(t: number): Parts {
+  const base: PartSpec[] = [];
+  groundRim(base, 0.66, t, C.bark, C.rock, C.stoneDark);
+
+  // 파낸 구덩이 — 덫의 입. 어두운 바닥이 이빨의 대비를 만든다
+  base.push({ kind: 'cyl', pos: [0, 0.075, 0], scale: [0.9, 0.09, 0.9], color: EARTH_WET, seg: 8, hueJitter: 0.03 });
+
+  // 아래턱 이빨 — 안쪽으로 눕혀 박는다. 티어마다 한 개씩 늘고 T3부터 뼈가 된다
+  const teeth = 6 + Math.min(t, 3);
+  around(teeth, 0.2, (a, i) => {
+    base.push({
+      kind: 'cone',
+      pos: [Math.cos(a) * 0.42, 0.17, Math.sin(a) * 0.42],
+      rot: [-Math.sin(a) * 0.5, 0, Math.cos(a) * 0.5],
+      scale: [0.09, 0.3 + (i % 2) * 0.06, 0.09],
+      color: t >= 2 ? C.bone : C.woodDark,
+      seg: 4,
+      hueJitter: 0.02,
+    });
+  });
+
+  // 스프링 — 휘어 놓은 어린 나무 두 짝 + 밑동에 감은 힘줄 코일. 이게 "연타"의 기관이다
+  for (const sx of [1, -1] as const) {
+    base.push(
+      {
+        kind: 'cyl',
+        pos: [sx * 0.44, 0.26, 0],
+        rot: [0, 0, sx * 1.0],
+        scale: [0.1, 0.56, 0.1],
+        color: SPRING_WOOD,
+        seg: 5,
+        hueJitter: 0.02,
+      },
+      { kind: 'box', pos: [sx * 0.56, 0.11, 0], rot: [0, 0, sx * 0.35], scale: [0.1, 0.26, 0.1], color: C.woodDark },
+    );
+    ropeRing(base, sx * 0.44, 0.24, 0, 0.1, 4, 0.05, SINEW);
+  }
+
+  // 땅에 박은 말뚝 — 덫이 끌려가지 않게 네 귀를 박아 놨다
+  around(4, 0.8, (a, i) => {
+    base.push({
+      kind: 'cyl',
+      pos: [Math.cos(a) * 0.5, 0.14, Math.sin(a) * 0.5],
+      rot: [Math.sin(a) * 0.3, 0, -Math.cos(a) * 0.3],
+      scale: [0.1, 0.28 + (i % 2) * 0.06, 0.1],
+      color: C.woodDark,
+      seg: 4,
+      hueJitter: 0.02,
+    });
+  });
+
+  // 밟는 판 + 힘줄 격자 + 가운데 걸쇠 (T5는 걸쇠가 호박으로 바뀐다 — 지오메트리 추가 0)
+  base.push(
+    { kind: 'cyl', pos: [0, 0.13, 0], scale: [0.52, 0.06, 0.52], color: C.wood, seg: 7, hueJitter: 0.02 },
+    { kind: 'box', pos: [0, 0.165, 0], rot: [0, 0.35, 0], scale: [0.5, 0.03, 0.05], color: SINEW },
+    { kind: 'box', pos: [0, 0.165, 0], rot: [0, 0.35 + Math.PI / 2, 0], scale: [0.5, 0.03, 0.05], color: SINEW },
+    {
+      kind: 'ico',
+      pos: [0, 0.19, 0],
+      rot: [0.5, 0.4, 0.2],
+      scale: [0.15, 0.1, 0.15],
+      color: t >= 4 ? AMBER : C.stoneDark,
+    },
+  );
+
+  // 이빨 사이에 맨 돌 조각 — 티어마다 늘고, T4부터 셋 중 하나가 흑요석이 된다
+  around(3 + Math.min(t, 3), 0.75, (a, i) => {
+    base.push({
+      kind: 'ico',
+      pos: [Math.cos(a) * 0.56, 0.14 + (i % 2) * 0.05, Math.sin(a) * 0.56],
+      rot: [i * 1.3, i * 0.8, i * 0.5],
+      scale: [0.15, 0.12, 0.15],
+      color: t >= 3 && i % 3 === 1 ? OBSIDIAN : i % 2 === 0 ? C.rock : C.stoneDark,
+      hueJitter: 0.025,
+    });
+  });
+
+  // T2 — 밟는 판에 그린 부족 무늬
+  if (t >= 1) {
+    around(3, 0.5, (a) => {
+      base.push({
+        kind: 'box',
+        pos: [Math.cos(a) * 0.3, 0.162, Math.sin(a) * 0.3],
+        rot: [0, -a, 0],
+        scale: [0.2, 0.02, 0.06],
+        color: dye(t),
+      });
+    });
+  }
+  // T3 — 안쪽 뼈 이빨 한 줄. 윗턱과 엇갈려 물린다
+  if (t >= 2) {
+    around(4, 0.9, (a) => {
+      base.push({
+        kind: 'cone',
+        pos: [Math.cos(a) * 0.26, 0.18, Math.sin(a) * 0.26],
+        rot: [-Math.sin(a) * 0.32, 0, Math.cos(a) * 0.32],
+        scale: [0.07, 0.22, 0.07],
+        color: C.boneDark,
+        seg: 4,
+      });
+    });
+  }
+  // T4 — 낮게 휜 표식 막대. 깃대 대신 덫 위로 눕혀 걸었다
+  if (t >= 3) {
+    base.push(
+      { kind: 'cyl', pos: [-0.34, 0.34, -0.3], rot: [0.3, 0, 0.9], scale: [0.055, 0.62, 0.055], color: C.bark, seg: 5 },
+      { kind: 'box', pos: [-0.08, 0.48, -0.24], rot: [0, 0.5, 0.2], scale: [0.26, 0.16, 0.02], color: dye(t) },
+      {
+        kind: 'box',
+        pos: [-0.05, 0.39, -0.22],
+        rot: [0, 0.5, 0.2],
+        scale: [0.18, 0.07, 0.02],
+        color: t >= 4 ? C.gold : trim(t),
+      },
+    );
+  }
+  // T5 — 구덩이를 두른 금테
+  if (t >= 4) {
+    base.push({ kind: 'cyl', pos: [0, 0.12, 0], scale: [1.0, 0.045, 1.0], color: C.gold, seg: 8 });
+  }
+
+  // 액션: 윗턱 — 스프링에 물려 있다가 후려친다. 이빨은 아래를 향한다(rot z = π).
+  const jaw = 5 + Math.min(t, 3);
+  const action: PartSpec[] = [
+    { kind: 'cyl', pos: [0, 0.04, 0], scale: [0.66, 0.09, 0.66], color: C.woodDark, seg: 7, hueJitter: 0.02 },
+    { kind: 'box', pos: [0, 0.12, 0], rot: [0, 0.4, 0], scale: [0.62, 0.07, 0.1], color: C.wood },
+    { kind: 'ico', pos: [0, 0.2, 0], rot: [0.4, 0.6, 0.2], scale: [0.26, 0.16, 0.26], color: C.rock, hueJitter: 0.03 },
+  ];
+  around(jaw, 0.6, (a, i) => {
+    action.push({
+      kind: 'cone',
+      pos: [Math.cos(a) * 0.3, -0.07, Math.sin(a) * 0.3],
+      rot: [Math.sin(a) * 0.3, 0, Math.PI],
+      scale: [0.085, 0.26 + (i % 2) * 0.06, 0.085],
+      color: t >= 2 ? C.bone : C.woodDark,
+      seg: 4,
+    });
+  });
+  // T2부터 윗턱에 염료를 물들인 힘줄이 감긴다
+  if (t >= 1) ropeRing(action, 0, 0.06, 0, 0.34, 4, 0.045, dye(t));
+  return { base, action, actionPivot: [0, 0.3, 0] };
+}
+
+/**
+ * 충격 말뚝 — 땅에 박은 말뚝에 정전기가 흘러 적을 기절시킨다. 회전 없음(base + glow action).
+ *
+ * 번개 토템(lightning)과 **같은 축의 다른 물건**이라 형태로 먼저 갈라 놔야 한다:
+ *   lightning  쌓아 올린 단 + 해골 + 정수리의 큰 결정  = 넓고 층진 제단
+ *   shockstake 땅에 박은 말뚝 한 자루 + 감아 오른 힘줄 = 가늘고 곧은 한 줄
+ * 색도 갈랐다 — 토템의 시안(0x8fe6ff) 대신 보라를 섞은 정전기색(STATIC/SPARK)이다.
+ * 방전 자국은 규칙 1 대로 base 에 밝은 컬러로 병합하고, 촉 끝에서 튀는 방전만 glow 다.
+ *
+ * ⚠ flash(애디티브 셸)는 일부러 안 켰다 — 뷰(towerview)에서 셸을 켜 주는 자리가
+ *   lightning 케이스 하나뿐이라, 여기서 flash:true 를 주면 **영원히 안 보이는** 셸
+ *   인스턴스만 묶음에 하나 늘어난다. 뷰에 발사 케이스가 붙는 날 한 줄로 켜면 된다.
+ * 티어: T2 염료 띠 → T3 뼈 촉 + 두개골 + 코일 한 줄 → T4 흑요석 미늘 + 기표대 → T5 금테(색 교체) + 호박.
+ */
+function shockstake(t: number): Parts {
+  const base: PartSpec[] = [];
+  groundRim(base, 0.52, t, EARTH_WET, C.stoneDark, C.stone);
+
+  // 말뚝을 박느라 갈라진 땅 — 그 틈으로 정전기가 새어 나온다 (병합 발광)
+  around(3 + Math.min(t, 2), 0.35, (a, i) => {
+    base.push({
+      kind: 'box',
+      pos: [Math.cos(a) * 0.34, 0.105, Math.sin(a) * 0.34],
+      rot: [0, -a, 0],
+      scale: [0.34, 0.02, 0.05 + (i % 2) * 0.02],
+      color: STATIC,
+    });
+  });
+
+  // 말뚝 — 통나무 한 자루를 그대로 박았다. 티어마다 한 뼘씩 자란다
+  const hh = 0.86 + t * 0.1;
+  logPost(base, 0, 0, 0.08, hh, 0.115, C.wood, C.bark, 0, 2);
+  const tipY = 0.08 + hh;
+
+  // 촉 — 갈아 박은 돌(T3부터 뼈)을 힘줄로 감아 맸다
+  base.push({
+    kind: 'cone',
+    pos: [0, tipY + 0.16, 0],
+    scale: [0.2, 0.34, 0.2],
+    color: t >= 2 ? C.bone : C.stone,
+    seg: 6,
+    hueJitter: 0.02,
+  });
+  ropeRing(base, 0, tipY - 0.02, 0, 0.13, 4, 0.05, SINEW);
+
+  // 감아 오른 힘줄 — 이 타워의 기관. T3에 한 줄 는다
+  const coils = t >= 2 ? 3 : 2;
+  for (let i = 0; i < coils; i++) {
+    ropeRing(base, 0, 0.26 + i * (hh * 0.3), 0, 0.135, 5, 0.052, SINEW);
+  }
+
+  // 곁말뚝 — 본체를 버티는 짧은 말뚝 셋 (밑동을 넓혀 가는 실루엣이 안 넘어가 보이게)
+  around(3, 0.9, (a) => {
+    base.push(
+      {
+        kind: 'cyl',
+        pos: [Math.cos(a) * 0.3, 0.24, Math.sin(a) * 0.3],
+        rot: [Math.sin(a) * 0.42, 0, -Math.cos(a) * 0.42],
+        scale: [0.1, 0.5, 0.1],
+        color: C.woodDark,
+        seg: 4,
+        hueJitter: 0.02,
+      },
+      {
+        kind: 'cone',
+        pos: [Math.cos(a) * 0.4, 0.48, Math.sin(a) * 0.4],
+        rot: [Math.sin(a) * 0.42, 0, -Math.cos(a) * 0.42],
+        scale: [0.09, 0.18, 0.09],
+        color: t >= 2 ? C.boneDark : C.stone,
+        seg: 4,
+      },
+    );
+  });
+
+  // 방전 자국 — 말뚝을 타고 오르는 지그재그 (병합 발광). 티어마다 한 칸 더 오른다
+  const zig = 3 + Math.min(t, 3);
+  for (let i = 0; i < zig; i++) {
+    const a = i * 1.9;
+    base.push({
+      kind: 'box',
+      pos: [Math.cos(a) * 0.12, 0.3 + (i / zig) * (hh - 0.18), Math.sin(a) * 0.12],
+      rot: [0, -a, i % 2 === 0 ? 0.7 : -0.7],
+      scale: [0.05, 0.2, 0.05],
+      color: i % 2 === 0 ? STATIC : SPARK,
+    });
+  }
+
+  // 상단 도체 — 힘줄이 모이는 돌 목걸이(T5 금) + 갈래 (T4부터 흑요석)
+  base.push({
+    kind: 'cyl',
+    pos: [0, tipY - 0.06, 0],
+    scale: [0.3, 0.07, 0.3],
+    color: t >= 4 ? C.gold : C.stoneDark,
+    seg: 6,
+  });
+  for (const sx of [1, -1] as const) {
+    base.push({
+      kind: 'cone',
+      pos: [sx * 0.14, tipY + 0.08, 0],
+      rot: [0, 0, sx * -0.5],
+      scale: [0.07, 0.24, 0.07],
+      color: t >= 3 ? OBSIDIAN : C.boneDark,
+      seg: 4,
+    });
+  }
+
+  // T2 — 자루에 두른 염료 띠
+  if (t >= 1) {
+    around(3, 0.4, (a) => {
+      base.push({
+        kind: 'box',
+        pos: [Math.cos(a) * 0.125, 0.44, Math.sin(a) * 0.125],
+        rot: [0, -a, 0],
+        scale: [0.05, 0.14, 0.06],
+        color: dye(t),
+      });
+    });
+  }
+  // T3 — 밑동에 괴어 놓은 두개골 + 매단 부적
+  if (t >= 2) {
+    base.push(
+      { kind: 'ico', pos: [0.3, 0.2, 0.24], rot: [0.35, 0.7, 0.15], scale: [0.22, 0.2, 0.21], color: C.bone },
+      { kind: 'box', pos: [0.36, 0.13, 0.29], scale: [0.1, 0.07, 0.11], color: C.boneDark },
+    );
+    boneCharm(base, -0.17, 0.64, 0.14, 0.1);
+  }
+  // T4 — 자루에서 솟은 흑요석 미늘
+  if (t >= 3) {
+    around(4, 0.55, (a, i) => {
+      base.push({
+        kind: 'cone',
+        pos: [Math.cos(a) * 0.13, 0.5 + (i % 2) * 0.22, Math.sin(a) * 0.13],
+        rot: [Math.sin(a) * 0.9, 0, -Math.cos(a) * 0.9],
+        scale: [0.07, 0.24, 0.07],
+        color: OBSIDIAN,
+        seg: 4,
+      });
+    });
+  }
+  // T5 — 도체 아래 박은 호박 (금테는 위 목걸이 색 교체가 이미 진다)
+  if (t >= 4) {
+    base.push({ kind: 'ico', pos: [0, tipY - 0.16, 0.17], rot: [0.4, 0.5, 0.2], scale: 0.13, color: AMBER });
+  }
+  // 기표대는 곁에 세운다 — 정수리는 방전 자리라 깃발을 얹을 수 없다
+  tierFinial(base, -0.36, 0.1, 0.26, t, 0.7);
+
+  // 액션(발광): 촉에서 튀는 방전 — 심지 하나 + 지그재그 갈래 + 사방으로 튄 불꽃.
+  // 위로 솟는 불꽃(brazier)과 달리 **옆으로 튄다**. 기절은 퍼지는 그림이라야 읽힌다.
+  const es = 0.2 + t * 0.035;
+  const action: PartSpec[] = [
+    { kind: 'ico', pos: [0, 0, 0], rot: [0.3, 0.6, 0.2], scale: [es * 1.1, es * 1.5, es * 1.1], color: SPARK },
+  ];
+  around(3 + Math.min(t, 2), 0.4, (a, i) => {
+    action.push({
+      kind: 'box',
+      pos: [Math.cos(a) * es * 1.1, es * (0.1 + (i % 2) * 0.5), Math.sin(a) * es * 1.1],
+      rot: [0, -a, i % 2 === 0 ? 0.9 : -0.9],
+      scale: [0.045, es * 1.6, 0.045],
+      color: STATIC,
+    });
+  });
+  around(3, 1.25, (a, i) => {
+    action.push({
+      kind: 'cone',
+      pos: [Math.cos(a) * es * 1.9, es * (-0.2 + (i % 2) * 0.7), Math.sin(a) * es * 1.9],
+      rot: [Math.sin(a) * 1.35, 0, -Math.cos(a) * 1.35],
+      scale: [es * 0.3, es * 1.1, es * 0.3],
+      color: SPARK,
+      seg: 4,
+    });
+  });
+  if (t >= 3) {
+    action.push({ kind: 'cone', pos: [0, es * 1.5, 0], rot: [0.1, 0.4, 0.08], scale: [es * 0.55, es * 1.2, es * 0.55], color: SPARK, seg: 5 });
+  }
+  return { base, action, actionMat: 'glow', actionPivot: [0, tipY + 0.34, 0] };
+}
+
 const BUILDERS: Record<TowerId, (t: number) => Parts> = {
   spear,
   catapult,
@@ -1488,6 +2062,9 @@ const BUILDERS: Record<TowerId, (t: number) => Parts> = {
   poison,
   ballista,
   drum,
+  hushtotem,
+  rattletrap,
+  shockstake,
 };
 
 /** 캐시된 타워 모델. tier = 0~4 */
