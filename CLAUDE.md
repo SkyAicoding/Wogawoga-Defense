@@ -1,4 +1,4 @@
-# Age of Dinosaurs (공룡의 시대)
+# Age of Wogawoga (와가와가의 시대)
 
 원시시대 3D 타워디펜스. Vite + TypeScript(strict) + Three.js, 광고·결제·서버 없음.
 그래픽은 **전부 코드 프로시저럴**이고 런타임 의존성은 three 하나뿐이다.

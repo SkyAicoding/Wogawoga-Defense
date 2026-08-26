@@ -5,13 +5,12 @@
 export const ko: Record<string, string> = {
   // 로비 상단 띠에 쓰는 이름 — 한국어 화면에는 한국어 이름을 쓴다.
   // 타이틀 화면의 큰 로고는 아래 title.logo* 이고 그쪽은 **브랜드라 두 언어가 같다**.
-  'app.name': '공룡의 시대',
+  'app.name': '와가와가의 시대',
 
   // 타이틀 로고 두 줄 — 고유명사라 ko/en 이 같은 글자다 (Age of Empires 의 로고 구조).
-  // ⚠ 부족 이름 '와가와가'는 안 없앤다 — stage.1.name 에 그대로 살아 있고,
-  //    흔한 제목에 고유한 얼굴을 붙이는 자리다.
+  // 제목이 곧 부족 이름이다 — stage.1.name('와가와가 초원')과 같은 고유명사를 쓴다.
   'title.logoTop': 'AGE OF',
-  'title.logoBottom': 'DINOSAURS',
+  'title.logoBottom': 'WOGAWOGA',
   'title.tapToStart': '탭하여 시작',
   'title.version': 'v{v}',
 

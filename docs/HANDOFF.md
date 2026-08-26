@@ -30,7 +30,7 @@
 ## 1. 지금 어디까지 됐나
 
 **배포 중**: https://skyaicoding.github.io/Wogawoga-Defense/
-**게임 이름**: Age of Dinosaurs (공룡의 시대)
+**게임 이름**: Age of Wogawoga (와가와가의 시대)
 
 ### 문간 공성 라운드 — 무엇이었나
 사용자 요구: "보스 말고 나머지 공룡·적 부족도 마을 앞에서 멈춰 서로 때린다."
