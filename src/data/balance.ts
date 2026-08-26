@@ -1326,11 +1326,14 @@ export const ENDLESS_UNLOCK_STAGE = 3;
  *  shield 앞의 N타를 통째로 버린다 — 타워 선택이 아니라 발사 횟수를 바꾼다.
  *  armor  타격 크기를 벌한다 — 연사/한 방의 서열을 뒤집는다.
  *  heal   처치 순서를 바꾼다(먼저 잡을 것).
+ *  purge  상태이상을 벗긴다 — **heal 뒤에 둔다.** 주술사는 둘 다 가졌는데 칩은 [0] 하나만
+ *         그리므로, 앞에 두면 "먼저 잡을 것"이라는 이미 학습된 뜻이 화면에서 사라진다.
+ *         정화는 상세(trait.purge.desc)와 배지 목록에서 보인다.
  *  raid   내 타워가 표적이 된다 — 배치 거리를 바꾼다.
  *  enrage 마지막 40%만 빨라진다 — 답을 바꾸지는 않는다.
  */
 export const TRAIT_PRIORITY: readonly TraitTag[] = [
-  'air', 'shield', 'armor', 'hide', 'splash', 'heal', 'raid', 'enrage',
+  'air', 'shield', 'armor', 'hide', 'splash', 'heal', 'purge', 'raid', 'enrage',
 ];
 
 /**
@@ -1347,6 +1350,7 @@ export function enemyTraitsOf(def: EnemyDef): TraitTag[] {
   if (def.hide !== undefined) out.push('hide');
   if (def.splashResist !== undefined) out.push('splash');
   if (def.healAura) out.push('heal');
+  if (def.purge) out.push('purge');
   if (def.towerAttack) out.push('raid');
   if (def.enrage) out.push('enrage');
   // 우선순위 정렬 — [0]이 칩에 그릴 배지 하나다

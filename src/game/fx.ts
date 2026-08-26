@@ -1103,6 +1103,18 @@ export class FxRouter {
           void STATUS_COLOR[ev.kind];
           break;
         }
+        /*
+         * 정화가 상태이상을 벗겼다 — **회복(healAura)과 달리 반드시 보여야 한다.**
+         * 안 보이면 "얼렸는데 왜 안 느려지지?"가 되고, 주술사를 먼저 잡아야 한다는
+         * 답이 영영 학습되지 않는다. 이 축의 존재 이유가 가독성이다(types.ts statusPurged).
+         * 연출은 statusApplied 와 **같은 플래시**를 쓰되 그쪽이 "걸렸다"를 말하는 자리라
+         * 여기서는 벗겨진 상태의 색을 참조해 둔다 — 전용 파티클은 다음 단계 몫이다.
+         */
+        case 'statusPurged': {
+          this.stage3d.enemies.setHitFlash(ev.enemyId);
+          void STATUS_COLOR[ev.kind];
+          break;
+        }
         case 'enemyLeaked': {
           // 마을 안으로 들어가 사라진 적 — 사망(enemyDied)을 거치지 않으므로 여기서 지운다.
           // 안 지우면 표가 판 전체의 누적 스폰 수만큼 자란다.

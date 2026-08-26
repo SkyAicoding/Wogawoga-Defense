@@ -90,8 +90,9 @@ describe('enemyTraitsOf — 기존 필드만으로 유도한다', () => {
     expect(enemyTraitsOf(ENEMY_DEFS.warrior)).toEqual(['shield', 'raid']);
     // lancer = 장갑 + 습격 → 장갑이 앞
     expect(enemyTraitsOf(ENEMY_DEFS.lancer)).toEqual(['armor', 'raid']);
-    // shaman = 치유만
-    expect(enemyTraitsOf(ENEMY_DEFS.shaman)).toEqual(['heal']);
+    // shaman = 치유 + 정화 → **치유가 앞**. 칩은 [0] 하나만 그리므로, 정화를 앞에 두면
+    // "먼저 잡을 것"이라는 이미 학습된 뜻이 화면에서 사라진다 (balance.TRAIT_PRIORITY 주석).
+    expect(enemyTraitsOf(ENEMY_DEFS.shaman)).toEqual(['heal', 'purge']);
   });
 
   it('16종 전부: 태그가 실제 필드와 1:1로 대응한다 (새 필드를 만들지 않았다는 증거)', () => {
@@ -103,6 +104,9 @@ describe('enemyTraitsOf — 기존 필드만으로 유도한다', () => {
       expect(tags.includes('splash')).toBe(d.splashResist !== undefined);
       expect(tags.includes('shield')).toBe((d.shieldHits ?? 0) > 0);
       expect(tags.includes('heal')).toBe(!!d.healAura);
+      // ⚠ 새 태그를 더하고 이 줄을 안 더하면 **새 태그만 검사 밖에 남는다** —
+      //   이 it 의 이름이 '1:1로 대응한다'인데 잣대가 그것보다 좁아지는 정확히 그 병이다.
+      expect(tags.includes('purge')).toBe(!!d.purge);
       expect(tags.includes('raid')).toBe(!!d.towerAttack);
       expect(tags.includes('enrage')).toBe(!!d.enrage);
       // 우선순위 정렬 확인

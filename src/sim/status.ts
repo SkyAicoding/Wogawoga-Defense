@@ -134,6 +134,65 @@ export function tickEnemyStatuses(ctx: SimCtx, e: EnemySim): void {
 }
 
 /**
+ * **재충전형 방패** — 매 틱 호출(`EnemyDef.shieldRecharge`).
+ *
+ * 규칙: 잔량이 최대 미만이면 카운트다운이 돌고, 0에 닿으면 **1장** 회복하고 재장전한다.
+ * 상한은 `def.shieldHits`. 곧 긴 교전에서 이 적은 `shieldRecharge` 틱마다 정확히 한 발을
+ * 무효화하므로 차단율 = **발사 간격 ÷ 재충전**이다 (types.ts 의 유도·역산 참조).
+ *
+ * ⚠ `ctx.rng` 를 **쓰지 않는다.** rng 스트림을 한 칸도 안 밀어야 이 변경이 없는 판
+ * (스테이지1 — warrior 가 없다)의 봉투가 비트 단위로 같게 유지된다.
+ */
+export function tickShields(ctx: SimCtx, e: EnemySim): void {
+  const rate = e.def.shieldRecharge;
+  if (rate === undefined) return;
+  const max = e.def.shieldHits ?? 0;
+  if (e.shieldHitsLeft >= max) {
+    // 가득 차 있으면 타이머는 안 돈다 — 다음에 깎이는 순간 rate 부터 새로 센다
+    e.shieldRechargeLeft = 0;
+    return;
+  }
+  if (e.shieldRechargeLeft <= 0) e.shieldRechargeLeft = rate;
+  e.shieldRechargeLeft--;
+  if (e.shieldRechargeLeft <= 0) {
+    e.shieldHitsLeft++;
+    e.shieldRechargeLeft = e.shieldHitsLeft >= max ? 0 : rate;
+  }
+}
+
+/**
+ * **정화 오라** ✧ — STATUS_TICK_INTERVAL 경계마다 호출(`EnemyDef.purge`).
+ * `processHealAuras` 의 이중 루프를 그대로 따른다 — 반경/alive/스턴/자기 제외까지 같다.
+ *
+ * 벗기는 스택은 `statuses[0]` = **가장 오래 걸린 것**부터다. 근거는 types.ts 의 purge 주석.
+ * stun 을 벗길 때는 만료와 **똑같이** 보스 면역을 건다 — 안 그러면 적 편 능력인 정화가
+ * 보스를 즉시 재스턴 가능하게 만들어 플레이어를 돕는다.
+ */
+export function processPurgeAuras(ctx: SimCtx): void {
+  const items = ctx.world.enemies.items;
+  for (let i = 0; i < items.length; i++) {
+    const caster = items[i] as EnemySim;
+    if (!caster.alive) continue;
+    const aura = caster.def.purge;
+    if (!aura || isStunned(caster)) continue;
+    const r2 = aura.radius * aura.radius;
+    for (let j = 0; j < items.length; j++) {
+      if (j === i) continue;
+      const ally = items[j] as EnemySim;
+      if (!ally.alive || ally.statuses.length === 0) continue;
+      if (dist2(caster.x, caster.z, ally.x, ally.z) > r2) continue;
+      for (let k = 0; k < aura.stacksPerTick && ally.statuses.length > 0; k++) {
+        const s = ally.statuses.shift() as StatusInstance;
+        if (s.kind === 'stun' && ally.def.boss) {
+          ally.stunImmuneUntil = ctx.view.tick + BOSS_STUN_IMMUNE_TICKS;
+        }
+        ctx.events.push({ type: 'statusPurged', enemyId: ally.id, kind: s.kind });
+      }
+    }
+  }
+}
+
+/**
  * 주술사 힐 오라 — STATUS_TICK_INTERVAL 경계마다 호출. 회복은 이벤트 없이 hp만 (자신 제외).
  * 회복량은 시전자의 hpMul로 스케일 — 중후반 웨이브에서도 힐러 메커니크가 유효하다.
  */

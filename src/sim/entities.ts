@@ -79,6 +79,14 @@ export interface EnemySim extends EnemyState {
    * 스폰의 `bounty` 자체를 정수로 굳혀 둔 것(`waves.spawn`)과 같은 이유다.
    */
   bountyPaid: number;
+  /**
+   * **재충전형 방패**(`EnemyDef.shieldRecharge`)의 남은 틱수. 0이면 안 돌고 있다.
+   *
+   * 공개 `EnemyState`에 안 올린다: 렌더가 `shieldHitsLeft`조차 안 읽는다(src/render 0건).
+   * `siegeWalkLeft`·`bountyChunks`가 세운 "판정 전용 상태는 공개 안 한다" 규약과 같은
+   * 자리다 — 여기 두면 UI가 재충전 게이지를 그리려 들고, 그 순간 연출이 판정을 흉내 낸다.
+   */
+  shieldRechargeLeft: number;
 }
 
 /**
@@ -129,6 +137,7 @@ function makeEnemy(): EnemySim {
     siegeWalkLeft: 0,
     bountyChunks: 1,
     bountyPaid: 0,
+    shieldRechargeLeft: 0,
   };
 }
 
@@ -138,6 +147,11 @@ function resetEnemy(e: EnemySim): void {
   e.stunImmuneUntil = -1;
   e.dist = 0;
   e.shieldHitsLeft = 0;
+  // ⚠ 재충전 타이머도 반드시 여기서 0으로 못 박는다 — 안 그러면 풀 재사용 때 이전
+  //   개체의 타이머를 물려받아 "스폰 첫 틱에 방패가 되돌아오는" 개체가 생기고, 시드마다
+  //   결과가 갈린다. tsc 가 **절대 못 잡는 자리**이고 이 저장소가 gateOwed·bountyPaid 로
+  //   두 번 당한 사고와 정확히 같은 모양이다.
+  e.shieldRechargeLeft = 0;
   // 풀 재사용 시 이전 개체의 공성 상태가 새어 나가면 결정론이 깨진다
   e.attackCdLeft = 0;
   e.towerTargetId = -1;

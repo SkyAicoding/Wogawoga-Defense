@@ -23,7 +23,7 @@
  * prep: 웨이브1 전 150틱, 이후 90틱. callWave 스킵 시 남은틱×0.15 골드(내림).
  * three/DOM 임포트 금지 — @/data/types + @/core/* 만 사용.
  */
-import { TICK_DT, STATUS_TICK_INTERVAL } from '@/data/types';
+import { TICK_DT, STATUS_KIND_ORDER, STATUS_TICK_INTERVAL } from '@/data/types';
 import type {
   AllyId,
   BattleCommand,
@@ -86,7 +86,13 @@ import {
   sweepDestroyedTowers,
   updateSiege,
 } from './siege';
-import { effectiveSpeed, processHealAuras, tickEnemyStatuses } from './status';
+import {
+  effectiveSpeed,
+  processHealAuras,
+  processPurgeAuras,
+  tickEnemyStatuses,
+  tickShields,
+} from './status';
 import { WaveSpawner } from './waves';
 
 const PREP_TICKS_FIRST = 150;
@@ -238,9 +244,25 @@ class Battle implements BattleSim {
     const enemies = ctx.world.enemies.items;
     for (let i = enemies.length - 1; i >= 0; i--) {
       const e = enemies[i] as EnemySim;
-      if (e.alive) tickEnemyStatuses(ctx, e);
+      if (e.alive) {
+        tickEnemyStatuses(ctx, e);
+        // 재충전형 방패는 **매 틱** 센다 — 15틱 경계로 올리면 차단율이 재충전 값이
+        // 아니라 경계 간격에 딸리게 되어 types.ts 의 유도가 깨진다
+        tickShields(ctx, e);
+      }
     }
-    if (v.tick % STATUS_TICK_INTERVAL === 0) processHealAuras(ctx);
+    if (v.tick % STATUS_TICK_INTERVAL === 0) {
+      /*
+       * ⚠ **순서를 못 박는다: 힐이 먼저, 정화가 나중.**
+       * 같은 15틱 경계에 두 오라가 붙으므로 순서가 결과를 바꾼다. 이 틱의 DoT 는 위
+       * 5단계에서 이미 적용된 뒤이므로, 정화를 나중에 두면 "이번 틱의 DoT 는 들어가고
+       * 다음 틱부터 빠진다" 가 되어 벗기는 값이 정확히 한 주기분이다. 정화를 먼저 두면
+       * 같은 스택이 이번 틱 피해를 넣고도 사라져 한 주기가 공짜가 된다.
+       * 순서를 안 적으면 다음 사람이 뒤집고 아무도 모른다.
+       */
+      processHealAuras(ctx);
+      processPurgeAuras(ctx);
+    }
     // 6) 버프 재계산 (5틱마다)
     if (v.tick % BUFF_INTERVAL === 0) recomputeBuffs(ctx);
     // 7) 타워 조준/발사 → 홈타운 조준/발사 (사수는 같은 스냅샷에서 함께 쏜다)
@@ -557,6 +579,29 @@ class Battle implements BattleSim {
       h = mix(h, Math.round(e.x * 1000));
       h = mix(h, Math.round(e.z * 1000));
       h = mix(h, e.hp);
+      /*
+       * 방패 둘 — **hp 에서 유도되지 않는다.** 방패에 막힌 타격은 피해가 **0** 이라
+       * hp 가 한 자리도 안 움직인다. 곧 hp 가 같은 두 개체가 잔량이 다를 수 있고,
+       * 그 둘의 미래는 통째로 다르다 (gateOwed·bountyPaid 와 정확히 같은 논거).
+       * ⚠ `shieldHitsLeft` 는 원래부터 여기 없었다 — 재충전(2라운드 2-b)이 들어오기
+       *   전에도 누락이었고, 새 필드만 접으면 "언제 회복하나"는 잡고 "지금 몇 장인가"는
+       *   못 잡는다. 둘 다 접어야 이 해시가 방패 회귀를 실제로 잡는다.
+       * 풀 재사용 리셋 누락(resetEnemy)도 여기서만 그 틱에 드러난다.
+       */
+      h = mix(h, e.shieldHitsLeft);
+      h = mix(h, e.shieldRechargeLeft);
+      /*
+       * 상태이상 — 정화(purge)가 들어오면서 **"어느 스택을 벗겼나"가 판정에 되먹임되는
+       * 새 상태**가 생겼다. 그 차이는 hp·속도로 발산할 때까지 몇 주기가 걸리므로,
+       * 접지 않으면 해시가 정화 회귀를 한참 뒤에나 본다.
+       * kind 는 문자열이라 그대로 못 접는다 — `STATUS_KIND_ORDER` 인덱스로 바꾼다.
+       */
+      for (const s of e.statuses) {
+        h = mix(h, STATUS_KIND_ORDER.indexOf(s.kind));
+        h = mix(h, s.remainingTicks);
+        h = mix(h, Math.round(s.magnitude * 1000));
+        h = mix(h, s.acc);
+      }
       // 공성 상태 — 이게 빠지면 "언제 누구를 때리는가"의 발산을 해시가 못 잡는다
       h = mix(h, e.attackCdLeft);
       h = mix(h, e.towerTargetId);

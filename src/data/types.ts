@@ -84,6 +84,14 @@ export type HometownSourceId = 'hometown';
 
 export type BiomeId = 'grassland' | 'jungle' | 'desert' | 'snow' | 'swamp' | 'volcano';
 export type StatusKind = 'slow' | 'burn' | 'poison' | 'stun';
+/**
+ * `StatusKind` 의 **고정 순서** — `battle.hash()` 가 상태이상을 접을 때 kind 를 숫자로
+ * 바꾸는 데 쓴다. 문자열을 그대로 접을 수 없어서다.
+ * ⚠ 이 배열의 **순서를 바꾸면 해시가 바뀐다.** 결정론 테스트는 같은 시드 두 판을 비교할
+ *   뿐이라(골든 해시가 없다) 순서 변경 자체는 안 잡히지만, 원소를 **빠뜨리면**
+ *   indexOf 가 −1 이 되어 서로 다른 두 상태가 같은 값으로 접힌다. 아래 두 줄이 같이 산다.
+ */
+export const STATUS_KIND_ORDER: readonly StatusKind[] = ['slow', 'burn', 'poison', 'stun'];
 export type TargetingMode = 'first' | 'last' | 'strongest' | 'nearest';
 export type AttackKind = 'homing' | 'ballistic' | 'beam' | 'pulse' | 'aura';
 
@@ -230,6 +238,24 @@ export interface EnemyDef {
   /** 방패: 피해 무시 횟수 */
   shieldHits?: number;
   /**
+   * **재충전형 방패** 🔶 — 방패가 깎였을 때 이 틱수마다 **1장** 되돌아온다.
+   * 생략하면 재충전 없음(= 지금까지의 동작: 한 번 벗기면 끝).
+   *
+   * ⚠ **차단율의 차원이 "타격 크기"가 아니라 "발사 간격"이다.** 잔량이 최대 미만이면
+   * 언제나 카운트다운이 돌므로, 긴 교전에서 이 적은 `shieldRecharge` 틱마다 정확히
+   * 한 발을 무효화한다. 곧 차단율 = **발사 간격 ÷ 재충전**이고, 이것이
+   * docs/counter-plan.md (B) 표의 유도다 — 그 표를 역산해 확인했다:
+   *   창던지기 T3 13틱 ÷ 75 = 0.173 → 배율 0.827 ≒ 표의 **0.83**
+   *   상아 발리스타 T3 56틱 ÷ 75 = 0.747 → 배율 0.253 ≒ 표의 **0.25**
+   * 두 칸이 소수 둘째 자리까지 맞는다.
+   *
+   * ⚠ "**소진된 뒤**(잔량 0)에만 카운트다운"으로 읽으면 위 표가 재현되지 않는다.
+   *   그리고 "잔량이 최대 미만이면 항상"이 방패를 상시 유지시킨다는 걱정도 성립하지
+   *   않는다 — 빠른 타워 앞에서는 소모가 회복보다 빨라 잔량이 대부분 0이다.
+   *   티어로는 못 빠져나간다: 쿨다운은 티어당 45→40틱뿐이다.
+   */
+  shieldRecharge?: number;
+  /**
    * **가죽** 🟫 — 한 번의 damageEnemy가 넣을 수 있는 최대치 = `round(maxHp × hide)` (0~1).
    *
    * `armor`의 정확한 거울이다: armor가 "유효한 최소 **타격 크기**"를 못 박는다면 hide는
@@ -283,6 +309,21 @@ export interface EnemyDef {
   enrage?: { hpPct: number; speedMul: number };
   /** 주변 힐: 반경 내 아군에게 0.5초마다 회복 */
   healAura?: { radius: number; hpPerStatusTick: number };
+  /**
+   * **정화** ✧ — `STATUS_TICK_INTERVAL`(15틱)마다 반경 내 **다른** 적에게서
+   * 상태이상 스택을 `stacksPerTick`개 벗긴다. 상태이상에 기대는 답을 벌한다.
+   *
+   * 확정한 세부 규칙(사양에 없어 여기서 못 박는다 — 없으면 구현자마다 답이 갈린다):
+   *  · **어느 스택**: `statuses[0]` = **가장 오래 걸린 것**부터. 결정적이어야 하고
+   *    (src/sim 에서 Math.random 금지) 만료가 임박한 것부터라 새 축을 가장 약하게 들인다.
+   *    더 가혹한 변형(가장 최근 것 / 남은 지속이 가장 긴 것)은 한 줄 차이다 — 밸런스다.
+   *  · **시전자 자신**: 제외. `processHealAuras`의 `if (j === i) continue`와 대칭이고,
+   *    주술사 본인은 여전히 얼려서 잡을 수 있어 대응이 남는다.
+   *  · **보스 스턴 면역**: 정화가 stun 스택을 벗길 때도 만료와 **똑같이** 면역을 건다.
+   *    안 그러면 보스가 "면역 없이 즉시 다시 스턴 가능"이 되어 정화가 플레이어에게
+   *    유리해진다 — 적 편 능력이 플레이어를 돕는 것은 뜻이 뒤집힌 것이다.
+   */
+  purge?: { radius: number; stacksPerTick: number };
   /** 타워 공격 능력 (없으면 타워를 무시하고 기지로 직행) */
   towerAttack?: TowerAttackSpec;
   /**
@@ -535,6 +576,7 @@ export type TraitTag =
   | 'hide' // 가죽 — hide (타격당 상한 → **큰 한 방**을 벌한다. armor의 거울)
   | 'splash' // 흩어짐 — splashResist (폭발 부가 피해만 깎는다)
   | 'heal' // 치유 — healAura (주변을 되살린다)
+  | 'purge' // 정화 — purge (반경 내 상태이상을 벗긴다)
   | 'raid' // 습격 — towerAttack (기지가 아니라 내 타워를 부순다)
   | 'enrage'; // 격노 — enrage (저체력에서 빨라진다)
 
@@ -1632,6 +1674,12 @@ export type SimEvent =
       chunks: number;
     }
   | { type: 'statusApplied'; enemyId: number; kind: StatusKind }
+  /**
+   * 정화가 상태이상을 벗겼다 (`EnemyDef.purge`). **연출이 필요해서 내는 이벤트다** —
+   * 회복(healAura)은 이벤트 없이 hp만 올리지만, 정화는 화면에 안 보이면
+   * "주술사를 먼저 잡아라"가 영영 학습되지 않는다. 이 축의 존재 이유가 가독성이다.
+   */
+  | { type: 'statusPurged'; enemyId: number; kind: StatusKind }
   | { type: 'baseDamaged'; amount: number; hpLeft: number }
   | { type: 'goldChanged'; gold: number; delta: number }
   | { type: 'handChanged' }

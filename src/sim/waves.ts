@@ -100,6 +100,8 @@ export class WaveSpawner {
     // 공성 피해는 **무한 모드 초과분만** 따라간다 (정규 웨이브에서는 항상 1)
     e.siegeMul = this.extraHpMul;
     e.shieldHitsLeft = def.shieldHits ?? 0;
+    // resetEnemy 가 이미 0으로 못 박지만 여기서도 명시한다 (shieldHitsLeft·attackCdLeft 와 같은 관행)
+    e.shieldRechargeLeft = 0;
     e.dist = 0;
     e.pathIndex = g.pathIndex;
     e.flying = def.flying;

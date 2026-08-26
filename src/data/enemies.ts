@@ -227,8 +227,11 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     hp: 120,
     speed: 1.0,
     armor: 0,
-    // 방패 — 첫 3회 피격 무시
-    shieldHits: 3,
+    // 방패 — 앞의 **2회** 피격을 통째로 무시하고, 깎이면 75틱(2.5초)마다 1장씩 되돌아온다.
+    // ⚠ 주석과 값이 어긋나면 이 저장소가 세 번 당한 병(적힌 것과 도는 것이 다르다)의
+    //   재발이다. 3 → 2 는 난이도를 내리고 재충전은 올린다 — 순증감은 실측으로 가른다.
+    shieldHits: 2,
+    shieldRecharge: 75,
     flying: false,
     bounty: 24,
     baseDamage: 1,
@@ -305,6 +308,9 @@ export const ENEMY_DEFS: Record<EnemyId, EnemyDef> = {
     // 주변 힐 — 반경 2, 0.5초마다 hpPerStatusTick × 시전자 hpMul 회복 (자신 제외).
     // hpMul 스케일 덕에 중후반 웨이브에서도 힐러 메커니크가 유효하다 (sim/status.ts).
     healAura: { radius: 2, hpPerStatusTick: 8 },
+    // 정화 ✧ — 15틱마다 반경 2 안의 **다른** 적에게서 상태이상 스택 1개를 벗긴다.
+    // 규칙(어느 스택·자기 제외·보스 스턴 면역)은 types.ts 의 purge 주석이 못 박는다.
+    purge: { radius: 2, stacksPerTick: 1 },
     cost: 30,
   },
   // --- 부족 습격대 ---------------------------------------------------------

@@ -9,8 +9,10 @@ import {
   effectiveSpeed,
   isStunned,
   processHealAuras,
+  processPurgeAuras,
   slowFactor,
   tickEnemyStatuses,
+  tickShields,
   tryApplyStatus,
 } from '@/sim/status';
 import { enemyDef, options } from './fixtures';
@@ -212,6 +214,91 @@ describe('status', () => {
     expect(far.hp).toBe(4); // 반경 밖
     expect(healer.hp).toBe(5); // 자신 제외
     expect(ctx.events.filter((e) => e.type === 'enemyDamaged')).toHaveLength(0); // 음수 이벤트 금지
+  });
+
+  /*
+   * ── 정화 ✧ (counter-plan 단계 6) ───────────────────────────────────────
+   * 규칙의 근거는 types.ts 의 `EnemyDef.purge` 주석이다. 여기서 잠그는 것은 네 가지:
+   * 반경 · 자기 제외 · **가장 오래된 스택부터** · 보스 스턴 면역.
+   */
+  it('purge — 반경 안의 다른 적에게서 스택을 벗기고, 자신과 반경 밖은 안 건드린다', () => {
+    const ctx = miniCtx();
+    const caster = spawn(ctx, enemyDef('shaman', { hp: 10, purge: { radius: 2, stacksPerTick: 1 } }));
+    const near = spawn(ctx, enemyDef('raptor', { hp: 10 }), { x: 1 });
+    const far = spawn(ctx, enemyDef('raptor', { hp: 10 }), { x: 5 });
+    for (const e of [caster, near, far]) {
+      tryApplyStatus(ctx, e, { kind: 'slow', magnitude: 0.5, durationTicks: 300, chance: 1 });
+    }
+    expect(caster.statuses).toHaveLength(1);
+    processPurgeAuras(ctx);
+    expect(near.statuses, '반경 안 — 벗겨진다').toHaveLength(0);
+    expect(far.statuses, '반경 밖 — 그대로').toHaveLength(1);
+    expect(caster.statuses, '시전자 자신은 제외 (healAura 와 대칭)').toHaveLength(1);
+    expect(ctx.events.filter((e) => e.type === 'statusPurged')).toHaveLength(1);
+  });
+
+  it('purge — 한 번에 stacksPerTick 개만, **가장 오래 걸린 것부터** 벗긴다', () => {
+    const ctx = miniCtx();
+    spawn(ctx, enemyDef('shaman', { hp: 10, purge: { radius: 2, stacksPerTick: 1 } }));
+    const victim = spawn(ctx, enemyDef('raptor', { hp: 10 }), { x: 1 });
+    // 적용 순서: slow → burn → poison. statuses 는 적용 순서 배열이다.
+    tryApplyStatus(ctx, victim, { kind: 'slow', magnitude: 0.5, durationTicks: 300, chance: 1 });
+    tryApplyStatus(ctx, victim, { kind: 'burn', magnitude: 3, durationTicks: 300, chance: 1 }, 1);
+    tryApplyStatus(ctx, victim, { kind: 'poison', magnitude: 3, durationTicks: 300, chance: 1 }, 2);
+    expect(victim.statuses.map((x) => x.kind)).toEqual(['slow', 'burn', 'poison']);
+    processPurgeAuras(ctx);
+    expect(victim.statuses.map((x) => x.kind), '가장 오래된 slow 하나만 빠진다').toEqual([
+      'burn',
+      'poison',
+    ]);
+    processPurgeAuras(ctx);
+    expect(victim.statuses.map((x) => x.kind)).toEqual(['poison']);
+  });
+
+  it('purge — 보스의 stun 을 벗길 때도 만료와 **똑같이** 면역이 걸린다', () => {
+    const ctx = miniCtx();
+    spawn(ctx, enemyDef('shaman', { hp: 10, purge: { radius: 2, stacksPerTick: 1 } }));
+    const boss = spawn(ctx, enemyDef('trex', { hp: 100, boss: true }), { x: 1 });
+    tryApplyStatus(ctx, boss, { kind: 'stun', magnitude: 1, durationTicks: 300, chance: 1 });
+    expect(isStunned(boss)).toBe(true);
+    processPurgeAuras(ctx);
+    expect(boss.statuses).toHaveLength(0);
+    /*
+     * 면역이 안 걸리면 정화가 **플레이어를 돕는다** — 보스를 즉시 다시 얼릴 수 있게
+     * 되기 때문이다. 적 편 능력이 플레이어에게 유리해지면 뜻이 뒤집힌 것이다.
+     */
+    expect(boss.stunImmuneUntil, '보스 스턴 면역이 시작돼야 한다').toBeGreaterThan(ctx.view.tick);
+    tryApplyStatus(ctx, boss, { kind: 'stun', magnitude: 1, durationTicks: 300, chance: 1 });
+    expect(boss.statuses, '면역 중에는 다시 안 걸린다').toHaveLength(0);
+  });
+
+  /*
+   * ── 재충전형 방패 🔶 (counter-plan 단계 5) ─────────────────────────────
+   * 잠그는 것: 잔량이 최대 미만이면 카운트다운이 돌고 rate 틱마다 1장씩, 상한까지만.
+   * 이 규칙이 곧 "차단율 = 발사 간격 ÷ 재충전"의 근거다 (types.ts shieldRecharge).
+   */
+  it('shieldRecharge — 깎이면 rate 틱마다 1장씩 상한까지 되돌아온다', () => {
+    const ctx = miniCtx();
+    const def = enemyDef('warrior', { hp: 100, shieldHits: 2, shieldRecharge: 10 });
+    const e = spawn(ctx, def, { shieldHitsLeft: 0 });
+    for (let i = 0; i < 9; i++) tickShields(ctx, e);
+    expect(e.shieldHitsLeft, '9틱째까지는 아직 0').toBe(0);
+    tickShields(ctx, e);
+    expect(e.shieldHitsLeft, '10틱째에 1장').toBe(1);
+    for (let i = 0; i < 9; i++) tickShields(ctx, e);
+    expect(e.shieldHitsLeft).toBe(1);
+    tickShields(ctx, e);
+    expect(e.shieldHitsLeft, '20틱째에 2장 = 상한').toBe(2);
+    for (let i = 0; i < 50; i++) tickShields(ctx, e);
+    expect(e.shieldHitsLeft, '상한을 넘지 않는다').toBe(2);
+    expect(e.shieldRechargeLeft, '가득 차면 타이머는 멈춘다').toBe(0);
+  });
+
+  it('shieldRecharge — 값이 없는 종은 한 장도 안 되돌아온다 (기본 동작 보존)', () => {
+    const ctx = miniCtx();
+    const e = spawn(ctx, enemyDef('warrior', { hp: 100, shieldHits: 2 }), { shieldHitsLeft: 0 });
+    for (let i = 0; i < 500; i++) tickShields(ctx, e);
+    expect(e.shieldHitsLeft).toBe(0);
   });
 
   it('healAura — 회복량이 시전자 hpMul로 스케일 (중반 이후 힐러 유효)', () => {

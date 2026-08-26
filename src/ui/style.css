@@ -822,6 +822,9 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .wp-badge--splash { color: #c9a0e0; }
 .wp-badge--shield { color: #ffd04a; }
 .wp-badge--heal { color: #8be36a; }
+/* 정화 — 치유(연두)와 **같은 주술사**가 가진 축이라 계열을 나눠 청록으로 둔다.
+   색만으로 구분되지 않는다: 아이콘(대각 반짝임)과 낱말이 항상 함께 간다. */
+.wp-badge--purge { color: #6fe3d0; }
 .wp-badge--raid { color: #ff9d6a; }
 .wp-badge--enrage { color: #ff8a8a; }
 .wp-body { display: flex; flex-direction: column; gap: 5px; }

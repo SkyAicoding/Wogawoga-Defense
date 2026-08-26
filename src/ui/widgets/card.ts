@@ -426,6 +426,12 @@ const TRAIT_ICONS: Record<TraitTag, string> = {
     `<path d="M3 14 h18 v6 H3 Z" fill="currentColor"/>
      <path d="M12 3 L18 11 H6 Z" fill="currentColor" opacity="0.75"/>`,
   ),
+  // 정화 — 네 갈래 반짝임(✧). 치유의 십자와 달리 **대각선**이고 가운데가 비어 있어
+  // 15~20px에서도 십자와 안 헷갈린다. 상태이상이 "벗겨져 흩어진다"는 뜻이다.
+  purge: BADGE(
+    `<path d="M12 2 L13.8 9.2 L21 11 L13.8 12.8 L12 20 L10.2 12.8 L3 11 L10.2 9.2 Z" fill="currentColor"/>
+     <circle cx="12" cy="11" r="2.1" fill="rgba(0,0,0,0.45)"/>`,
+  ),
   // 흩어짐 — 중심에서 사방으로 흩어지는 파편(폭발만 깎는다)
   splash: BADGE(
     `<circle cx="12" cy="12" r="3.2" fill="currentColor"/>

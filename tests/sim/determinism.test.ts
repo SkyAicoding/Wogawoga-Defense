@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BattleCommand, BattleSim, EnemyState } from '@/data/types';
 import { createBattle } from '@/sim/battle';
-import { allyDefs, baseLevels, enemyDefs, options, stageDef, towerDefs, wave } from './fixtures';
+import { tier, allyDefs, baseLevels, enemyDefs, options, stageDef, towerDefs, wave } from './fixtures';
 
 const SCRIPT: [number, BattleCommand][] = [
   [3, { type: 'placeTower', handIndex: 0, cellX: 4, cellZ: 1 }],
@@ -153,6 +153,54 @@ const BOUNTY_SCRIPT: [number, BattleCommand][] = [
   [4, { type: 'placeTower', handIndex: 2, cellX: 7, cellZ: 3 }],
   [6, { type: 'callWave' }],
 ];
+
+/**
+ * 방패·상태이상 해시 검증용 — `makeRaidSim` 과 같은 틀에 **방패와 재충전**을 얹는다.
+ * 덱에 frost 가 있어 slow 가 실제로 걸리므로 `statuses` 도 이 판에서 관측된다.
+ */
+function makeShieldSim(seed: number): BattleSim {
+  return createBattle(
+    options({
+      seed,
+      endless: true,
+      deck: ['spear', 'frost', 'catapult'],
+      stage: stageDef({ waveCount: 2, baseHp: 9999, startGold: 100000 }),
+      enemyDefs: enemyDefs({
+        blade: {
+          hp: 2500,
+          speed: 0.4,
+          shieldHits: 3,
+          shieldRecharge: 20,
+          towerAttack: { dmg: 30, range: 2.4, cooldownTicks: 20, stopToAttack: true, holdTicks: 75, ranged: true },
+        },
+        lancer: { hp: 3000, speed: 0.35, towerAttack: { dmg: 40, range: 2.8, cooldownTicks: 36, stopToAttack: true, holdTicks: 90, ranged: true } },
+      }),
+      /*
+       * frost 에 **실제로 slow 를 붙인다** — 목 타워는 기본적으로 status 가 없어서
+       * 그대로 두면 이 판에 상태이상이 한 번도 안 걸리고, `statuses` 해시 검증이
+       * "관측할 개체가 없다"로 죽는다(실제로 그렇게 죽어서 여기 붙였다).
+       * 실물 frost 도 slow 를 거는 종이라 시나리오가 게임과 어긋나지 않는다.
+       */
+      towerDefs: towerDefs({
+        frost: {
+          tiers: [
+            tier({ status: { kind: 'slow', magnitude: 0.4, durationTicks: 90, chance: 1 } }),
+            tier({ dmg: 8, cost: 40, status: { kind: 'slow', magnitude: 0.4, durationTicks: 90, chance: 1 } }),
+            tier({ dmg: 12, cost: 60, status: { kind: 'slow', magnitude: 0.4, durationTicks: 90, chance: 1 } }),
+            tier({ dmg: 18, cost: 90, status: { kind: 'slow', magnitude: 0.4, durationTicks: 90, chance: 1 } }),
+            tier({ dmg: 26, cost: 140, status: { kind: 'slow', magnitude: 0.4, durationTicks: 90, chance: 1 } }),
+          ],
+        },
+      }),
+      waves: [
+        wave([
+          { enemyId: 'blade', count: 6, intervalTicks: 7 },
+          { enemyId: 'lancer', count: 4, intervalTicks: 9, delayTicks: 30 },
+        ]),
+      ],
+    }),
+  );
+}
 
 function makeBountySim(seed: number): BattleSim {
   return createBattle(
@@ -784,6 +832,62 @@ describe('결정론', () => {
       obj[f] = (obj[f] ?? 0) + 1;
       expect(sim.hash(), `${f}가 해시에 없다`).not.toBe(h0);
     }
+  });
+
+  /*
+   * ── 방패 둘 + 상태이상이 hash() 에 들어간다 (2라운드 2-b) ──────────────
+   *
+   * ⚠ **`shieldHitsLeft` 는 원래부터 hash() 에 없었다.** 재충전(shieldRecharge)이
+   *   들어오기 전에도 누락이었고, 새 필드만 접으면 "언제 회복하나"는 잡고
+   *   "지금 몇 장인가"는 못 잡는다. 방패에 막힌 타격은 피해가 **0** 이라 hp 가 한 자리도
+   *   안 움직이므로, hp 가 같은 두 개체가 잔량이 다를 수 있고 그 둘의 미래는 통째로 다르다
+   *   (gateOwed·bountyPaid 와 같은 논거).
+   *
+   * ⚠⚠ **0 을 1 로 바꾸는 함정을 피한다** — 위 bountyPaid 주석이 기록한 사고다.
+   *   방패가 **실제로 깎이고 재충전 타이머가 돌기 시작한 뒤에** 흔들고, 상태이상은
+   *   **실제로 걸린 뒤에** 흔든다. 아래 전제 어서션이 그것을 못 박는다.
+   */
+  it('방패 둘(shieldHitsLeft·shieldRechargeLeft)이 각각 hash()에 들어간다', () => {
+    for (const f of ['shieldHitsLeft', 'shieldRechargeLeft'] as const) {
+      const sim = makeShieldSim(4242);
+      let target: EnemyState | undefined;
+      for (let t = 0; t < 1500 && !target; t++) {
+        for (const [at, cmd] of RAID_SCRIPT) if (at === t) sim.applyCommand(cmd);
+        sim.tick();
+        sim.drainEvents();
+        // 깎였고(잔량 < 최대) 타이머가 돌기 시작한 개체
+        target = sim.state.enemies.find((e) => {
+          const o = e as unknown as Record<string, number>;
+          return (o['shieldRechargeLeft'] ?? 0) > 0;
+        });
+      }
+      expect(target, `${f}: 방패가 실제로 깎이고 타이머가 도는 개체가 있다`).toBeDefined();
+      const obj = target as unknown as Record<string, number>;
+      expect(obj['shieldRechargeLeft'], `${f}: 흔들기 전에 타이머가 돌고 있었다`).toBeGreaterThan(0);
+      const h0 = sim.hash();
+      obj[f] = (obj[f] ?? 0) + 1;
+      expect(sim.hash(), `${f}가 해시에 없다`).not.toBe(h0);
+    }
+  });
+
+  it('상태이상(statuses)이 hash()에 들어간다 — 정화가 "어느 스택을 벗겼나"를 만든다', () => {
+    const sim = makeShieldSim(4242);
+    let target: EnemyState | undefined;
+    for (let t = 0; t < 1500 && !target; t++) {
+      for (const [at, cmd] of RAID_SCRIPT) if (at === t) sim.applyCommand(cmd);
+      sim.tick();
+      sim.drainEvents();
+      target = sim.state.enemies.find((e) => {
+        const o = e as unknown as { statuses?: { remainingTicks: number }[] };
+        return (o.statuses?.length ?? 0) > 0;
+      });
+    }
+    expect(target, '상태이상이 실제로 걸린 개체가 있다').toBeDefined();
+    const st = (target as unknown as { statuses: { remainingTicks: number }[] }).statuses;
+    expect(st.length, '흔들기 전에 스택이 있었다').toBeGreaterThan(0);
+    const h0 = sim.hash();
+    (st[0] as { remainingTicks: number }).remainingTicks += 1;
+    expect(sim.hash(), 'statuses 가 해시에 없다').not.toBe(h0);
   });
 
   it('아군을 뽑아 내보내고 싸우다 죽는 시나리오도 해시 전 구간 일치', () => {
