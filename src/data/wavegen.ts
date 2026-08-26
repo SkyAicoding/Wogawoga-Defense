@@ -468,6 +468,9 @@ function groundPoolOf(plan: WavePlanParams): EnemyId[] {
  * (게이트가 없는 스테이지 2~6은 이 분기를 타지 않아 값이 한 자리도 안 바뀐다)
  */
 function curvePoolOf(plan: WavePlanParams): readonly EnemyId[] {
+  // 명시가 있으면 그것이 이긴다 (WavePlanParams.curvePool 주석에 근거와 실측이 있다).
+  if (plan.curvePool === 'all') return plan.allowedEnemies;
+  if (plan.curvePool === 'ground') return groundPoolOf(plan);
   return plan.airFromWave === undefined ? plan.allowedEnemies : groundPoolOf(plan);
 }
 
