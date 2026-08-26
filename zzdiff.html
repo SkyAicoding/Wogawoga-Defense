@@ -1,0 +1,21 @@
+<!doctype html><html><body><canvas id="d"></canvas><script type="module">
+const out = {};
+async function load(u){ const i=new Image(); i.src=u; await i.decode(); const c=document.createElement('canvas'); c.width=i.width;c.height=i.height; const x=c.getContext('2d'); x.drawImage(i,0,0); return x.getImageData(0,0,i.width,i.height); }
+const a = await load('/zz-before.png');
+const b = await load('/zz-after.png');
+out.size = [a.width, a.height, b.width, b.height];
+let diff=0, maxd=0, sum=0; const H=new Array(9).fill(0);
+const dc = document.getElementById('d'); dc.width=a.width; dc.height=a.height;
+const dx = dc.getContext('2d'); const img = dx.createImageData(a.width,a.height);
+for (let i=0;i<a.data.length;i+=4){
+  const d = Math.max(Math.abs(a.data[i]-b.data[i]),Math.abs(a.data[i+1]-b.data[i+1]),Math.abs(a.data[i+2]-b.data[i+2]));
+  if (d>0){ diff++; sum+=d; if(d>maxd)maxd=d; }
+  H[Math.min(8, d===0?0:Math.floor(Math.log2(d))+1)]++;
+  const v = Math.min(255, d*8);
+  img.data[i]=v; img.data[i+1]=v?0:0; img.data[i+2]=v?0:0; img.data[i+3]=255;
+}
+dx.putImageData(img,0,0);
+out.pixels = a.width*a.height; out.diffPixels = diff; out.maxDelta = maxd; out.meanDelta = diff?sum/diff:0;
+out.hist = H;
+window.__zz = out;
+</script></body></html>

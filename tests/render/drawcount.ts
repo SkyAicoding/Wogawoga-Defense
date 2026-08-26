@@ -12,7 +12,11 @@
  */
 import * as THREE from 'three';
 
-/** three 가 실제로 그리게 되는 것 = visible 한 Mesh 중 InstancedMesh 는 count > 0 인 것 */
+/**
+ * three 가 실제로 그리게 되는 것 = visible 한 Mesh 중
+ *  · InstancedMesh 는 count > 0 인 것
+ *  · BatchedMesh 는 **보이는 인스턴스가 하나라도 있는 것**(멀티드로 1콜 = 여기서 1콜)
+ */
 export function drawables(scene: THREE.Object3D): { calls: number; tris: number } {
   let calls = 0;
   let tris = 0;
@@ -34,6 +38,11 @@ export function forEachDrawn(
   scene.traverseVisible((o) => {
     const m = o as THREE.Mesh & { isMesh?: boolean; isInstancedMesh?: boolean; count?: number };
     if (m.isMesh !== true) return;
+    if ((m as unknown as { isBatchedMesh?: boolean }).isBatchedMesh === true) {
+      const t = batchedTris(m as unknown as THREE.BatchedMesh);
+      if (t > 0) fn(m, t, m.castShadow);
+      return;
+    }
     const n = m.isInstancedMesh === true ? (m.count ?? 0) : 1;
     if (n <= 0) return;
     const g = m.geometry;
@@ -41,4 +50,30 @@ export function forEachDrawn(
     const t = ((idx ? idx.count : (g.getAttribute('position')?.count ?? 0)) / 3) * n;
     fn(m, t, m.castShadow);
   });
+}
+
+/**
+ * BatchedMesh 가 이 프레임에 실제로 그리는 삼각형 — **보이는 인스턴스의 지오메트리 구간 합.**
+ * (three 도 같은 값을 낸다: `renderMultiDraw` 가 `info.update(구간 합, mode, 1)` 을 부른다)
+ *
+ * 지워진 슬롯은 `getVisibleAt` 이 throw 하므로 걸러 낸다. 살아 있는 인스턴스를
+ * `instanceCount` 만큼 다 세면 즉시 멈춘다 — 슬롯 전체를 훑지 않는다.
+ */
+function batchedTris(b: THREE.BatchedMesh): number {
+  let tris = 0;
+  let seen = 0;
+  const live = b.instanceCount;
+  for (let i = 0; i < b.maxInstanceCount && seen < live; i++) {
+    let vis: boolean;
+    try {
+      vis = b.getVisibleAt(i);
+    } catch {
+      continue; // 발급된 적 없거나 반납된 슬롯
+    }
+    seen++;
+    if (!vis) continue;
+    const r = b.getGeometryRangeAt(b.getGeometryIdAt(i));
+    if (r) tris += r.count / 3;
+  }
+  return tris;
 }

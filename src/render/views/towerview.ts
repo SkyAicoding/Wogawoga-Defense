@@ -2,13 +2,28 @@
  * 타워 렌더 뷰 — 부위 리그(base + head(action)) 관리.
  * 헤드 타깃 조준(지수 감쇠 요 회전), 무기별 발사 애니메이션, 업그레이드 팝,
  * 배치 고스트 프리뷰(초록/빨강), 적 부족에게 맞았을 때의 피격 연출을 처리한다.
+ *
+ * ── 드로우콜: 타워가 몇 기든 상수다 (views/towerbatch.ts) ────────────────────
+ * 리그는 그대로 `THREE.Group` 세 개(root/head/action)로 두되 **씬에 넣지 않는다** —
+ * 애니메이션이 끝난 뒤 각 조각의 `matrixWorld` 를 `BatchedMesh` 인스턴스 행렬로 옮긴다.
+ * 그래서 아래 애니메이션 코드는 한 글자도 바뀌지 않았고(회전·스케일·위치 전부 행렬에
+ * 실린다), 드로우콜만 기당 3개에서 **묶음 6개 상한**으로 접힌다.
+ *   몸체(그림자 캐스터) 2 · action(flat) 1 · action(glow) 1 · 발사 셸 1 ·
+ *   피격 플래시 몸체 2 + action 1  = 최악 8콜 (+ 배치 고스트 2, 배치 중에만)
+ * 실측 전/후: 24기 = 90콜 → 13콜.
+ *
+ * ⚠ **피격 플래시가 재질 스왑이 아니게 됐다.** 재질은 묶음 단위라 인스턴스 하나만
+ *   빨갛게 만들 수 없다. 대신 같은 `hitMat` 을 쓰는 **두 번째 묶음**을 두고 그쪽
+ *   인스턴스로 자리를 옮긴다(보이기 토글). 화면에 나오는 그림은 전과 같고, 맞고 있는
+ *   타워가 하나라도 있는 프레임에만 +3콜이 든다.
  */
 import * as THREE from 'three';
 import type { EnemyState, TowerId, TowerState } from '@/data/types';
 import { clamp, clamp01, damp, easeInOutQuad, easeOutCubic, lerp, lerpAngle } from '@/core/mathx';
-import { flatMat, glowMat } from '../palette';
-import { assembleTower, buildTower, towerTierScale } from '../meshlib/towers';
+import { additiveMat, flatMat, glowMat } from '../palette';
+import { assembleTower, buildTower, towerTierScale, type TowerModel } from '../meshlib/towers';
 import type { CellToWorld } from '../meshlib/terrain';
+import { TowerBatch } from './towerbatch';
 
 /** 방향성 무기 — 헤드가 현재 타깃을 향해 요 회전 */
 const AIMED: ReadonlySet<TowerId> = new Set<TowerId>(['spear', 'catapult', 'poison', 'ballista']);
@@ -50,10 +65,19 @@ const HIT_FLASH_MIN_GAP = 0.3;
 const HIT_SHAKE_TIME = 0.26;
 
 interface TowerEntry {
+  /** 씬에 넣지 않는 순수 변환 노드 — matrixWorld 만 읽어 인스턴스 행렬로 옮긴다 */
   root: THREE.Group;
   head: THREE.Group;
   action: THREE.Group;
-  flash: THREE.Mesh | null;
+  /**
+   * 발사 플래시 셸의 변환 노드 (애디티브, 평시 visible=false).
+   * 예전엔 Mesh 였다 — 지금은 그리기를 `shell` 묶음이 맡으므로 위치/스케일만 남았다.
+   */
+  flash: THREE.Object3D | null;
+  /** 인스턴스를 늦게(피격 때) 하나 더 발급할 때 지오메트리를 다시 찾으려고 들고 있는다 */
+  model: TowerModel;
+  /** 지오메트리 캐시 키 앞자리 = `종:티어` */
+  key: string;
   defId: TowerId;
   tier: number;
   /**
@@ -93,8 +117,20 @@ interface TowerEntry {
   flashGap: number;
   /** 피격 플래시 잔여 (초). 0 이하면 원래 재질로 되돌린다 */
   flashT: number;
-  /** 재질 스왑 대상 — [메시, 원래 재질]. 애디티브 플래시 셸은 제외 */
-  swap: [THREE.Mesh, THREE.Material | THREE.Material[]][];
+  /** 몸체 인스턴스 — base 는 root 행렬, head 는 head 행렬을 받는다. 없으면 -1 */
+  baseInst: number;
+  headInst: number;
+  /** action 인스턴스와 그것이 사는 묶음(flat/glow) */
+  actInst: number;
+  actBatch: TowerBatch | null;
+  /** 발사 플래시 셸 인스턴스 (lightning 만) */
+  shellInst: number;
+  /** 피격 플래시용 대체 인스턴스 — **처음 맞는 순간에** 발급한다 (안 맞으면 버퍼도 안 잡는다) */
+  hitBase: number;
+  hitHead: number;
+  hitAct: number;
+  /** 지금 피격 묶음 쪽이 보이는가 — 행렬을 어느 쪽에 쓸지 가른다 */
+  flashOn: boolean;
   /** 배치 월드 좌표 (피격 흔들림 오프셋의 기준점) */
   baseX: number;
   baseZ: number;
@@ -105,6 +141,18 @@ const _v = new THREE.Vector3();
 export class TowerView {
   private group = new THREE.Group();
   private towers = new Map<number, TowerEntry>();
+  /** 몸체 — **유일한 그림자 캐스터**(meshlib/towers.ts 규약) */
+  private body: TowerBatch;
+  /** action(flat): 창·투석기 팔·발리스타 볼트·북면 */
+  private actFlat: TowerBatch;
+  /** action(glow): 불꽃·크리스탈·얼음·포자 머리 — 라이팅 무시라 그림자도 안 받는다 */
+  private actGlow: TowerBatch;
+  /** 발사 애디티브 셸 (lightning) */
+  private shell: TowerBatch;
+  /** 피격 플래시 몸체/action — 처음 맞을 때까지 정점 버퍼를 잡지 않는다 */
+  private hitBody: TowerBatch;
+  private hitAct: TowerBatch;
+  private batches: TowerBatch[];
   private ghost: THREE.Group | null = null;
   private ghostMatValid: THREE.MeshLambertMaterial;
   private ghostMatInvalid: THREE.MeshLambertMaterial;
@@ -149,24 +197,96 @@ export class TowerView {
       color: 0xd88878,
       emissive: 0xb02408,
     });
+    // 묶음 여섯. castShadow 는 몸체 쪽 둘만 — action 을 섞으면 그림자 패스에서
+    // 한 번 더 그려져 "타워당 캐스터 1개" 규약이 깨진다(towerbatch.ts 헤더).
+    this.body = new TowerBatch(flatMat(), {
+      name: 'towerBody',
+      castShadow: true,
+      receiveShadow: true,
+      verts: 24576,
+    });
+    this.actFlat = new TowerBatch(flatMat(), {
+      name: 'towerActionFlat',
+      castShadow: false,
+      receiveShadow: true,
+      verts: 4096,
+    });
+    this.actGlow = new TowerBatch(glowMat(), {
+      name: 'towerActionGlow',
+      castShadow: false,
+      receiveShadow: false,
+      verts: 4096,
+    });
+    this.shell = new TowerBatch(additiveMat(), {
+      name: 'towerFireShell',
+      castShadow: false,
+      receiveShadow: false,
+      verts: 2048,
+    });
+    this.hitBody = new TowerBatch(this.hitMat, {
+      name: 'towerHitBody',
+      castShadow: true,
+      receiveShadow: true,
+      verts: 8192,
+    });
+    // 피격 중에는 glow 부속도 함께 빨개진다(예전 재질 스왑과 같다) — 그래서 flat/glow 를
+    // 가르지 않고 한 묶음에 담는다. 0.07초짜리 연출이라 receiveShadow 차이는 안 읽힌다.
+    this.hitAct = new TowerBatch(this.hitMat, {
+      name: 'towerHitAction',
+      castShadow: false,
+      receiveShadow: true,
+      verts: 4096,
+    });
+    this.batches = [this.body, this.actFlat, this.actGlow, this.shell, this.hitBody, this.hitAct];
+    for (const b of this.batches) this.group.add(b.mesh);
   }
 
+  /**
+   * 리그(변환 노드)만 만들고 그리기는 묶음에 맡긴다.
+   * `assembleTower` 와 **같은 계층**이어야 한다 — base 는 root, head 지오메트리는 head,
+   * action 은 action 노드의 행렬을 받는다. (지금 8종은 base/head 중 하나만 갖는다.
+   *  둘 다 가진 모델이 생기면 몸체 묶음이 그림자를 2장 굽는다 — towerbatch.test.ts 가 잡는다)
+   */
   private makeEntry(defId: TowerId, tier: number): TowerEntry {
     const model = buildTower(defId, tier);
-    const rig = assembleTower(model, { flat: flatMat(), glow: glowMat() }, true);
+    const root = new THREE.Group();
+    const head = new THREE.Group();
+    head.position.y = model.headPivotY;
+    root.add(head);
+    const action = new THREE.Group();
+    action.position.set(model.actionPivot[0], model.actionPivot[1], model.actionPivot[2]);
+    head.add(action);
+    let flash: THREE.Object3D | null = null;
+    if (model.flash) {
+      flash = new THREE.Object3D();
+      flash.visible = false;
+      action.add(flash);
+    }
     // 첫 update 전 한 프레임이 원본 크기로 번쩍이지 않게 팝 시작값(0.6)까지 미리 반영
-    rig.root.scale.setScalar(towerTierScale(tier) * 0.6);
-    // 피격 플래시 대상 수집 — 발사 플래시 셸(애디티브)은 건드리지 않는다
-    const swap: [THREE.Mesh, THREE.Material | THREE.Material[]][] = [];
-    rig.root.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh && m !== rig.flash) swap.push([m, m.material]);
-    });
+    root.scale.setScalar(towerTierScale(tier) * 0.6);
+    const key = `${defId}:${tier}`;
+    let actBatch: TowerBatch | null = null;
+    let actInst = -1;
+    if (model.action) {
+      actBatch = model.actionMat === 'glow' ? this.actGlow : this.actFlat;
+      actInst = actBatch.add(actBatch.geometry(`${key}:act`, model.action));
+    }
     return {
-      root: rig.root,
-      head: rig.head,
-      action: rig.action,
-      flash: rig.flash,
+      root,
+      head,
+      action,
+      flash,
+      model,
+      key,
+      baseInst: model.base ? this.body.add(this.body.geometry(`${key}:base`, model.base)) : -1,
+      headInst: model.head ? this.body.add(this.body.geometry(`${key}:head`, model.head)) : -1,
+      actInst,
+      actBatch,
+      shellInst: model.flash ? this.shell.add(this.shell.geometry(`${key}:act`, model.flash)) : -1,
+      hitBase: -1,
+      hitHead: -1,
+      hitAct: -1,
+      flashOn: false,
       defId,
       tier,
       tierScale: towerTierScale(tier),
@@ -187,10 +307,57 @@ export class TowerView {
       hitT: 0,
       flashGap: 0,
       flashT: 0,
-      swap,
       baseX: 0,
       baseZ: 0,
     };
+  }
+
+  /**
+   * 리그의 현재 자세를 묶음 인스턴스 행렬로 옮긴다 — **애니메이션과 그리기의 유일한 접점.**
+   * 피격 중이면 같은 자세를 피격 묶음 쪽에 쓴다(보이는 쪽에만 쓴다).
+   */
+  private writeMatrices(e: TowerEntry): void {
+    e.root.updateMatrixWorld(true);
+    const on = e.flashOn;
+    const bodyBatch = on ? this.hitBody : this.body;
+    const bi = on ? e.hitBase : e.baseInst;
+    const hi = on ? e.hitHead : e.headInst;
+    if (bi >= 0) bodyBatch.matrix(bi, e.root.matrixWorld);
+    if (hi >= 0) bodyBatch.matrix(hi, e.head.matrixWorld);
+    const ab = on ? this.hitAct : e.actBatch;
+    const ai = on ? e.hitAct : e.actInst;
+    if (ab && ai >= 0) {
+      ab.matrix(ai, e.action.matrixWorld);
+      ab.visible(ai, e.action.visible); // ballista 재장전 중 볼트 숨김
+    }
+    // 애디티브 셸은 피격 재질 스왑 대상이 아니었다 — 지금도 그대로 자기 묶음에 남는다
+    if (e.shellInst >= 0 && e.flash) {
+      this.shell.matrix(e.shellInst, e.flash.matrixWorld);
+      this.shell.visible(e.shellInst, e.flash.visible && e.action.visible);
+    }
+  }
+
+  /** 보이는 인스턴스가 0인 묶음은 렌더 리스트에서 뺀다 */
+  private sync(): void {
+    for (const b of this.batches) b.sync();
+  }
+
+  /** 이 타워가 쓰는 인스턴스를 전부 반납한다 */
+  private release(e: TowerEntry): void {
+    if (e.baseInst >= 0) this.body.release(e.baseInst);
+    if (e.headInst >= 0) this.body.release(e.headInst);
+    if (e.actInst >= 0 && e.actBatch) e.actBatch.release(e.actInst);
+    if (e.shellInst >= 0) this.shell.release(e.shellInst);
+    if (e.hitBase >= 0) this.hitBody.release(e.hitBase);
+    if (e.hitHead >= 0) this.hitBody.release(e.hitHead);
+    if (e.hitAct >= 0) this.hitAct.release(e.hitAct);
+    e.baseInst = -1;
+    e.headInst = -1;
+    e.actInst = -1;
+    e.shellInst = -1;
+    e.hitBase = -1;
+    e.hitHead = -1;
+    e.hitAct = -1;
   }
 
   add(id: number, defId: TowerId, tier: number, cellX: number, cellZ: number): void {
@@ -201,8 +368,10 @@ export class TowerView {
     entry.root.position.set(v.x, 0.1, v.z); // 슬롯 패드 위
     entry.baseX = v.x;
     entry.baseZ = v.z;
-    this.group.add(entry.root);
     this.towers.set(id, entry);
+    // 첫 프레임이 원점 자세로 한 번 그려지지 않게 지금 자세를 바로 실어 둔다
+    this.writeMatrices(entry);
+    this.sync();
   }
 
   upgrade(id: number, tier: number): void {
@@ -218,23 +387,26 @@ export class TowerView {
     entry.head.rotation.y = old.yaw;
     entry.spin = old.spin;
     entry.phase = old.phase;
-    this.group.remove(old.root);
-    this.group.add(entry.root);
+    this.release(old);
     this.towers.set(id, entry); // popT=1 → 팝 애니 재생
+    this.writeMatrices(entry);
+    this.sync();
   }
 
   remove(id: number): void {
     const entry = this.towers.get(id);
     if (!entry) return;
-    this.setFlash(entry, false); // 맞는 중에 부서져도 재질 참조를 원상 복구
-    this.group.remove(entry.root);
+    // 맞는 중에 부서져도 두 묶음 다 반납한다 (피격 쪽에 유령 인스턴스가 남지 않게)
+    this.release(entry);
     this.towers.delete(id);
+    this.sync();
   }
 
   /**
    * 적 부족에게 맞았다 — 붉은 플래시 + 흔들림.
-   * 플래시는 **공유 재질 1개로 스왑**한다: 타워는 어차피 개별 Mesh라 재질을 바꿔도
-   * 드로우콜이 늘지 않고, 재질을 복제하지 않으니 GPU 자원도 늘지 않는다.
+   * 플래시는 **같은 `hitMat` 을 쓰는 두 번째 묶음으로 자리를 옮기는 것**이다.
+   * 재질은 묶음 단위라 인스턴스 하나만 스왑할 수 없다 — 대신 원래 인스턴스를 숨기고
+   * 피격 묶음 인스턴스를 켠다. 맞는 타워가 하나도 없는 프레임은 그 묶음이 통째로 빠진다.
    */
   hit(id: number): void {
     const e = this.towers.get(id);
@@ -249,7 +421,37 @@ export class TowerView {
   }
 
   private setFlash(e: TowerEntry, on: boolean): void {
-    for (const [mesh, orig] of e.swap) mesh.material = on ? this.hitMat : orig;
+    if (e.flashOn === on) return;
+    if (on && !this.hitReady(e)) return; // 자리를 못 잡으면 플래시 없이 흔들림만
+    e.flashOn = on;
+    if (e.baseInst >= 0) {
+      this.body.visible(e.baseInst, !on);
+      this.hitBody.visible(e.hitBase, on);
+    }
+    if (e.headInst >= 0) {
+      this.body.visible(e.headInst, !on);
+      this.hitBody.visible(e.hitHead, on);
+    }
+    if (e.actInst >= 0 && e.actBatch) {
+      e.actBatch.visible(e.actInst, !on && e.action.visible);
+      this.hitAct.visible(e.hitAct, on && e.action.visible);
+    }
+    this.writeMatrices(e); // 켜진 쪽에 지금 자세를 넣는다 (한 프레임도 원점에 있지 않게)
+    this.sync();
+  }
+
+  /**
+   * 피격 인스턴스를 **처음 맞는 순간에** 발급한다.
+   * 미리 잡지 않는 이유: `BatchedMesh` 는 첫 지오메트리에서 정점 버퍼를 통째로 할당한다.
+   * 한 번도 안 맞는 판에서는 피격 묶음이 버퍼를 1바이트도 안 잡는다.
+   */
+  private hitReady(e: TowerEntry): boolean {
+    if (e.hitBase >= 0 || e.hitHead >= 0 || e.hitAct >= 0) return true;
+    const m = e.model;
+    if (m.base) e.hitBase = this.hitBody.add(this.hitBody.geometry(`${e.key}:base`, m.base));
+    if (m.head) e.hitHead = this.hitBody.add(this.hitBody.geometry(`${e.key}:head`, m.head));
+    if (m.action) e.hitAct = this.hitAct.add(this.hitAct.geometry(`${e.key}:act`, m.action));
+    return e.hitBase >= 0 || e.hitHead >= 0 || e.hitAct >= 0;
   }
 
   /** 발사 애니 트리거 — 타입별로 분기 (fx가 towerFired마다 호출) */
@@ -311,6 +513,10 @@ export class TowerView {
     this.clearGhost();
     const mat = valid ? this.ghostMatValid : this.ghostMatInvalid;
     const rig = assembleTower(buildTower(defId, 0), { flat: mat, glow: mat }, false);
+    // 고스트는 배치 중 한 기뿐이라 묶지 않는다 — 이름만 붙여 예산 잣대가 갈라 셀 수 있게 한다
+    rig.root.traverse((o) => {
+      o.name = 'towerGhost';
+    });
     const v = this.cellToWorld(cellX, cellZ);
     rig.root.position.set(v.x, 0.1, v.z);
     rig.root.scale.setScalar(GHOST_SCALE);
@@ -375,7 +581,9 @@ export class TowerView {
         e.root.position.set(e.baseX, 0.1, e.baseZ);
       }
       e.root.scale.set(sx, sy, sx);
+      this.writeMatrices(e);
     }
+    this.sync();
     if (this.ghost) {
       // 고스트 호흡 애니 — T1 크기 위에 곱한다
       const b = 1 + Math.sin(this.time * 6) * 0.03;
@@ -493,6 +701,7 @@ export class TowerView {
 
   dispose(): void {
     this.group.parent?.remove(this.group);
+    for (const b of this.batches) b.dispose();
     this.towers.clear();
     this.enemyById.clear();
     this.ghost = null;
