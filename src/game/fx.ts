@@ -187,6 +187,11 @@ const FIRE_SFX: Record<TowerId, SfxName> = {
   poison: 'poisonSpit',
   ballista: 'spearThrow',
   drum: 'drumBuff',
+  // 2-c — 새 합성 레시피를 만들지 않고 결이 맞는 기존 소리를 빌린다
+  // (ballista 가 spearThrow 를 빌리는 것과 같은 규약이다)
+  hushtotem: 'drumBuff', // 가죽 씌운 기둥 — 소리를 죽이는 물건이라 둔탁한 북
+  rattletrap: 'spearThrow', // 이빨이 튕기는 짧고 마른 소리
+  shockstake: 'lightningZap', // 방전
 };
 
 const TOWER_FX_COLOR: Record<TowerId, number> = {
@@ -198,6 +203,9 @@ const TOWER_FX_COLOR: Record<TowerId, number> = {
   poison: 0x8fd14f,
   ballista: 0xf3e9d2,
   drum: 0xffd04a,
+  hushtotem: 0x6fe3d0, // 정화 배지와 같은 청록 — 같은 축이라 화면에서 짝지어 읽힌다
+  rattletrap: 0xc9a35a, // 나무 이빨
+  shockstake: 0xbfe9ff, // 방전 (번개 0x8be0ff 보다 희어 구분된다)
 };
 
 /**
@@ -361,6 +369,12 @@ const IMPACT_STYLE: Record<TowerId, ImpactStyle> = {
     shakeMul: 1.1,
   },
   drum: BASE_STYLE,
+  // 지원형이라 착탄 연출이 없다 (drum 과 같다)
+  hushtotem: BASE_STYLE,
+  // 작은 타격이 아주 잦다 — 기본보다 조금 더 작고 조용하게
+  rattletrap: { ...BASE_STYLE, core: 0xe8d9b4, sizeMul: 0.7, shakeMul: 0.5, flashMul: 0.7 },
+  // 방전 — 밝은 섬광에 파편은 거의 없다
+  shockstake: { ...BASE_STYLE, core: 0xdff4ff, flashMul: 1.4, sizeMul: 0.85, shockRadius: 0.7 },
 };
 
 const STATUS_COLOR: Record<StatusKind, number> = {

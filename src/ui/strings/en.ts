@@ -261,6 +261,12 @@ export const en: Record<string, string> = {
   'tower.ballista.desc': 'A giant tusk bolt with a devastating single-target punch!',
   'tower.drum.name': 'War Drum',
   'tower.drum.desc': 'Boom-boom! The beat boosts nearby towers’ damage and speed.',
+  'tower.hushtotem.name': 'Hush Totem',
+  'tower.hushtotem.desc': 'Silences nearby enemy shamans — no healing, no cleansing.',
+  'tower.rattletrap.name': 'Rattle Trap',
+  'tower.rattletrap.desc': 'Snaps again and again, very fast — best against shields that refill.',
+  'tower.shockstake.name': 'Shock Stake',
+  'tower.shockstake.desc': 'Zap! Hit enemies freeze for a moment. Bigger ones shrug it off sooner.',
 
   'enemy.raptor.name': 'Raptor',
   'enemy.raptor.desc': 'A hot-headed hunter on very fast legs.',

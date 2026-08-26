@@ -127,4 +127,7 @@ export const stage05: StageDef = {
   },
   firstClearAmber: 320,
   perWaveAmber: 3,
+  // 2-c — 재충전형 방패(warrior)의 전용 답. 방패 자체는 s2 부터 있지만 이 타워는
+  //        '발사 간격'이라는 축 하나에 특화돼 있어 다른 답을 다 써 본 뒤에 준다.
+  unlockTowers: ['rattletrap'],
 };

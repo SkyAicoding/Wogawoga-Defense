@@ -8,6 +8,7 @@ import { STATUS_TICK_INTERVAL } from '@/data/types';
 import type { StatusApplySpec, StatusInstance } from '@/data/types';
 import { dist2 } from '@/core/mathx';
 import { damageEnemy } from './combat';
+import { effAuraRadius } from './attack';
 import type { EnemySim, SimCtx } from './entities';
 
 const MAX_DOT_STACKS = 3;
@@ -134,6 +135,29 @@ export function tickEnemyStatuses(ctx: SimCtx, e: EnemySim): void {
 }
 
 /**
+ * **주술 방해 토템** — 이 자리가 적 오라를 잠재우는 타워의 반경 안인가.
+ * (`AuraSpec.suppressEnemyAuras` — 주석 전문은 types.ts 에 있다)
+ *
+ * ⚠ **상태이상이 아니라 자리로 판정한다.** 그래서 정화(purge)가 벗길 수 없다 —
+ *   스턴으로 주술사를 막으려 하면 그 주술사가 스턴을 벗겨 답이 순환한다.
+ * ⚠ 적에게 상태를 심지 않으므로 `EnemySim` 필드가 안 늘고 `battle.hash()` 접기도
+ *   안 넓어진다. 매 틱 타워 위치에서 다시 계산되는 순수 함수다.
+ * ⚠ 침묵(hexer)당한 토템은 잠재우지 못한다 — 발사·오라가 멈추는 것과 같은 취급이라야
+ *   "저주받은 타워는 절반만 일한다"(attack.ts:112 주석)가 이 축에서도 성립한다.
+ */
+function aurasSuppressedAt(ctx: SimCtx, x: number, z: number): boolean {
+  for (const t of ctx.world.towers.items) {
+    if (t.silenceLeft > 0) continue;
+    const def = ctx.opts.towerDefs[t.defId];
+    const aura = def.tiers[t.tier]?.aura;
+    if (!aura?.suppressEnemyAuras) continue;
+    const r = effAuraRadius(ctx, def, aura.radius);
+    if (dist2(t.cellX, t.cellZ, x, z) <= r * r) return true;
+  }
+  return false;
+}
+
+/**
  * **재충전형 방패** — 매 틱 호출(`EnemyDef.shieldRecharge`).
  *
  * 규칙: 잔량이 최대 미만이면 카운트다운이 돌고, 0에 닿으면 **1장** 회복하고 재장전한다.
@@ -175,6 +199,8 @@ export function processPurgeAuras(ctx: SimCtx): void {
     if (!caster.alive) continue;
     const aura = caster.def.purge;
     if (!aura || isStunned(caster)) continue;
+    // 주술 방해 토템의 반경 안이면 이 틱에 오라가 통째로 안 돈다 (스턴과 같은 취급)
+    if (aurasSuppressedAt(ctx, caster.x, caster.z)) continue;
     const r2 = aura.radius * aura.radius;
     for (let j = 0; j < items.length; j++) {
       if (j === i) continue;
@@ -203,6 +229,8 @@ export function processHealAuras(ctx: SimCtx): void {
     if (!healer.alive) continue;
     const aura = healer.def.healAura;
     if (!aura || isStunned(healer)) continue;
+    // 주술 방해 토템의 반경 안이면 이 틱에 오라가 통째로 안 돈다 (스턴과 같은 취급)
+    if (aurasSuppressedAt(ctx, healer.x, healer.z)) continue;
     const heal = aura.hpPerStatusTick * healer.hpMul;
     const r2 = aura.radius * aura.radius;
     for (let j = 0; j < items.length; j++) {

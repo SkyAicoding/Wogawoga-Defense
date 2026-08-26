@@ -22,7 +22,11 @@ export type TowerId =
   | 'frost' // 얼음 크리스탈
   | 'poison' // 독가시 식물
   | 'ballista' // 상아 발리스타
-  | 'drum'; // 전쟁북 (버프)
+  | 'drum' // 전쟁북 (버프)
+  // ── 2라운드 2-c — counter-plan (B) 표의 빈틈에서 나온 셋 ──────────────
+  | 'hushtotem' // 주술 방해 토템 — ✧정화 축의 답 (적 오라를 잠재운다)
+  | 'rattletrap' // 연타 함정 — 🔶재충전 방패 축의 답 (발사 간격이 가장 짧다)
+  | 'shockstake'; // 충격 말뚝 — 저장소 최초의 stun 타워 (제어)
 
 export type EnemyId =
   | 'raptor' // 랩터 (고속)
@@ -138,6 +142,21 @@ export interface AuraSpec {
   /** drum: 주변 타워 공속 증가 비율 */
   ratePct?: number;
   status?: StatusApplySpec;
+  /**
+   * **적의 오라를 이 반경 안에서 잠재운다** — 주술 방해 토템(hushtotem).
+   * 대상은 적의 `healAura` 와 `purge` 둘 다이고, 반경 안에 **시전자가 서 있으면**
+   * 그 시전자의 오라가 그 틱에 통째로 안 돈다(스턴과 같은 취급).
+   *
+   * ⚠ 왜 스턴으로 대신하지 않는가: 스턴은 이동까지 멈추고 보스 면역·저항이 붙어
+   *   "주술사를 침묵시킨다"는 뜻이 다른 축들과 섞인다. 그리고 정화(purge)는
+   *   상태이상을 벗기므로 **스턴으로 주술사를 막으려 하면 주술사가 그 스턴을 벗긴다** —
+   *   답이 순환한다. 잠재우기는 상태이상이 아니라 **자리(위치)** 로 판정하므로
+   *   벗겨질 수 없다. 그것이 이 축이 ✧정화의 답인 이유다.
+   *
+   * ⚠ 적에게 상태를 심지 않으므로 `EnemySim` 에 필드가 늘지 않는다 =
+   *   `battle.hash()` 접기를 넓힐 필요가 없다. 판정은 매 틱 타워 위치로 다시 계산된다.
+   */
+  suppressEnemyAuras?: boolean;
 }
 
 export interface TowerTier {

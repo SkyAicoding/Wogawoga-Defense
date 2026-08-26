@@ -28,7 +28,8 @@ const RAIDERS: EnemyId[] = ['blade', 'lancer', 'archer', 'hexer'];
 
 describe('towers', () => {
   it('8종 전부 존재하고 각 5티어', () => {
-    expect(ALL_TOWER_IDS.length).toBe(8);
+    // 2라운드 2-c 로 8 → 11 (주술 방해 토템 · 연타 함정 · 충격 말뚝)
+    expect(ALL_TOWER_IDS.length).toBe(11);
     for (const id of EXPECTED_TOWERS) {
       const def = TOWER_DEFS[id];
       expect(def, id).toBeDefined();

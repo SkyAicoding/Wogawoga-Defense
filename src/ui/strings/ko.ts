@@ -319,6 +319,12 @@ export const ko: Record<string, string> = {
   'tower.ballista.desc': '거대한 상아 화살로 단일 적에게 강력한 한 방!',
   'tower.drum.name': '전쟁북',
   'tower.drum.desc': '둥둥둥! 북소리로 주변 타워의 공격력과 속도를 올려줘요.',
+  'tower.hushtotem.name': '주술 방해 토템',
+  'tower.hushtotem.desc': '가까이 있는 적 주술사의 주문을 잠재워요 — 치유도 정화도 멈춰요.',
+  'tower.rattletrap.name': '연타 함정',
+  'tower.rattletrap.desc': '아주 빠르게 연달아 물어뜯어요 — 다시 차오르는 방패를 뚫는 데 최고예요.',
+  'tower.shockstake.name': '충격 말뚝',
+  'tower.shockstake.desc': '찌릿! 맞은 적이 잠깐 멈춰요. 큰 적일수록 덜 멈춰요.',
 
   'enemy.raptor.name': '랩터',
   'enemy.raptor.desc': '빠른 발로 달려드는 성질 급한 사냥꾼.',

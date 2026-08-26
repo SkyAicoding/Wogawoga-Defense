@@ -16,17 +16,21 @@ import type {
   WaveDef,
 } from '@/data/types';
 import { ALLY_MAX_ACTIVE } from '@/data/balance';
+import { ALL_TOWER_IDS } from '@/data';
 
-export const ALL_TOWER_IDS: TowerId[] = [
-  'spear',
-  'catapult',
-  'lightning',
-  'brazier',
-  'frost',
-  'poison',
-  'ballista',
-  'drum',
-];
+/*
+ * ⚠ **여기 사본을 두지 마라 — 원본에서 가져온다.**
+ *
+ * 이 자리에는 원래 8개짜리 리터럴 사본이 있었고, 2라운드 2-c 가 타워를 11종으로 늘리자
+ * 그 사본만 8 에 멈춰 `towerDefs()` 가 **불완전한 `Record<TowerId, TowerDef>`** 를
+ * 돌려주기 시작했다. `const out = {} as Record<...>` 의 캐스트가 tsc 의 눈을 가려서
+ * 아무도 못 잡았고, 새 타워를 쓰는 시뮬 테스트가 `def.tiers` 에서 undefined 로 터졌다.
+ *
+ * CLAUDE.md 「이 저장소가 세 번 당한 병」의 처방 그대로다: **상수를 베끼지 말고 import 해라.**
+ * (`@/data` 를 끌어오지만 이 파일은 이미 `@/data/balance` 를 import 하고 있어 새 결합이 아니다)
+ * 지역에서도 쓰고 밖으로도 내보내야 해서 import + re-export 둘 다 한다.
+ */
+export { ALL_TOWER_IDS };
 
 export const ALL_ENEMY_IDS: EnemyId[] = [
   'raptor',

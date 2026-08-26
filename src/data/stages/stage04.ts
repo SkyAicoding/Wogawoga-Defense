@@ -116,4 +116,6 @@ export const stage04: StageDef = {
   },
   firstClearAmber: 250,
   perWaveAmber: 2,
+  // 2-c — 주술사(shaman)가 s3 부터 나오므로 그 답인 주술 방해 토템을 **바로 다음 판**에서 연다.
+  unlockTowers: ['hushtotem'],
 };

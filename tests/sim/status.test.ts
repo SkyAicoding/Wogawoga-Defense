@@ -1,7 +1,7 @@
 /** 상태이상 — slow 최대값 우선, poison 3스택/armor 무시, burn은 armor 적용, stun 보스 저항, 힐 오라 */
 import { describe, expect, it } from 'vitest';
 import { Rng } from '@/core/rng';
-import type { BattleStateView, EnemyDef } from '@/data/types';
+import type { BattleStateView, EnemyDef, TowerState } from '@/data/types';
 import { World, type EnemySim, type SimCtx } from '@/sim/entities';
 import { createHometown } from '@/sim/hometown';
 import { ResourceField } from '@/sim/gather';
@@ -15,7 +15,7 @@ import {
   tickShields,
   tryApplyStatus,
 } from '@/sim/status';
-import { enemyDef, options } from './fixtures';
+import { enemyDef, options, towerDef, towerDefs } from './fixtures';
 
 function miniCtx(seed = 1): SimCtx {
   const world = new World();
@@ -299,6 +299,85 @@ describe('status', () => {
     const e = spawn(ctx, enemyDef('warrior', { hp: 100, shieldHits: 2 }), { shieldHitsLeft: 0 });
     for (let i = 0; i < 500; i++) tickShields(ctx, e);
     expect(e.shieldHitsLeft).toBe(0);
+  });
+
+  /*
+   * ── 주술 방해 토템 ✧ (2라운드 2-c) ─────────────────────────────────────
+   * `AuraSpec.suppressEnemyAuras` — 반경 안에 **시전자가 서 있으면** 그 시전자의
+   * 오라가 그 틱에 통째로 안 돈다. 치유와 정화 **둘 다**여야 한다.
+   *
+   * ⚠ 이 축이 정화의 답인 이유가 곧 마지막 it 이다: 잠재우기는 상태이상이 아니라
+   *   **자리**로 판정하므로 정화가 벗길 수 없다. 스턴으로 막으려 하면 순환한다.
+   */
+  function placeSuppressor(ctx: SimCtx, x: number, z: number, radius = 2): TowerState {
+    // 목 타워는 실물 def 를 안 읽으므로(fixtures.towerDef) 여기서 오라를 직접 얹는다
+    ctx.opts.towerDefs = towerDefs({
+      hushtotem: {
+        attackKind: 'aura',
+        canTargetGround: false,
+        canTargetAir: false,
+        tiers: [
+          { dmg: 0, cooldownTicks: 30, range: radius, cost: 1, aura: { radius, suppressEnemyAuras: true } },
+          ...towerDef('hushtotem').tiers.slice(1),
+        ],
+      },
+    });
+    const t: TowerState = {
+      id: 9000 + ctx.world.towers.items.length,
+      defId: 'hushtotem',
+      tier: 0,
+      hp: 100,
+      maxHp: 100,
+      silenceLeft: 0,
+      cellX: x,
+      cellZ: z,
+      cooldownLeft: 0,
+      targetId: -1,
+      targeting: 'first',
+      invested: 1,
+      buffDmgPct: 0,
+      buffRatePct: 0,
+    };
+    ctx.world.towers.add(t);
+    return t;
+  }
+
+  it('주술 방해 토템 — 반경 안의 주술사는 **치유**가 안 돈다', () => {
+    const ctx = miniCtx();
+    spawn(ctx, enemyDef('shaman', { hp: 10, healAura: { radius: 2, hpPerStatusTick: 3 } }));
+    const ally = spawn(ctx, enemyDef('raptor', { hp: 10 }), { x: 1, hp: 5, maxHp: 10 });
+    placeSuppressor(ctx, 0, 0);
+    processHealAuras(ctx);
+    expect(ally.hp, '잠재워져 회복이 안 일어난다').toBe(5);
+  });
+
+  it('주술 방해 토템 — 반경 안의 주술사는 **정화**도 안 돈다', () => {
+    const ctx = miniCtx();
+    spawn(ctx, enemyDef('shaman', { hp: 10, purge: { radius: 2, stacksPerTick: 1 } }));
+    const victim = spawn(ctx, enemyDef('raptor', { hp: 10 }), { x: 1 });
+    tryApplyStatus(ctx, victim, { kind: 'slow', magnitude: 0.5, durationTicks: 300, chance: 1 });
+    placeSuppressor(ctx, 0, 0);
+    processPurgeAuras(ctx);
+    expect(victim.statuses, '잠재워져 스택이 안 벗겨진다').toHaveLength(1);
+  });
+
+  it('주술 방해 토템 — 반경 **밖**의 주술사는 그대로 일한다 (잣대가 공허하지 않다)', () => {
+    const ctx = miniCtx();
+    spawn(ctx, enemyDef('shaman', { hp: 10, healAura: { radius: 2, hpPerStatusTick: 3 } }), { x: 9 });
+    const ally = spawn(ctx, enemyDef('raptor', { hp: 10 }), { x: 10, hp: 5, maxHp: 10 });
+    placeSuppressor(ctx, 0, 0, 2);
+    processHealAuras(ctx);
+    expect(ally.hp, '토템에서 멀면 회복이 일어난다').toBe(8);
+  });
+
+  it('주술 방해 토템 — **침묵당한 토템은 못 잠재운다** (저주받은 타워는 절반만 일한다)', () => {
+    const ctx = miniCtx();
+    spawn(ctx, enemyDef('shaman', { hp: 10, healAura: { radius: 2, hpPerStatusTick: 3 } }));
+    const ally = spawn(ctx, enemyDef('raptor', { hp: 10 }), { x: 1, hp: 5, maxHp: 10 });
+    const tower = placeSuppressor(ctx, 0, 0);
+    tower.silenceLeft = 30;
+    processHealAuras(ctx);
+    expect(ally.hp, '침묵 중에는 잠재우기도 멈춘다').toBe(8);
   });
 
   it('healAura — 회복량이 시전자 hpMul로 스케일 (중반 이후 힐러 유효)', () => {

@@ -262,6 +262,138 @@ export const TOWER_DEFS: Record<TowerId, TowerDef> = {
     unlock: { type: 'amber', cost: 900 },
     starCosts: STAR_COSTS,
   },
+
+  /*
+   * ══ 2라운드 2-c — counter-plan (B) 표의 빈틈을 메우는 셋 ═══════════════════
+   * 표가 보여 준 것: 여섯 축 중 **🔶재충전 방패**와 **✧정화**에 답이 없었다.
+   * 그리고 저장소에 stun 을 거는 타워가 **한 기도 없었다**(grep 0건).
+   * ⚠ 아래 수치는 전부 **밸런스 손잡이**다 — 사용자가 돌린다(CLAUDE.md「밸런스는 …」).
+   *   난이도 봉투는 이 셋을 **못 본다**: `ALL_DECK`(autoplay.probes.ts:81)이
+   *   8개 하드코딩 리터럴이라 새 타워가 봇 덱에 안 들어가고, 그 파일은 문턱 3파일이라
+   *   손댈 수 없다. 곧 봉투 초록은 "안전"이 아니라 "안 보인다"는 뜻이다.
+   */
+
+  /*
+   * ── 주술 방해 토템 — ✧**정화 축의 답** ────────────────────────────────────
+   * 적 주술사의 오라(healAura·purge)를 반경 안에서 통째로 잠재운다.
+   *
+   * 왜 스턴으로 대신하지 않는가: **정화가 스턴을 벗긴다.** 주술사를 스턴으로 막으려
+   * 하면 그 주술사가 자기 반경의 스턴을 벗겨 내므로 답이 순환한다. 잠재우기는
+   * 상태이상이 아니라 **자리(위치)** 로 판정해서 벗겨질 수 없다 — 그것이 이 축이
+   * 정화의 답인 이유다. (types.ts `AuraSpec.suppressEnemyAuras` 주석에 전문이 있다)
+   *
+   * drum 과 같은 순수 지원형이라 dmg 0 · 대공/대지 둘 다 false 다. 반경만 자란다.
+   */
+  hushtotem: {
+    id: 'hushtotem',
+    nameKey: 'tower.hushtotem.name',
+    descKey: 'tower.hushtotem.desc',
+    attackKind: 'aura',
+    canTargetGround: false,
+    canTargetAir: false,
+    // 가죽을 씌운 나무 기둥 — drum 과 같은 결
+    toughness: 1.05,
+    tiers: [
+      { dmg: 0, cooldownTicks: 30, range: 1.8, cost: 120, aura: { radius: 1.8, suppressEnemyAuras: true } },
+      { dmg: 0, cooldownTicks: 30, range: 2.2, cost: 240, aura: { radius: 2.2, suppressEnemyAuras: true } },
+      { dmg: 0, cooldownTicks: 30, range: 2.6, cost: 480, aura: { radius: 2.6, suppressEnemyAuras: true } },
+      { dmg: 0, cooldownTicks: 30, range: 3.0, cost: 960, aura: { radius: 3.0, suppressEnemyAuras: true } },
+      { dmg: 0, cooldownTicks: 30, range: 3.4, cost: 1920, aura: { radius: 3.4, suppressEnemyAuras: true } },
+    ],
+    // 피해가 0 이라 dmg 별은 뜻이 없다 — 반경만 키운다 (drum 과 같은 이유)
+    starBonus: { dmgPct: 0, ratePct: 0, rangePct: 0.04 },
+    unlock: { type: 'stage', stage: 4 },
+    starCosts: STAR_COSTS,
+  },
+
+  /*
+   * ── 연타 함정 — 🔶**재충전 방패 축의 답** ──────────────────────────────────
+   * 이 저장소에서 **발사 간격이 가장 짧다**. 재충전형 방패의 차단율은
+   * `발사 간격 ÷ 재충전`(types.ts shieldRecharge 유도)이므로, 간격이 짧을수록 덜 막힌다.
+   *   warrior 재충전 75틱 기준 유효 배율 — 창던지기 T3(13틱) 0.83 · 발리스타(56틱) 0.25
+   *   연타 함정 T5(**6틱**) → 6/75 = 0.08 → **0.92**. 표 전체에서 가장 높다.
+   * 대가: 한 방이 작아 🛡장갑에 가장 약하다(감산이 최소 1 이라 티어로도 못 빠져나간다).
+   * 곧 이 타워는 방패의 답이면서 장갑 앞에서는 최악이다 — 축이 서로 뒤집힌다.
+   *
+   * 땅에 박는 덫이라 지상 전용이고 사거리가 짧다.
+   */
+  rattletrap: {
+    id: 'rattletrap',
+    nameKey: 'tower.rattletrap.name',
+    descKey: 'tower.rattletrap.desc',
+    attackKind: 'homing',
+    canTargetGround: true,
+    canTargetAir: false,
+    // 나무 이빨 + 돌 조각 — 밟히는 물건이라 무르다
+    toughness: 0.90,
+    /*
+     * ⚠ **T1 사거리 2.4 는 취향이 아니라 계약이다.** `tests/sim/hometown.test.ts` 의
+     *   "Lv1 사거리는 쏘는 타워 전부보다 짧다 (홈타운이 타워를 대체하지 못한다)" 가
+     *   `min(비오라 타워 T1 사거리) > BASE_LEVELS[0].range(2.3)` 을 요구한다.
+     *   처음에 1.8 로 잡았다가 그 계약이 실제로 빨개져서 알았다 — 마을이 이 타워보다
+     *   멀리 쏘면 "타워 대신 마을을 올린다"가 성립해 버린다.
+     *   이 타워의 정체성은 **짧은 사거리가 아니라 짧은 발사 간격**이므로 손해가 없다.
+     *   대가는 한 방이 작다는 것이고, 그게 🛡장갑 앞에서 최악인 이유다.
+     */
+    tiers: [
+      { dmg: 4, cooldownTicks: 9, range: 2.4, cost: 110, projectileSpeed: 16 },
+      { dmg: 6, cooldownTicks: 8, range: 2.5, cost: 220, projectileSpeed: 16 },
+      { dmg: 9, cooldownTicks: 7, range: 2.6, cost: 440, projectileSpeed: 17 },
+      { dmg: 13, cooldownTicks: 7, range: 2.7, cost: 880, projectileSpeed: 17 },
+      { dmg: 18, cooldownTicks: 6, range: 2.9, cost: 1760, projectileSpeed: 18 },
+    ],
+    starBonus: { dmgPct: 0.07, ratePct: 0.06, rangePct: 0.02 },
+    unlock: { type: 'stage', stage: 5 },
+    starCosts: STAR_COSTS,
+  },
+
+  /*
+   * ── 충격 말뚝 — 저장소 **최초의 stun 타워** ────────────────────────────────
+   * 상태이상 stun 은 sim 에 이미 다 있었는데(status.ts) 그것을 거는 타워가 한 기도
+   * 없었다 — 곧 **새 sim 코드 0줄**로 축 하나가 열린다.
+   *
+   * ⚠ `chance: 1` 로 고정한다. `tryApplyStatus` 는 `chance < 1` 일 때만 `ctx.rng` 를
+   *   당기므로(status.ts:31), 1 이면 **rng 스트림을 한 칸도 안 민다**. 확률형으로 두면
+   *   이 타워를 덱에 넣은 판의 난수열이 통째로 밀려 다른 축의 실측과 비교가 깨진다.
+   *   세기는 확률이 아니라 **지속시간 ÷ 쿨다운**으로 조절한다(T1 8/45 = 18% · T5 16/34 = 47%).
+   * ⚠ 보스는 지속 1/5 + 종료 후 60틱 면역이라(status.ts) 이 타워가 보스를 묶지 못한다.
+   */
+  shockstake: {
+    id: 'shockstake',
+    nameKey: 'tower.shockstake.name',
+    descKey: 'tower.shockstake.desc',
+    attackKind: 'homing',
+    canTargetGround: true,
+    canTargetAir: false,
+    // 땅에 깊이 박은 말뚝 — 가장 단단하다
+    toughness: 1.20,
+    tiers: [
+      {
+        // 사거리 2.4 바닥의 근거는 위 연타 함정 주석과 같다 (홈타운 계약)
+        dmg: 6, cooldownTicks: 45, range: 2.4, cost: 150, projectileSpeed: 13,
+        status: { kind: 'stun', magnitude: 1, durationTicks: 8, chance: 1 },
+      },
+      {
+        dmg: 9, cooldownTicks: 42, range: 2.5, cost: 300, projectileSpeed: 13,
+        status: { kind: 'stun', magnitude: 1, durationTicks: 10, chance: 1 },
+      },
+      {
+        dmg: 14, cooldownTicks: 40, range: 2.7, cost: 600, projectileSpeed: 14,
+        status: { kind: 'stun', magnitude: 1, durationTicks: 12, chance: 1 },
+      },
+      {
+        dmg: 21, cooldownTicks: 37, range: 2.9, cost: 1200, projectileSpeed: 14,
+        status: { kind: 'stun', magnitude: 1, durationTicks: 14, chance: 1 },
+      },
+      {
+        dmg: 32, cooldownTicks: 34, range: 3.1, cost: 2400, projectileSpeed: 15,
+        status: { kind: 'stun', magnitude: 1, durationTicks: 16, chance: 1 },
+      },
+    ],
+    starBonus: { dmgPct: 0.06, ratePct: 0.05, rangePct: 0.03 },
+    unlock: { type: 'stage', stage: 6 },
+    starCosts: STAR_COSTS,
+  },
 };
 
 export const ALL_TOWER_IDS = Object.keys(TOWER_DEFS) as TowerId[];

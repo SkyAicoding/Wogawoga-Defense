@@ -38,6 +38,10 @@ const FIRE_DUR: Record<TowerId, number> = {
   poison: 0.38,
   ballista: 0.9, // 재장전 슬라이드 전체
   drum: 0,
+  // 2-c — 회전하지 않는 셋(AIMED 에 없다). 발사 연출은 action 슬롯의 상하 움직임뿐이다
+  hushtotem: 0, // 지원형 — 발사가 없다 (drum 과 같다)
+  rattletrap: 0.1, // 이빨이 튕겼다 돌아오는 짧은 스냅 (쿨다운 6~9틱 = 0.2~0.3초라 더 길면 겹친다)
+  shockstake: 0.26,
 };
 
 /** 조준 지수 감쇠 속도 (rad 수렴 ~8/s) */

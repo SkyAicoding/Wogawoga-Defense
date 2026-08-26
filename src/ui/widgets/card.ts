@@ -92,6 +92,39 @@ function towerFallbackSvg(id: TowerId): string {
          <circle cx="9" cy="5" r="3" fill="#e8d9b8" stroke="#5e3a1e" stroke-width="1.6"/>
          <circle cx="39" cy="5" r="3" fill="#e8d9b8" stroke="#5e3a1e" stroke-width="1.6"/>`,
       );
+    // ── 2라운드 2-c ──────────────────────────────────────────────────────
+    // 셋 다 **형태로** 구분돼야 한다 — 카드는 작고 색만으로는 안 읽힌다.
+    //  토템 = 세로로 선 기둥 + 대각 반짝임(정화 배지와 같은 기호)
+    //  함정 = 낮고 넓게 벌린 이빨
+    //  말뚝 = 비스듬히 박힌 뾰족한 막대 + 지그재그 방전
+    case 'hushtotem': // 주술 방해 토템 — 가죽 씌운 기둥 + 잠재우는 반짝임
+      return SVG(
+        `<rect x="18" y="12" width="12" height="30" rx="3" fill="#8a5a33" stroke="#5e3a1e" stroke-width="2.5"/>
+         <path d="M14 18 h20 M14 27 h20 M14 36 h20" stroke="#e8d9b8" stroke-width="2.2"/>
+         <ellipse cx="24" cy="12" rx="8" ry="4" fill="#e8d9b8" stroke="#5e3a1e" stroke-width="2.2"/>
+         <path d="M24 2 l2.2 5.4 L32 9.6 l-5.8 2.2 L24 17 l-2.2-5.2 L16 9.6 l5.8-2.2 Z"
+               fill="#6fe3d0" stroke="#2f7a70" stroke-width="1.4"/>
+         <circle cx="12" cy="30" r="2.4" fill="#6fe3d0" opacity="0.75"/>
+         <circle cx="36" cy="22" r="2.4" fill="#6fe3d0" opacity="0.75"/>`,
+      );
+    case 'rattletrap': // 연타 함정 — 벌어진 나무 이빨
+      return SVG(
+        `<path d="M6 34 q18 -8 36 0" fill="none" stroke="#6b4a2f" stroke-width="3.2" stroke-linecap="round"/>
+         <path d="M9 33 l3 -9 l4 8 l3 -11 l4 10 l3 -11 l4 10 l4 -8 l3 9"
+               fill="none" stroke="#c9a35a" stroke-width="2.8" stroke-linejoin="round"/>
+         <rect x="8" y="34" width="32" height="7" rx="3" fill="#8a5a33" stroke="#5e3a1e" stroke-width="2.5"/>
+         <circle cx="24" cy="37.5" r="2.4" fill="#5e3a1e"/>`,
+      );
+    case 'shockstake': // 충격 말뚝 — 박힌 말뚝 + 지그재그 방전
+      return SVG(
+        `<rect x="8" y="36" width="32" height="6" rx="3" fill="#8a5a33" stroke="#5e3a1e" stroke-width="2.5"/>
+         <path d="M20 38 L24 8 L28 38 Z" fill="#a97e4f" stroke="#5e3a1e" stroke-width="2.5" stroke-linejoin="round"/>
+         <path d="M21 20 h6 M20.5 27 h7" stroke="#6b4a2f" stroke-width="2.2"/>
+         <path d="M12 12 l6 6 l-4 3 l7 6" fill="none" stroke="#bfe9ff" stroke-width="2.6"
+               stroke-linecap="round" stroke-linejoin="round"/>
+         <path d="M36 14 l-5 5 l4 3 l-6 5" fill="none" stroke="#bfe9ff" stroke-width="2.6"
+               stroke-linecap="round" stroke-linejoin="round"/>`,
+      );
   }
 }
 

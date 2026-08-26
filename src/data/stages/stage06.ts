@@ -138,4 +138,7 @@ export const stage06: StageDef = {
   },
   firstClearAmber: 400,
   perWaveAmber: 3,
+  // 2-c — 저장소 최초의 stun 타워. 마지막 판의 보상이라 축 하나가 아니라 제어 전반을 연다.
+  //        ⚠ 보스는 stun 지속 1/5 + 종료 후 면역이라 이 타워로 보스를 묶을 수는 없다.
+  unlockTowers: ['shockstake'],
 };
