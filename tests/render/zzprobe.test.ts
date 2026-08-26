@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { writeFileSync } from 'node:fs';
+const OUT: string[] = [];
 import * as THREE from 'three';
 import { build } from '@/render/stage3d';
 import { ALL_TOWER_IDS, STAGES } from '@/data';
@@ -41,7 +43,11 @@ function heavy(stageIdx: number, nTowers: number, nFoes: number) {
 function breakdown(s: THREE.Object3D): Map<string, { calls: number; tris: number; n: number }> {
   const m = new Map<string, { calls: number; tris: number; n: number }>();
   forEachDrawn(s, (mesh, t, shadow) => {
-    const k = `${mesh.name || '(unnamed)'}${shadow ? ' [SHADOW×2]' : ''}`;
+    const anc: string[] = [];
+    let o: THREE.Object3D | null = mesh;
+    while (o) { anc.push(o.name || `<${o.type}>`); o = o.parent; }
+    const kind = (mesh as unknown as {isInstancedMesh?:boolean}).isInstancedMesh ? `INST×${(mesh as THREE.InstancedMesh).count}` : (mesh as unknown as {isBatchedMesh?:boolean}).isBatchedMesh ? 'BATCH' : 'MESH';
+    const k = `${anc.slice(0,3).reverse().join('/')} ${kind}${shadow ? ' [SHADOW×2]' : ''}`;
     const e = m.get(k) ?? { calls: 0, tris: 0, n: 0 };
     e.calls += shadow ? 2 : 1; e.tris += shadow ? t * 2 : t; e.n++;
     m.set(k, e);
@@ -54,11 +60,12 @@ describe('zz probe', () => {
     for (const [name, idx, nT] of [['s3', 2, 12], ['s3', 2, 18], ['s1', 0, 12]] as const) {
       const s3 = heavy(idx, nT, 56);
       const d = drawables(s3.scene);
-      console.log(`\n===== ${name} towers=${nT} foes=56 : ${d.calls}콜 / ${d.tris}삼각형 =====`);
+      OUT.push(`\n===== ${name} towers=${nT} foes=56 : ${d.calls}콜 / ${d.tris}삼각형 =====`);
       const rows = [...breakdown(s3.scene)].sort((a, b) => b[1].tris - a[1].tris);
-      for (const [k, v] of rows) console.log(`  ${String(v.tris).padStart(8)}  ${String(v.calls).padStart(3)}콜  n=${v.n}  ${k}`);
+      for (const [k, v] of rows) OUT.push(`  ${String(v.tris).padStart(8)}  ${String(v.calls).padStart(3)}콜  n=${v.n}  ${k}`);
       s3.dispose();
     }
+    writeFileSync('/tmp/claude-0/-home-user/f4d1ce61-6230-58b9-8a9c-fa813cf20c21/scratchpad/zzprobe.txt', OUT.join('\n'));
     expect(1).toBe(1);
   });
 });
