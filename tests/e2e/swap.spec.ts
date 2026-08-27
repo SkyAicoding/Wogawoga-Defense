@@ -40,11 +40,21 @@ test('자리 교환: 패널 버튼 → 무장 → 다음 탭이 결제된다', a
   // 커튼/인트로 카메라가 끝나야 캔버스 탭이 판에 닿는다(smoke.spec.ts 와 같은 실측)
   await page.waitForTimeout(1_200);
 
-  // 타워 둘을 **커맨드로** 세운다 — 이 계약이 재려는 것은 배치가 아니라 교환이다
+  /*
+   * 타워 둘을 **커맨드로** 세운다 — 이 계약이 재려는 것은 배치가 아니라 교환이다.
+   *
+   * ⚠⚠ 칸은 **손가락이 실제로 닿는 칸**이어야 한다. 예전 판본은 (0,0)부터 훑어
+   *   먼저 놓이는 칸 둘을 골랐는데, 세로 390×664 에서 그 칸의 화면 좌표가 오른쪽
+   *   HUD 버튼 기둥(x2·자동) **밑에** 깔린다. 그러면 탭이 캔버스가 아니라 배속
+   *   버튼에 떨어지고, 실패 메시지는 "교환 버튼이 없다"라고 말한다 — 교환 배선은
+   *   멀쩡한데 잣대가 딴것을 잰 것이다(이 저장소의 지병 그대로).
+   *   그래서 `elementFromPoint` 로 **캔버스가 맨 위인 칸만** 고른다.
+   */
   const cells = await page.evaluate(() => {
     const g = (window as unknown as {
       __wgd: {
         setGold(n: number): void;
+        cellToScreen(x: number, z: number): { x: number; y: number };
         sim: {
           canPlaceAt(x: number, z: number): boolean;
           applyCommand(c: { type: string; handIndex: number; cellX: number; cellZ: number }): boolean;
@@ -52,10 +62,14 @@ test('자리 교환: 패널 버튼 → 무장 → 다음 탭이 결제된다', a
       };
     }).__wgd;
     g.setGold(999_999);
+    const canvas = document.getElementById('game-canvas');
     const out: { x: number; z: number }[] = [];
     for (let z = 0; z < 40 && out.length < 2; z++) {
       for (let x = 0; x < 40 && out.length < 2; x++) {
         if (!g.sim.canPlaceAt(x, z)) continue;
+        const p = g.cellToScreen(x, z);
+        if (p.x < 0 || p.y < 0 || p.x > window.innerWidth || p.y > window.innerHeight) continue;
+        if (document.elementFromPoint(p.x, p.y) !== canvas) continue;
         if (g.sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: x, cellZ: z })) {
           out.push({ x, z });
         }
@@ -63,7 +77,7 @@ test('자리 교환: 패널 버튼 → 무장 → 다음 탭이 결제된다', a
     }
     return out;
   });
-  expect(cells.length, '타워 둘을 못 세웠다 — 이 계약이 성립하지 않는다').toBe(2);
+  expect(cells.length, '탭이 닿는 자리에 타워 둘을 못 세웠다 — 이 계약이 성립하지 않는다').toBe(2);
   const before = await towers(page);
 
   const screenOf = (c: { x: number; z: number }): Promise<{ x: number; y: number }> =>

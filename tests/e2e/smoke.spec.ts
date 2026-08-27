@@ -2586,11 +2586,23 @@ test('하늘길: w22부터 익룡이 공중 레인으로 온다 (렌더 + 예산
   });
   page.on('pageerror', (e) => errors.push(String(e)));
 
-  await page.goto('/?test=1', { waitUntil: 'networkidle' });
-  await page.mouse.click(100, 300);
-  await page.getByRole('button', { name: /전투/ }).first().click();
-  await page.waitForFunction(() => window.__wgd !== undefined);
-  await page.waitForTimeout(900);
+  /*
+   * ⚠⚠ **웨이브마다 판을 새로 연다.** 예전 판본은 한 판에서 w21 → w22 를 잇달아 돌렸는데,
+   *   문간 개정 뒤로 마을에 닿은 습격대가 **사라지지 않고 문간에 눌러앉는다**. 그러면
+   *   w21 이 끝나도 `phase` 가 계속 `'wave'` 라서 다음 `callWave()` 가 **거부되고**,
+   *   w22 는 아예 시작조차 안 한다. 그때 이 계약이 하는 말은 "w22에 익룡이 한 마리도
+   *   안 나왔다"였다 — 하늘길은 멀쩡한데 잣대가 딴것을 잰 것이다(저장소의 지병).
+   *   판을 새로 열면 각 웨이브가 서로에게 오염되지 않는다. 그리고 `callWave()` 의
+   *   반환값을 **계약으로 붙잡아** 이 실패가 다시 오면 원인을 이름으로 말하게 한다.
+   */
+  const enterBattle = async (): Promise<void> => {
+    await page.goto('/?test=1', { waitUntil: 'networkidle' });
+    await page.mouse.click(100, 300);
+    await page.getByRole('button', { name: /전투/ }).first().click();
+    await page.waitForFunction(() => window.__wgd !== undefined);
+    await page.waitForTimeout(900);
+  };
+  await enterBattle();
 
   /**
    * 이 웨이브를 돌려 보고 나온 비행 적의 좌표를 모은다.
@@ -2600,7 +2612,7 @@ test('하늘길: w22부터 익룡이 공중 레인으로 온다 (렌더 + 예산
   const runWave = (
     wave: number,
     freezeOnFlyer: boolean,
-  ): Promise<{ flyers: number; xs: number[]; zs: number[]; alive: number }> =>
+  ): Promise<{ flyers: number; xs: number[]; zs: number[]; alive: number; called: boolean }> =>
     page.evaluate(
       ([w, freeze]) => {
         const g = window.__wgd!;
@@ -2614,7 +2626,7 @@ test('하늘길: w22부터 익룡이 공중 레인으로 온다 (렌더 + 예산
         st.baseHp = 1e9;
         st.baseHpMax = 1e9;
         st.waveIndex = w as number;
-        g.callWave();
+        const called = g.callWave();
         const xs: number[] = [];
         const zs: number[] = [];
         let flyers = 0;
@@ -2634,21 +2646,24 @@ test('하늘길: w22부터 익룡이 공중 레인으로 온다 (렌더 + 예산
           // 익룡이 마을 쪽으로 충분히 내려온 시점에서 얼린다 (하늘길 중간 = 볼 만한 프레임)
           if (freeze && live > 0 && zs.length > 0 && (zs[zs.length - 1] as number) > 6) {
             g.pause(true);
-            return { flyers, xs, zs, alive: live };
+            return { flyers, xs, zs, alive: live, called };
           }
           if (st.phase !== 'wave' && i > 60) break;
         }
-        return { flyers, xs, zs, alive: 0 };
+        return { flyers, xs, zs, alive: 0, called };
       },
       [wave, freezeOnFlyer] as [number, boolean],
     );
 
   // (a) 게이트 이전 웨이브에는 비행이 한 마리도 없다
   const before = await runWave(21, false);
+  expect(before.called, 'w21 웨이브 호출이 거부됐다 — 잰 것은 하늘길이 아니다').toBe(true);
   expect(before.flyers, `w21 비행 적 ${before.flyers}마리 (게이트 이전인데 나왔다)`).toBe(0);
 
-  // (a) w22 = 첫 하늘길 웨이브
+  // (a) w22 = 첫 하늘길 웨이브 — **새 판에서** 돈다 (위 enterBattle 주석)
+  await enterBattle();
   const at22 = await runWave(22, false);
+  expect(at22.called, 'w22 웨이브 호출이 거부됐다 — 잰 것은 하늘길이 아니다').toBe(true);
   expect(at22.flyers, 'w22에 익룡이 한 마리도 안 나왔다').toBeGreaterThan(0);
 
   // (b) 하늘길(x=4 직선) 위에 있다 — 지상 S자는 같은 z에서 x가 1이나 9다
@@ -2660,8 +2675,10 @@ test('하늘길: w22부터 익룡이 공중 레인으로 온다 (렌더 + 예산
   expect(Math.min(...at22.zs), '익룡이 스폰(z=0) 근처에서 관측되지 않았다').toBeLessThan(3);
   expect(Math.max(...at22.zs), '익룡이 마을 쪽으로 내려오지 않았다').toBeGreaterThan(8);
 
-  // (c) 익룡이 **화면에 떠 있는 프레임**에서 예산을 잰다
+  // (c) 익룡이 **화면에 떠 있는 프레임**에서 예산을 잰다 — 이것도 새 판에서
+  await enterBattle();
   const frozen = await runWave(22, true);
+  expect(frozen.called, '예산 측정용 w22 호출이 거부됐다').toBe(true);
   expect(frozen.alive, '익룡이 떠 있는 프레임을 못 잡았다').toBeGreaterThan(0);
   await page.waitForTimeout(500);
   const info = await page.evaluate(
