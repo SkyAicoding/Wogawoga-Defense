@@ -5,6 +5,7 @@
  * npm run difficulty              # 기본 40시드 · 전 스테이지
  * WGD_SEEDS=80 npm run difficulty # 표본을 늘린다
  * WGD_ALLIES=1 npm run difficulty # 부족원을 뽑는 봇으로 (마법사 효과를 보려면 필수)
+ * WGD_OUT=/tmp/x.md npm run difficulty # 표를 낼 곳 (스윕에서 팔끼리 안 덮어쓰게)
  * ```
  *
  * 보고 형식은 **사용자가 지정했다**: 스테이지별 시도 횟수 · 깬 판 수 · 못 깬 판 수 ·
@@ -68,7 +69,10 @@ describe.skipIf(!ON)('난이도 보고서', () => {
     ].join('\n');
     // ⚠ 파일로 낸다 — vitest 리포터가 console 출력을 삼키는 일이 있어서
     //   (실제로 이 저장소에서 프로브 출력이 두 번 사라졌다), 표는 반드시 남아야 한다.
-    writeFileSync('/tmp/difficulty.md', table, 'utf8');
+    // ⚠ 경로를 env 로 받는 이유: 손잡이 스윕은 **여러 팔을 동시에** 돌리는데, 경로가
+    //   고정이면 팔들이 서로의 표를 덮어써서 조용히 같은 숫자를 읽게 된다(실제로
+    //   문간 주기 스윕에서 걸릴 뻔했다). 팔마다 `WGD_OUT` 을 다르게 준다.
+    writeFileSync(process.env.WGD_OUT ?? '/tmp/difficulty.md', table, 'utf8');
     // eslint-disable-next-line no-console
     console.log(table);
   }, 3_600_000);
