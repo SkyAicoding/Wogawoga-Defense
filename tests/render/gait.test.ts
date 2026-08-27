@@ -5,7 +5,14 @@
  * 부족 습격대 4종은 지오메트리를 공유하므로 무기(팔에 매달린 파트)의 지면 충돌까지 함께 검사된다.
  */
 import { describe, expect, it } from 'vitest';
-import { ALL_ENEMY_IDS, buildEnemy, enemyRig } from '@/render/meshlib/enemies';
+import {
+  ALL_ENEMY_IDS,
+  allyRig,
+  buildAllySolo,
+  buildEnemy,
+  enemyRig,
+} from '@/render/meshlib/enemies';
+import { ALL_ALLY_IDS } from '@/data/allies';
 import { LIMB_ATTR, groundLiftAt, type EnemyRig } from '@/render/meshlib/gait';
 
 /** 셰이더 wgdPos 와 동일한 로드리게스 회전 + 스윙 들어올림 */
@@ -61,6 +68,30 @@ describe('보행 리그', () => {
       expect(Math.abs(((r.phase - l.phase) % (Math.PI * 2)) - Math.PI)).toBeLessThan(1e-6);
       expect(r.pivot[2]).toBeCloseTo(-l.pivot[2], 6); // mirZ 와 짝이 맞아야 한다
     }
+  });
+
+  /**
+   * 아군 3종도 걷는다.
+   *
+   * 위의 지면 관통 검사는 `buildEnemy('blade')`(= 공유 지오메트리)를 도는데, 거기엔
+   * 아군 장비 변형 5~7이 **함께 구워져 있으므로** 아군 무기·제복의 접지까지 이미
+   * 함께 검사된다. 여기서 따로 잠그는 건 그게 아니라 **단품 굽기 경로**다 —
+   * buildAllySolo는 갤러리용 별도 빌드라, 새 아군 종을 리그 없이 추가해도 위 검사는
+   * 통과해 버린다. 사지 그룹이 실제로 칠해졌는지를 종마다 확인한다.
+   */
+  it('아군 3종에도 보행 리그가 붙어 있다 (미끄러지며 이동하지 않는다)', () => {
+    expect(ALL_ALLY_IDS.length).toBeGreaterThan(0);
+    for (const id of ALL_ALLY_IDS) {
+      const limb = buildAllySolo(id).getAttribute(LIMB_ATTR);
+      expect(limb, `${id} 사지 어트리뷰트`).toBeTruthy();
+      const groups = new Set<number>();
+      for (let i = 0; i < limb!.count; i++) groups.add(Math.round(limb!.getX(i)));
+      groups.delete(0); // 0 = 몸통(고정)
+      // 다리 2 + 팔 2 + 머리 = 최소 5그룹
+      expect(groups.size, `${id} 리그 그룹 수`).toBeGreaterThanOrEqual(5);
+    }
+    // 뷰는 아군을 blade 리그로 돌린다(enemyview.updateAllies) — 같은 객체여야 한다
+    expect(allyRig()).toBe(enemyRig('blade'));
   });
 
   it('보행 한 주기 내내 발이 지면을 뚫지 않고 디딤발은 지면에 닿는다', () => {

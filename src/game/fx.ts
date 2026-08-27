@@ -707,7 +707,14 @@ export class FxRouter {
           break;
         }
         case 'baseUpgraded': {
-          // 마을이 한 단계 커졌다 — 외형 성장(3단계가 실제 구조물로 대체) + 흙먼지
+          /**
+           * 마을이 한 단계 커졌다. setBaseLevel 이 그 레벨의 구조물 레이어를 실제로
+           * 얹으므로(움막 → 목책·모닥불 → 망루·토템 → 돌담·깃발 → 큰 장옥) 연출의 몫은
+           * **그 순간에 눈을 마을로 끌어오는 것**이다. 세 겹으로 준다:
+           *  · 흙먼지 — 땅을 파고 기둥을 세웠다는 인과
+           *  · 금빛 고리 2겹(넓게 한 번, 좁고 밝게 한 번) — 새 구조물이 솟는 '빛'
+           *  · towerUpgrade 사운드 + 햅틱 — 타워 업그레이드와 같은 언어(전용 자산 없음)
+           */
           this.baseHpMax = ev.hpMax;
           s3.setBaseLevel(ev.level);
           const ratio = ev.hp / Math.max(1, ev.hpMax);
@@ -723,6 +730,8 @@ export class FxRouter {
             sizeVar: 0.7,
           });
           s3.particles.ring(w.x, w.z, 0xffd8a0, 1.1);
+          // 안쪽에 한 겹 더 — 바깥 고리보다 좁고 밝아 "마을이 부풀어 오른다"로 읽힌다
+          s3.particles.ring(w.x, w.z, 0xfff2c8, 0.6, 10);
           break;
         }
         case 'earlyCallBonus': {
