@@ -208,6 +208,21 @@ export function runArena(opts: ArenaOptions): ArenaResult {
     sim.tick();
     for (const e of sim.state.enemies) {
       if (!e.alive) continue;
+      /*
+       * ⚠⚠ **문 앞에 선 개체는 분모에서 뺀다 (2026-08-27).**
+       *
+       * `holdRatio` 는 "**전선의** 시간 중 정지 사격이 차지하는 몫"이다. 사용자 지시로
+       * 문간 체류 상한이 없어지면서(`src/sim/gate.ts` — "hp 만큼 계속해서 살아서 홈
+       * 타운을 공격 하도록 해줘") 마을까지 걸어간 적이 **판이 끝날 때까지** 문 앞에
+       * 서 있게 됐다. 그 틱들은 정지 사격도 걷기도 아닌 **제3의 상태**인데, 옛 식은
+       * 그것을 분모에만 넣어 비율을 조용히 희석했다 — 실측으로 lancer 이격1 의
+       * 정지 듀티가 35.5% → **14.7%** 로 떨어져 `raiddefense.test.ts` 의 >15% 가
+       * 깨졌다. 그 빨강은 게임이 바뀐 것이 아니라 **분모가 오염된 것**이다.
+       *
+       * ⚠ 문턱(>15% · ===0)은 한 톨도 안 건드렸다. 고친 것은 잣대의 정의뿐이고,
+       *   그 정의는 이 필드의 주석("살아 있는 적의 누적 틱")이 원래 뜻하던 바다.
+       */
+      if (e.gateTicks > 0) continue;
       aliveTicks++;
       if (e.siegeHoldLeft > 0) holdingTicks++;
     }

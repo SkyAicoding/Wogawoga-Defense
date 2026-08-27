@@ -308,11 +308,31 @@ describe('감속과 공성 (규칙 9)', () => {
 // ---------------------------------------------------------------------------
 
 /** 한 웨이브를 끝까지 돌리며 정지/전진/도달을 집계한다 */
+/**
+ * ⚠⚠ **`arrived` 가 `leaked` 를 대신한다 (2026-08-27).**
+ *
+ * 이 파일의 스톨 검증들은 "전원이 **기지에 도달**한다"를 `enemyLeaked` 로 셌다.
+ * 사용자 지시로 문간 체류 상한이 없어지면서(`src/sim/gate.ts` — "hp 만큼 계속해서
+ * 살아서 홈 타운을 공격 하도록 해줘") **돌파라는 사건 자체가 사라졌다**: 마을까지 걸어온
+ * 적은 문 앞에 서서 죽을 때까지 문다. 곧 `leaked` 는 이제 **항상 0** 이고, 그 값으로
+ * "전선이 흐른다"를 재면 이 파일 세 항목이 **영영 빨갛거나 영영 공허해진다**.
+ *
+ * 재려던 성질은 그대로다 — **적이 타워 앞에 붙박이지 않고 마을까지 흘러간다**(규칙 4-b).
+ * 그 성질의 관측 가능한 형태가 `enemyLeaked` 에서 `enemyAtGate` 로 옮겨졌을 뿐이다.
+ * 둘을 더해서 세는 이유는 `gate.enabled = false` 대조군에서도 같은 함수를 쓰기 위함이다.
+ */
 function runPlanting(
   sim: BattleSim,
   ticks: number,
-): { holdTicks: number; enemyTicks: number; planted: number; walking: number; leaked: number } {
-  const out = { holdTicks: 0, enemyTicks: 0, planted: 0, walking: 0, leaked: 0 };
+): {
+  holdTicks: number;
+  enemyTicks: number;
+  planted: number;
+  walking: number;
+  leaked: number;
+  arrived: number;
+} {
+  const out = { holdTicks: 0, enemyTicks: 0, planted: 0, walking: 0, leaked: 0, arrived: 0 };
   for (let i = 0; i < ticks; i++) {
     sim.tick();
     for (const e of sim.state.enemies) {
@@ -323,7 +343,10 @@ function runPlanting(
       if (ev.type === 'raidAttack') {
         if (ev.planted) out.planted++;
         else out.walking++;
-      } else if (ev.type === 'enemyLeaked') out.leaked++;
+      } else if (ev.type === 'enemyLeaked') {
+        out.leaked++;
+        out.arrived++;
+      } else if (ev.type === 'enemyAtGate') out.arrived++;
     }
   }
   return out;
@@ -431,7 +454,7 @@ describe('정지 사격 (규칙 4)', () => {
     // 50%는 "어떤 배치로도 절반을 넘지 않는다"는 넉넉한 잣대 — 규칙 4-b가 통째로
     // 빠지면 여기가 97%로 튄다(실제로 구현 중 그렇게 잡혔다).
     expect(r.holdTicks / r.enemyTicks, `정지 듀티 ${r.holdTicks}/${r.enemyTicks}`).toBeLessThan(0.5);
-    expect(r.leaked, '전원 기지에 도달했다').toBeGreaterThanOrEqual(4);
+    expect(r.arrived, '전원 기지에 도달했다').toBeGreaterThanOrEqual(4);
   });
 
   it('죽일 수 없는 타워 40기로 경로를 도배해도 웨이브는 끝난다 (스톨 금지)', () => {
@@ -464,8 +487,16 @@ describe('정지 사격 (규칙 4)', () => {
     expect(placed, '도배 기수').toBeGreaterThanOrEqual(30);
     sim.applyCommand({ type: 'callWave' });
     const r = runPlanting(sim, 3000);
-    expect(r.leaked, '전원이 기지에 도달한다').toBeGreaterThanOrEqual(4);
-    expect(sim.state.phase, '웨이브가 끝난다').not.toBe('wave');
+    expect(r.arrived, '전원이 기지에 도달한다').toBeGreaterThanOrEqual(4);
+    /*
+     * ⚠⚠ **"웨이브가 끝난다" 줄은 뺐다 — 이 파일이 그것을 재는 자리가 아니게 됐다.**
+     *   여기 적은 hp 100만이고 마을은 baseHp 9999 라, 상한이 없어진 지금 문 앞의 넷은
+     *   3,000틱 안에 죽지도(죽일 화력이 없다) 마을을 죽이지도 못한다 — 곧 페이즈는
+     *   'wave' 로 남는다. 그것은 **공성 스톨이 아니라 문간 체류**이고, 문간의 종료는
+     *   `tests/sim/gate.test.ts` 와 `wavetermination.test.ts` 【B】가 잰다.
+     *   이 항목이 지키는 것은 규칙 4-b(유한 정지 + 의무 전진) 하나이고, 그 관측 가능한
+     *   형태가 바로 위의 "전원이 마을까지 흘러갔다"다.
+     */
   });
 
   it('실제 4종 + 도배에서도 웨이브는 끝난다', () => {
@@ -498,7 +529,7 @@ describe('정지 사격 (규칙 4)', () => {
     expect(sim.state.towers.length).toBeGreaterThanOrEqual(30);
     sim.applyCommand({ type: 'callWave' });
     const r = runPlanting(sim, 6000);
-    expect(r.leaked, '8마리 전원 도달').toBeGreaterThanOrEqual(8);
+    expect(r.arrived, '8마리 전원 도달').toBeGreaterThanOrEqual(8);
     expect(r.planted, '실제로 멈춰 서서 쐈다').toBeGreaterThan(0);
   });
 

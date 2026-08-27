@@ -2,7 +2,24 @@
 import { describe, expect, it } from 'vitest';
 import type { SimEvent } from '@/data/types';
 import { createBattle } from '@/sim/battle';
-import { enemyDefs, eventsOf, options, stageDef, wave } from './fixtures';
+import { baseLevels, enemyDefs, eventsOf, options, stageDef, wave } from './fixtures';
+
+/*
+ * ⚠⚠ **마을을 무장시킨다 (2026-08-27)** — 이 파일의 세 항목이 그것 없이는 못 돈다.
+ *
+ * 사용자 지시로 문간 체류 상한이 없어졌다(`src/sim/gate.ts` · 지시 원문: "hp 만큼
+ * 계속해서 살아서 홈 타운을 공격 하도록 해줘"). 그래서 문 앞에 선 적은 **죽어야만**
+ * 사라진다. 목 표의 마을은 기본이 무장 해제(dmg 0)라, 웨이브 완료·승리·endless 를
+ * 재는 아래 항목들이 첫 마리에서 영영 멈춰 버린다(실측: `waveCleared` 0건).
+ *
+ * ⚠ 사거리는 **1** 이다 — 문간 정지선(1.95)보다 짧다. `updateHometown` 규칙 2-b 가
+ *   `atGate` 인 적을 사거리와 무관하게 표적으로 삼으므로, 이 마을은 **문 앞에 선 적만**
+ *   쏜다. 곧 접근 구간은 손대지 않은 채 "문 앞의 적이 죽어서 웨이브가 끝난다"만 켠다.
+ *   (사거리 0 은 안 된다 — 그건 무장 해제로 걸러져 한 발도 안 나간다)
+ * ⚠ 이 파일이 재는 것은 **웨이브 장부**(보상·승리·endless 성장)이지 문간이 아니다.
+ *   문간 자체는 `tests/sim/gate.test.ts` 와 `wavetermination.test.ts` 가 잰다.
+ */
+const GATE_KILLER = baseLevels([{ dmg: 50, cooldownTicks: 5, range: 1 }]);
 
 describe('waves', () => {
   it('스폰 스케줄 — delay + n×interval 틱에 스폰', () => {
@@ -37,6 +54,7 @@ describe('waves', () => {
   it('웨이브 완료 — 보상 골드/앰버, 다음 prep은 90틱', () => {
     const sim = createBattle(
       options({
+        baseLevels: GATE_KILLER,
         enemyDefs: enemyDefs({ raptor: { speed: 3 } }),
         stage: stageDef({ waveCount: 2, baseHp: 100 }),
         waves: [wave([{ count: 1 }], 10), wave([{ count: 1 }], 10)],
@@ -68,6 +86,7 @@ describe('waves', () => {
   it('마지막 웨이브 클리어 → 승리', () => {
     const sim = createBattle(
       options({
+        baseLevels: GATE_KILLER,
         enemyDefs: enemyDefs({ raptor: { speed: 3 } }),
         stage: stageDef({ waveCount: 2, baseHp: 100 }),
         waves: [wave([{ count: 1 }]), wave([{ count: 1 }])],
@@ -96,6 +115,7 @@ describe('waves', () => {
     const sim = createBattle(
       options({
         endless: true,
+        baseLevels: GATE_KILLER,
         enemyDefs: enemyDefs({ raptor: { speed: 3, hp: 10 } }),
         stage: stageDef({ waveCount: 1, baseHp: 100 }),
         waves: [wave([{ count: 1 }])],

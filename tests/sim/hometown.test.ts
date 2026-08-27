@@ -266,11 +266,29 @@ describe('홈타운 레벨업', () => {
   });
 
   it('HP 정책: 누적 피해 절대량이 보존된다 (전량 회복이 아니다)', () => {
-    // 적 하나를 흘려보내 기지에 상처를 낸 뒤 레벨업한다
+    /*
+     * 적 하나가 기지에 상처를 낸 **직후**에 멈춘다.
+     *
+     * ⚠⚠ 옛 판본은 `play(sim, 400)` 으로 고정 400틱을 돌리고 `baseHp === 9`("누수 1회")를
+     *   기대했다. 2026-08-27 에 사용자 지시로 문간 체류 상한이 없어지면서
+     *   (`src/sim/gate.ts` — "hp 만큼 계속해서 살아서 홈 타운을 공격 하도록 해줘")
+     *   문 앞의 적이 **매 `GATE_BITE_TICKS` 마다 계속 문다.** 400틱 창에서는 네 번 물어
+     *   `baseHp === 6` 이 됐다 — 상처가 창 길이의 함수가 된 것이다.
+     *
+     *   이 항목이 재는 것은 **레벨업이 상처를 보존하는가**이지 상처가 몇이냐가 아니다.
+     *   그래서 창을 늘리거나 기댓값을 6 으로 고치는 대신, **첫 한 입에서 멈춰** 상처를
+     *   다시 1 로 확정한다. 아래 9·19·29 가 손으로 검산되는 값으로 남는 이유가 그것이다.
+     */
     const sim = armedSim({ levels: [{ dmg: 0, range: 0 }], baseHp: 10, gold: 1000 });
-    play(sim, 400);
+    sim.applyCommand({ type: 'callWave' });
+    let wounded = false;
+    for (let i = 0; i < 400 && !wounded; i++) {
+      sim.tick();
+      for (const e of sim.drainEvents()) if (e.type === 'baseDamaged') wounded = true;
+    }
+    expect(wounded, '기지가 한 대도 안 맞았다 — 이 테스트는 아무것도 안 쟀다').toBe(true);
     const s = sim.state;
-    expect(s.baseHp).toBe(9); // baseDamage 1 누수 1회
+    expect(s.baseHp).toBe(9); // 문간의 한 입 1회
     expect(s.baseHpMax).toBe(10);
     const takenBefore = s.baseHpMax - s.baseHp;
 

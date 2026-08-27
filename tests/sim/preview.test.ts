@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import type { BattleOptions, EnemyId, StageDef, WaveDef } from '@/data/types';
 import { ALLY_DEFS, BASE_LEVELS, ENEMY_DEFS, TOWER_DEFS, makeWaveFor, stageById } from '@/data';
 import { createBattle } from '@/sim/battle';
-import { options, stageDef, wave } from './fixtures';
+import { baseLevels, options, stageDef, wave } from './fixtures';
 
 const stage1 = (): StageDef => {
   const s = stageById(1);
@@ -102,6 +102,16 @@ describe('previewWave — 미리보기와 실제 웨이브가 같다', () => {
     const sim = createBattle(
       options({
         endless: true,
+        /*
+         * ⚠⚠ **마을을 무장시킨다 (2026-08-27)** — 없으면 웨이브 5 까지 못 간다.
+         *   사용자 지시로 문간 체류 상한이 없어져(`src/sim/gate.ts`) 문 앞에 선 적은
+         *   **죽어야만** 사라진다. 목 표의 마을은 기본이 무장 해제라, `baseHp` 100만인
+         *   이 판에서는 첫 마리가 문 앞에 선 순간 웨이브가 영영 안 끝났다(실측: 웨이브 5
+         *   도달 0마리). 사거리 1 은 문간 정지선(1.95)보다 짧아 `atGate` 인 적만 쏜다
+         *   (hometown 규칙 2-b) — 접근 구간은 손대지 않는다.
+         *   이 항목이 재는 것은 **미리보기와 실제 스폰이 같은 식을 쓰는가**이지 문간이 아니다.
+         */
+        baseLevels: baseLevels([{ dmg: 1_000, cooldownTicks: 5, range: 1 }]),
         stage: stageDef({ baseHp: 1_000_000, waveCount: 2 }),
         waves: [wave([{ enemyId: 'boar', count: 3, hpMul: 1.3, intervalTicks: 4 }])],
       }),
