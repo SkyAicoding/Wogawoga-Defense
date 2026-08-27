@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "difficulty": "WGD_DIFFICULTY=1 vitest run tests/sim/difficulty.report.test.ts"
   },
   "dependencies": {
     "three": "~0.185.1"
