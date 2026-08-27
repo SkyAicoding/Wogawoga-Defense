@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import type { EnemyState, TowerState } from '@/data/types';
+import type { AllyState, EnemyState, ResourceCellState, TowerState } from '@/data/types';
 import { HealthBarView } from '@/render/views/healthbars';
 
 const cellToWorld = (x: number, z: number, out?: THREE.Vector3): THREE.Vector3 =>
@@ -61,6 +61,53 @@ function tower(o: Partial<TowerState> = {}): TowerState {
     invested: 100,
     buffDmgPct: 0,
     buffRatePct: 0,
+    ...o,
+  };
+}
+
+/**
+ * 격자 폭. `AllyState.gatherKey = cellZ * gridW + cellX` 라, 예약을 흉내 내려면
+ * 뷰에 넘기는 `gridW` 와 키를 만드는 식이 **같은 값**을 써야 한다 (그래서 상수 하나다).
+ */
+const GRID_W = 16;
+const keyOf = (c: { cellX: number; cellZ: number }): number => c.cellZ * GRID_W + c.cellX;
+
+function cell(o: Partial<ResourceCellState> = {}): ResourceCellState {
+  return { cellX: 5, cellZ: 2, kind: 'berry', value: 10, taken: false, regrowAt: 0, regrowsLeft: 0, ...o };
+}
+
+/**
+ * 목 부족원. 기본값이 **사람에 붙는 표시를 전부 끈 상태**다 — 이 아래 채집 테스트가
+ * 세려는 것은 자원 배지(kind 7)뿐이라, 다른 인스턴스가 하나라도 섞이면 개수가
+ * 무엇을 뜻하는지 흐려진다:
+ *   만피         → 아군 체력바 없음
+ *   carryCount 0 → 짐 칩(6) 없음
+ *   autoHold     → 대기 말뚝(8) 없음
+ *   (x,z) ≠ (tgtX,tgtZ) → `isGathering` false = 발밑 게이지(5) 없음.
+ *     이것이 곧 **"캐러 가는 중"** 이라 예약 배지를 시험하기에도 맞는 자세다.
+ */
+function ally(o: Partial<AllyState> = {}): AllyState {
+  return {
+    id: 7,
+    defId: 'gatherer',
+    hp: 40,
+    maxHp: 40,
+    x: 0,
+    z: 0,
+    prevX: 0,
+    prevZ: 0,
+    tgtX: 9,
+    tgtZ: 9,
+    walked: 0,
+    heading: 0,
+    attackCdLeft: 0,
+    targetId: -1,
+    autoHold: false,
+    gatherKey: -1,
+    gatherTicks: 0,
+    carryGold: 0,
+    carryCount: 0,
+    alive: true,
     ...o,
   };
 }
@@ -194,6 +241,130 @@ describe('HealthBarView', () => {
     view.update([], [], 1, cellToWorld, [], [], base(10, 1));
     expect(mesh.geometry.getAttribute('barKind').getX(0), '기지 = 4').toBe(4);
     expect(mesh.geometry.getAttribute('fill').getX(0), '10/25').toBeCloseTo(0.4, 5);
+    view.dispose();
+  });
+
+  /**
+   * ── 채집 배지: **텄음(taken) 칸은 아무것도 안 그린다** ──────────────────────
+   *
+   * 사용자가 지적한 것: *"일꾼들이 채집하고 나서 남은 흔적이 보이는 4각형"* —
+   * 다 캔 칸마다 회색 마름모가 남아 판이 진행될수록 수십 개가 지형을 덮었다.
+   * 고침은 `healthbars.ts` 의 한 줄(`if (c.taken) continue;`)이고, **그 한 줄을
+   * 지워도 아무 테스트가 안 빨개지는 상태**였다. 그래서 이 셋을 잠근다.
+   *
+   * 왜 taken 검사가 claimed 검사보다 **먼저** 와야 하나: 예약 배지는 selecting 과
+   * 무관하게 항상 뜨는 표시라(GatherViewInfo.selecting 주석), 순서가 뒤집히면
+   * "방금 다 캔 칸을 아직 그 사람이 물고 있는" 한 틱에 회색 칩이 그대로 살아난다.
+   * (2)번 줄이 그 순서를 재는 자리다.
+   *
+   * 판별력 증명 — `if (c.taken) continue;` 를 지우고 돌리면:
+   *   × 텄음 칸은 배지를 하나도 안 만든다 → (1) selecting=true 에서 `expected 1 to be +0`
+   *     (2)도 **따로 재서** 같은 `expected 1 to be +0` — (1)이 먼저 끊어 두 번째 줄까지
+   *     안 가므로, (1)을 잠깐 지우고 (2) 혼자 빨개지는 것을 확인했다
+   *   × 같은 메시 하나 → `expected 4 to be 3`
+   *   ○ 반대편 가드는 초록 그대로 — 이 줄과 무관한 국면만 재기 때문이다
+   * 되돌리면 전부 초록. (selecting=false + 예약 없음 조합만은 뒤 줄이 어차피
+   * 걸러 내므로 판별력이 없다 — 그래서 (2)에 **예약을 일부러 걸었다**.)
+   */
+  it('텄음(taken) 칸은 배지를 하나도 안 만든다 (selecting 양쪽 다)', () => {
+    const scene = new THREE.Scene();
+    const view = new HealthBarView(scene);
+    const mesh = meshesOf(scene)[0]!;
+    const done = cell({ taken: true, regrowAt: 900, regrowsLeft: 1 });
+
+    // (1) 부족을 고르는 중 — 금색 배지가 뜨는 국면인데도, 텄으면 안 뜬다
+    view.update([], [], 1, cellToWorld, [], [], null, {
+      cells: [done],
+      gridW: GRID_W,
+      selecting: true,
+    });
+    expect(mesh.count, '텄음 + 고르는 중').toBe(0);
+
+    // (2) 안 고르는 중 + **예약이 걸린** 텄음 칸 (다 캤는데 아직 그 사람이 물고 있다)
+    const walker = ally({ gatherKey: keyOf(done) });
+    view.update([], [], 1, cellToWorld, [], [walker], null, {
+      cells: [done],
+      gridW: GRID_W,
+      selecting: false,
+    });
+    expect(mesh.count, '텄음 + 예약 — taken 검사가 claimed 검사보다 먼저다').toBe(0);
+
+    // (3) 둘 다 참이어도 그대로 0
+    view.update([], [], 1, cellToWorld, [], [walker], null, {
+      cells: [done],
+      gridW: GRID_W,
+      selecting: true,
+    });
+    expect(mesh.count, '텄음 + 예약 + 고르는 중').toBe(0);
+    view.dispose();
+  });
+
+  /**
+   * **반대편 가드 — 배지 기능을 죽인 게 아님을 보인다.**
+   * 위 계약만 있으면 `if (true) continue;` 로도 초록이다. 살아 있어야 하는 두 국면:
+   *  · 예약된 칸(누가 캐러 가는 중)은 selecting 과 무관하게 뜬다 — "저기는 이미 사람이
+   *    간다"는 고르는 중이 아니어도 알아야 하는 정보다
+   *  · 안 텄고 예약도 없는 칸은 **고르는 중일 때만** 뜬다 — 상시로 띄우면 판에
+   *    배지 40개가 깔려 정작 골랐을 때의 신호가 죽는다
+   * fill 로 세 상태가 갈리는 것(예약 0.5 · 안 텄음 1)까지 같이 잠근다.
+   */
+  it('반대편 가드: 예약은 항상 뜨고, 안 턴 칸은 고르는 중에만 뜬다', () => {
+    const scene = new THREE.Scene();
+    const view = new HealthBarView(scene);
+    const mesh = meshesOf(scene)[0]!;
+    const live = cell({ taken: false });
+    const fill = (): number => mesh.geometry.getAttribute('fill').getX(0);
+
+    // 예약 — 고르는 중이 아니어도 뜬다
+    view.update([], [], 1, cellToWorld, [], [ally({ gatherKey: keyOf(live) })], null, {
+      cells: [live],
+      gridW: GRID_W,
+      selecting: false,
+    });
+    expect(mesh.count, '예약된 칸은 selecting 과 무관하게 뜬다').toBe(1);
+    expect(mesh.geometry.getAttribute('barKind').getX(0), '자원 배지 = 7').toBe(7);
+    expect(fill(), '예약 = 0.5 (한랭색)').toBeCloseTo(0.5, 5);
+
+    // 예약 없음 — selecting 이 가른다
+    view.update([], [], 1, cellToWorld, [], [], null, {
+      cells: [live],
+      gridW: GRID_W,
+      selecting: false,
+    });
+    expect(mesh.count, '평소에는 배지밭을 안 깐다').toBe(0);
+
+    view.update([], [], 1, cellToWorld, [], [], null, {
+      cells: [live],
+      gridW: GRID_W,
+      selecting: true,
+    });
+    expect(mesh.count, '고르는 중이면 뜬다').toBe(1);
+    expect(fill(), '안 텄고 예약 없음 = 1 (금색)').toBeCloseTo(1, 5);
+    view.dispose();
+  });
+
+  /**
+   * 배지가 **체력바와 같은 메시 하나**에 실린다 (드로우콜 1) — 이 파일의 대원칙이자
+   * 채집 표시를 여기 얹은 이유 그 자체다(healthbars.ts 헤더: 드로우콜 Δ 0).
+   * 쌓는 순서(체력바 → 배지)도 같이 잠근다: CAPACITY 를 넘길 때 잘리는 것이
+   * 언제나 배지여야 하고, 체력바는 한 개도 잘리면 안 된다.
+   */
+  it('자원 배지도 체력바와 같은 InstancedMesh 하나에 실린다 (맨 뒤에)', () => {
+    const scene = new THREE.Scene();
+    const view = new HealthBarView(scene);
+    const mesh = meshesOf(scene)[0]!;
+    view.update([enemy({ hp: 5 })], [tower({ hp: 100 })], 1, cellToWorld, [], [], null, {
+      cells: [cell({ taken: false }), cell({ cellX: 6, taken: true })],
+      gridW: GRID_W,
+      selecting: true,
+    });
+    expect(meshesOf(scene), '메시는 여전히 하나').toHaveLength(1);
+    // 적 1 + 타워 1 + 안 텄음 배지 1 — **텄음 칸은 안 세어진다**
+    expect(mesh.count, '적1 + 타워1 + 배지1').toBe(3);
+    const kind = mesh.geometry.getAttribute('barKind');
+    expect(kind.getX(0), '적 = 0').toBe(0);
+    expect(kind.getX(1), '타워 = 1').toBe(1);
+    expect(kind.getX(2), '배지는 맨 뒤 = 7').toBe(7);
     view.dispose();
   });
 
