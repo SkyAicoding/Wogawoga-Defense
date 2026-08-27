@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import type { ProjectileState, TowerId } from '@/data/types';
 import { clamp01, lerp, parabola } from '@/core/mathx';
 import { additiveMat, flatMat, glowMat } from '../palette';
-import { GLOW_PROJECTILES, PROJECTILE_TOWERS, buildProjectile } from '../meshlib/projectiles';
+import { GLOW_PROJECTILES, PROJECTILE_TOWERS, buildProjectile, projectileTint } from '../meshlib/projectiles';
 import type { CellToWorld } from '../meshlib/terrain';
 
 const CAPACITY = 64;
@@ -59,15 +59,22 @@ const RAID_TINTED: ReadonlySet<TowerId> = new Set<TowerId>(['brazier']);
  *  · **밝기가 1을 넘는다**(T5 에서 1.72배). `instanceColor` 는 정점색에 곱해지므로
  *    1보다 큰 값이 그대로 과노출이 되고, ACES 톤매핑이 그것을 **발광**으로 굴린다 —
  *    새 재질도, 블룸 패스도 없이 "빛나는 무기"가 된다(render 헤더의 '가짜 블룸'과 같은 수법).
- *  · **따뜻한 쪽으로 민다**(r 0.22 > g 0.16 > b 0.08). 흰색으로만 밝히면 바래 보인다.
- *    붉은 기가 남아야 "달궈진 것"으로 읽힌다.
  *
- * T1 은 배수 1.00 · 색 1.00 이라 **옛 그림과 한 픽셀도 다르지 않다** — 변화는 강화한
- * 사람에게만 보인다. 그것이 이 요구의 뜻이다.
+ * ══ 축이 둘이다 — **종은 색조, 티어는 밝기** ═════════════════════════════════
+ * 사용자 요구가 두 번에 걸쳐 왔고, 둘은 **다른 것을 정한다**:
+ *   > "강화된 만큼 날아가는 무기도 머 멋지고 화려하게"   → 티어 = 크기와 밝기
+ *   > "종류마다 다른 색 줘 창은 붉게 얼음은 푸르게"       → 종 = 색조
+ * 그래서 최종 색 = `종별 색조(meshlib/projectiles.ts projectileTint) × 티어 밝기` 다.
+ * 두 축을 한 값에 섞으면(옛 판본의 "따뜻한 쪽으로 민다") 얼음이 강화될수록 **붉어진다** —
+ * 곧 티어를 올릴수록 종을 못 알아보게 된다. 곱셈으로 갈라 두면 얼음은 더 **푸르게** 밝아진다.
+ *
+ * ⚠ 그래서 옛 계약 "T1 은 색 1.00" 은 **일부러 뒤집혔다.** 지금 T1 은 그 종의 색이고,
+ *   티어가 오르면 같은 색이 밝아진다. 종을 가르는 것이 강화보다 먼저다.
  */
 const TIER_LEN_STEP = 0.19;
 const TIER_GIRTH_STEP = 0.11;
-const TIER_TINT_STEP: readonly [number, number, number] = [0.22, 0.16, 0.08];
+/** 티어 한 단계가 더하는 밝기 (전 채널 공통 — 색조는 종이 정한다) */
+const TIER_BRIGHT_STEP = 0.18;
 
 /**
  * 습격대 투척물 — **드로우콜 증가 0** 으로 무언가가 날아가게 하는 방법.
@@ -223,14 +230,9 @@ export class ProjectileView {
       mesh.setMatrixAt(idx, _mat4);
       // ⚠ 매 프레임 **다시 쓴다**. 인스턴스 칸은 재사용되므로(습격대 투척물이 뒤에 붙고
       //   투사체 수가 매 프레임 바뀐다) 안 쓰면 앞 프레임의 다른 티어 색이 남는다.
-      mesh.setColorAt(
-        idx,
-        _tint.setRGB(
-          1 + tier * TIER_TINT_STEP[0],
-          1 + tier * TIER_TINT_STEP[1],
-          1 + tier * TIER_TINT_STEP[2],
-        ),
-      );
+      const hue = projectileTint(p.towerDefId);
+      const bright = 1 + tier * TIER_BRIGHT_STEP;
+      mesh.setColorAt(idx, _tint.setRGB(hue[0] * bright, hue[1] * bright, hue[2] * bright));
     }
 
     // 습격대 투척물은 **타워 투사체 뒤에** 붙는다 — 칸이 모자라면 밀리는 쪽이 연출이다
