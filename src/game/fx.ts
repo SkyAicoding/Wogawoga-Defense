@@ -18,6 +18,7 @@ import { audio } from '@/audio';
 import type { SfxName } from '@/audio';
 import type { Stage3D } from '@/render/stage3d';
 import { towerTierScale } from '@/render/meshlib/towers';
+import { ShakeBus } from './shakebus';
 import { ATK_LAUNCH } from '@/render/meshlib/gait';
 import type { RaidShotOpts } from '@/render/views/projectileview';
 import type { DioramaCamera } from '@/render/camera';
@@ -40,42 +41,16 @@ const REF_HP = 90;
 const HP_EXP = 0.3;
 
 /**
- * **셰이크는 두 채널이다** — 큰 사건만 판을 흔든다.
- *
- * 종전에는 채널이 하나였고, 착탄·처치·문간 한 입까지 전부 같은 예산(0.5)에서
- * 피해량에 비례한 값을 뽑아 썼다. 그 결과 투석기 한 대만 세워도 **공격할 때마다**
- * 판 전체가 흔들렸다 — 사용자 보고: "적을 공격할때 마다 판 전체가 지진이 나는 효과…
- * 판 전체를 너무 흔들면 게임 중에 어지러워".
- *
- * 문제는 상한이 아니라 **빈도**였다. SHAKE_BUDGET 은 한 프레임의 총량만 막는데,
- * 착탄은 매 프레임 들어오므로 상한이 곧 정상 상태가 된다. 그래서 상한을 더 조이는
- * 대신 **사건을 두 종류로 갈랐다**:
- *
- *  · **quake(큰 사건)** — 보스 등장/처치, 타워 파괴, 타워가 1/3 밑으로, 마을이
- *    크게 뚫림. 판에서 몇 번 안 일어나고, 일어나면 플레이어가 판단을 바꿔야 하는
- *    사건들이다. 세기는 **종전 그대로 둔다** — 줄여야 하는 건 큰 사건이 아니다.
- *  · **tap(잦은 사건)** — 착탄. **피해량과 무관한 고정값**이다(사용자 요구:
- *    "작게 하거나, 고정 시켜서"). 피해에 비례시키면 후반 타워가 곧 지진이 된다.
- *
- * 그리고 잔챙이 처치·단일 착탄·체인 경유점은 **아예 안 흔든다.** 그 셋은 이미
- * 파티클과 소리를 갖고 있어서 셰이크가 없어도 사건이 안 사라진다 — 화면 전체를
- * 움직이는 것은 그 정보를 **한 번 더** 말하는 값비싼 방법일 뿐이었다.
+ * 셰이크 규칙은 **`./shakebus` 에 있다** — 이 파일에서 떼어 낸 이유와 두 채널의 유도가
+ * 전부 그 파일 머리말에 있다(요약: 큰 사건만 판을 흔든다. 착탄은 피해와 무관한 고정
+ * 세기 한 톡이고 시계로 스로틀한다). 여기서는 **어떤 사건이 어느 채널인가**만 정한다.
  */
-/** 큰 사건 채널의 한 배치 총량 (구 SHAKE_BUDGET 0.5 — 채널이 갈려 더 조였다) */
-const SHAKE_BUDGET = 0.34;
-/** 잦은 사건 1회당 **고정** 세기 — 피해·티어·타워 종류를 안 본다 */
-const TAP_SHAKE = 0.018;
 /**
  * 마을 피격이 **판을 흔드는** 문턱 — 한 배치에 잃은 HP 비율.
  * 0.15 = 25 HP 기준 3.75. 한 입(0.04)·두 입(0.08) 은 못 넘고, 문을 뚫고 들어간
  * 큰 놈의 잔액 한 방은 넘는다 (flushBaseHits 주석).
  */
 const BASE_QUAKE_FRAC = 0.15;
-/**
- * 잦은 사건 채널의 한 배치 총량. 착탄이 한 프레임에 열 발 들어와도 여기서 잘려
- * 최대 진폭이 종전 최악(0.5 → 0.175 오프셋)의 **1/11** 로 떨어진다.
- */
-const TAP_BUDGET = 0.05;
 
 /** 한 배치에서 허용하는 타워 피격 연출(파편+숫자) 수 — 부족 무리의 난타 스팸 방지 */
 const TOWER_HIT_FX_MAX = 4;
@@ -421,10 +396,8 @@ export class FxRouter {
 
   private v = new THREE.Vector3();
   private vibrationOn: boolean;
-  /** 한 배치 내 **큰 사건** 셰이크 누적 (SHAKE_BUDGET 상한) */
-  private shakeSpent = 0;
-  /** 한 배치 내 **잦은 사건** 셰이크 누적 (TAP_BUDGET 상한 — 예산을 따로 둔다) */
-  private tapSpent = 0;
+  /** 화면 흔들림 2채널 (./shakebus) — 생성자에서 카메라에 연결한다 */
+  private shakes!: ShakeBus;
   /** 오라 불티 스팸 방지 — 배치당 상한 */
   private auraFlecks = 0;
   /** 타워 피격 파편/숫자 스팸 방지 — 무리가 동시에 두들기면 금방 찬다 */
@@ -487,6 +460,7 @@ export class FxRouter {
     vibrationOn: boolean,
   ) {
     this.vibrationOn = vibrationOn;
+    this.shakes = new ShakeBus((a) => camera.shake(a));
   }
 
   private worldToScreen(x: number, y: number, z: number): { sx: number; sy: number } | null {
@@ -502,37 +476,19 @@ export class FxRouter {
     if (this.vibrationOn) vibrate(ms);
   }
 
-  /**
-   * **큰 사건** 셰이크 — 보스·타워 파괴·마을 돌파처럼 판에서 몇 번 안 나는 사건 전용.
-   * 배치당 총량을 제한해 같은 프레임에 여럿이 겹쳐도 화면이 튀지 않게 한다.
-   * 잦은 사건은 여기 오면 안 된다 — `tap()` 을 쓴다(위 채널 주석).
-   */
+  /** 큰 사건 — 보스·타워 파괴·마을 돌파. 잦은 사건은 `tap()` 이다 (./shakebus) */
   private quake(amount: number): void {
-    if (amount <= 0.002) return;
-    const left = SHAKE_BUDGET - this.shakeSpent;
-    if (left <= 0) return;
-    const a = Math.min(amount, left);
-    this.shakeSpent += a;
-    this.camera.shake(a);
+    this.shakes.quake(amount);
   }
 
-  /**
-   * **잦은 사건** 셰이크 — 고정 세기 `TAP_SHAKE × mul`, 별도 예산(TAP_BUDGET).
-   * 인자로 피해량을 받지 않는 것이 요점이다: 받는 순간 후반 타워가 지진이 된다.
-   * `mul` 은 사건 종류의 무게만 준다(착탄 1, 지형 정리 2 — 잦기가 다르다).
-   */
-  private tap(mul = 1): void {
-    const left = TAP_BUDGET - this.tapSpent;
-    if (left <= 0) return;
-    const a = Math.min(TAP_SHAKE * mul, left);
-    this.tapSpent += a;
-    this.camera.shake(a);
+  /** 잦은 사건 — 착탄·지형 정리. **피해량을 안 받는 것이 요점이다** (./shakebus) */
+  private tap(weight = 1): void {
+    this.shakes.tap(weight);
   }
 
   handle(events: readonly SimEvent[]): void {
     const s3 = this.stage3d;
-    this.shakeSpent = 0;
-    this.tapSpent = 0;
+    this.shakes.beginBatch();
     this.auraFlecks = 0;
     this.towerHits = 0;
     this.allyShots = 0;
