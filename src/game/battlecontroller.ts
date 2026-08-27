@@ -617,9 +617,15 @@ export class BattleController {
     this.profile.data.stats.playMs += performance.now() - this.startMs;
   }
 
+  /**
+   * 이 판이 심어 둔 `__wgd` 훅의 신원. `dispose()` 가 **자기 것만** 지우기 위한 표식이다.
+   * (같은 프레임에 새 판이 이미 자기 훅을 심었으면 그것을 지우면 안 된다)
+   */
+  private testHook: object | null = null;
+
   private installTestHooks(): void {
     if (!isTestMode()) return;
-    (window as unknown as Record<string, unknown>)['__wgd'] = {
+    this.testHook = {
       sim: this.sim,
       ff: (n: number): void => {
         for (let i = 0; i < n; i++) this.sim.tick();
@@ -809,10 +815,22 @@ export class BattleController {
         };
       },
     };
+    (window as unknown as Record<string, unknown>)['__wgd'] = this.testHook;
   }
 
   dispose(): void {
     this.disposed = true;
+    /*
+     * ⚠ **훅도 같이 버린다.** 안 지우면 `__wgd` 가 **버려진 sim** 을 가리킨 채 남는다 —
+     *   그러면 "판이 아직 살아 있나?"를 `__wgd` 로 묻는 계약이 판을 버린 뒤에도 조용히
+     *   통과한다. 이 저장소가 반복해서 당한 "잣대가 딴것을 잰다"의 정확한 형태다.
+     *   (`tests/e2e/result.spec.ts` 가 이 신호에 기댄다)
+     */
+    if (this.testHook) {
+      const w = window as unknown as Record<string, unknown>;
+      if (w['__wgd'] === this.testHook) delete w['__wgd'];
+      this.testHook = null;
+    }
     if (this.endTimer) clearTimeout(this.endTimer);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.placement.dispose();

@@ -116,7 +116,19 @@ export function createApp(): void {
     profile,
     stages: STAGES,
     towerDefs: TOWER_DEFS,
-    goto: (s: ScreenId, params?: unknown) => fsm.goto(s, params),
+    goto: (s: ScreenId, params?: unknown) => {
+      /*
+       * 결과 화면이 전투 장면 위에 뜨게 되면서(위 콜백) **전투를 버리는 자리가
+       * 여기로 옮겨 왔다.** 결과에서 로비로 나가는 순간 판을 버리고 로비 배경을 세운다.
+       * ⚠ `battle`·`result` 로 갈 때는 안 버린다 — 그 둘이 판을 필요로 하는 화면이다.
+       *   (`startBattle` 은 자기가 먼저 버리고 새로 만든다 — 이 래퍼를 안 지난다)
+       */
+      if (controller && s !== 'result' && s !== 'battle') {
+        disposeBattle();
+        buildBackdrop();
+      }
+      fsm.goto(s, params);
+    },
     currentScreen: () => fsm.currentId() ?? 'title',
     startBattle,
     battle: null,
@@ -155,9 +167,22 @@ export function createApp(): void {
       endless,
       qm.flags,
       (result: ResultSummary) => {
+        /*
+         * ⚠ **전투를 여기서 버리지 않는다** — 사용자 요구:
+         *   > "게임 엔딩 팝업이 게임 화면을 약간 어둡게 하고 바로 나오도록 해줘.
+         *   >  지금은 그냥 빈 화면에 별도로 나오고 있어"
+         *
+         * 옛 흐름은 `disposeBattle()` → `buildBackdrop()` → 결과 화면이었다. 곧 결과가
+         * 뜨는 순간 **방금까지 보던 판이 사라지고** 로비 디오라마가 대신 떴다 — 화면이
+         * 통째로 갈리니 "빈 화면에 별도로 나온다"로 읽힌다.
+         * 지금은 판을 **그대로 세워 둔 채** 얼리고(`paused`), 그 위에 결과가 얹힌다.
+         * 메인 루프가 `controller` 가 살아 있는 동안 계속 그리므로 판이 배경으로 남는다.
+         *
+         * ⚠ 버리는 자리는 **결과를 떠날 때**로 옮겼다(아래 `goto` 래퍼 · `startBattle`).
+         *   여기서 안 버렸다고 영원히 안 버려지면 전투 씬이 로비까지 따라간다.
+         */
         facade.lastResult = result;
-        disposeBattle();
-        buildBackdrop();
+        if (controller) controller.api.paused = true;
         audio.music.setIntensity(0);
         fsm.goto('result');
       },
@@ -188,17 +213,27 @@ export function createApp(): void {
 
   // 컨텍스트 복구 시 씬 재구축
   renderer.onContextRestored = () => {
-    if (controller) {
+    /*
+     * ⚠ **결과 화면은 이제 판을 살려 둔 채 그 위에 뜬다** — 그래서 여기서 `controller`
+     *   가 살아 있다고 곧 "전투 중"이 아니다. 결과 위에서는 `forceQuit()` 이 이미
+     *   `ended` 라 **아무 일도 안 한다**. 그 갈래로 보내면 아무도 안 버린 판이 죽은 GPU
+     *   자원 그대로 계속 그려진다. 결과 위면 판을 버리고 로비 배경으로 바꾼다.
+     */
+    const onResult = fsm.currentId() === 'result';
+    if (controller && !onResult) {
       // 전투 중 복구는 드묾 — 진행분 정산 포함 종료 후 로비로 (quit 경로 재사용).
-      // 이미 종료 연출 중이면 no-op — 기존 종료 흐름(결과/로비 전환)이 마무리한다.
       controller.forceQuit();
       audio.music.setIntensity(0);
-    } else {
-      backdrop?.dispose();
-      backdrop = null;
-      backdropStageId = 0;
-      buildBackdrop();
+      return;
     }
+    if (onResult) {
+      disposeBattle();
+      audio.music.setIntensity(0);
+    }
+    backdrop?.dispose();
+    backdrop = null;
+    backdropStageId = 0;
+    buildBackdrop();
   };
 
   // 동적 해상도가 바닥(0.7)에 닿아도 계속 느림 → 품질 티어 한 단계 강등

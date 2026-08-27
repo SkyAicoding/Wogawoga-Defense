@@ -970,8 +970,32 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 
 /* --- 결과 ---------------------------------------------------------------- */
-.screen--result.is-won { background: radial-gradient(100% 70% at 50% 0%, rgba(255, 208, 74, 0.3), transparent 60%), linear-gradient(180deg, #2c3f22, #0e1a12); }
-.screen--result.is-lost { background: linear-gradient(180deg, #33201c, #0e1a12); }
+/*
+ * ⚠⚠ **결과는 판 위에 얹힌다** (사용자 요구: "게임 화면을 약간 어둡게 하고 바로 나오도록").
+ *   옛 값은 **불투명** 그라디언트라 방금까지 보던 전투 화면을 통째로 가렸고, 그것이
+ *   "빈 화면에 별도로 나온다"로 보였다. 지금은 판을 살려 둔 채(app.ts 결과 콜백)
+ *   여기서 **어둡게만** 덮는다 — 알파를 0.62/0.70 로 둔 것은 판이 비쳐 보이면서도
+ *   흰 글씨와 패널이 읽히는 최소선이다(그 아래로 내리면 별·숫자가 잔디에 묻힌다).
+ *   승패 색조는 그대로 남긴다 — 이겼는지 졌는지가 배경색으로도 읽히던 자리다.
+ */
+.screen--result {
+  animation: res-fade 0.28s ease-out both;
+  /* 흐림은 **약하게** — 사용자가 요구한 것은 "약간 어둡게"이지 배경 지우기가 아니다.
+     0에 두면 잔디/나무 위의 흰 숫자가 잘 안 읽히고, 3px 을 넘기면 판이 뭉개져
+     "방금 내 판"이 아니라 그냥 무늬가 된다. */
+  backdrop-filter: blur(1.5px);
+}
+@keyframes res-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .screen--result { animation: none; }
+}
+.screen--result.is-won {
+  background: radial-gradient(100% 70% at 50% 0%, rgba(255, 208, 74, 0.34), transparent 62%),
+    linear-gradient(180deg, rgba(24, 40, 22, 0.62), rgba(8, 16, 11, 0.82));
+}
+.screen--result.is-lost {
+  background: linear-gradient(180deg, rgba(44, 24, 20, 0.7), rgba(8, 16, 11, 0.86));
+}
 .res-col { align-items: center; justify-content: center; gap: 12px; text-align: center; position: relative; }
 .res-burst { position: absolute; top: 2%; left: 50%; width: 74vmin; height: 74vmin; max-width: 440px; max-height: 440px; pointer-events: none; }
 .is-won .res-burst {
