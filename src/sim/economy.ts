@@ -15,6 +15,8 @@ import {
   PLACEMENT_BASE_MUL,
   PLACEMENT_STAGE_MAX_STEP,
   PLACEMENT_STAGE_STEP,
+  UPGRADE_GROWTH,
+  UPGRADE_MAX_MUL,
   SCENERY_CLEAR_BASE_COST,
   SCENERY_CLEAR_GROWTH,
   SCENERY_CLEAR_MAX_COST,
@@ -60,6 +62,21 @@ export function placementCostFor(baseCost: number, towerCount: number, stageId: 
 }
 
 /**
+ * 업그레이드 실비용 — **이 판에서 업그레이드를 할수록 비싸진다**.
+ *
+ * `baseCost` 는 `towers.ts` 의 `tiers[t+1].cost` 그대로이고, 거기에 판 누적 횟수의
+ * 지수 배수가 곱해진다. 배치 축이 동결(`PLACEMENT_GROWTH = 1`)되면서 옮겨 온 압력이다 —
+ * 유도와 손잡이 위치는 balance.ts `UPGRADE_GROWTH` 주석 하나에만 있다(여기 복사하면 낡는다).
+ *
+ * ⚠ `upgradeCount` 는 **판 전체 누적**이다. 타워별로 세면 배치가 공짜인 지금
+ *   "새로 세워서 1티어만 올리기"로 값을 피할 수 있다.
+ */
+export function upgradeCostFor(baseCost: number, upgradeCount: number): number {
+  const m = Math.max(0, upgradeCount);
+  return Math.round(baseCost * Math.min(UPGRADE_GROWTH ** m, UPGRADE_MAX_MUL));
+}
+
+/**
  * 소품 제거 비용 — 이미 치운 개수(0-base)에 따라 지수적으로 오른다.
  * 곡선은 balance.SCENERY_CLEAR_{BASE_COST,GROWTH,MAX_COST}가 유일한 출처다
  * (여기에 수치를 복사해 두면 반드시 낡는다 — 실제로 BASE 80→120 상향 때 낡았다).
@@ -73,10 +90,30 @@ export function sceneryClearCostFor(clearedCount: number): number {
 export class Economy {
   private freeUsed = false;
   private paidCount = 0;
+  /**
+   * 이 판에서 지금까지 한 업그레이드 횟수 — `upgradeCostFor` 의 지수다.
+   * 새로고침의 `paidCount` 와 같은 자리(판 단위 경제 카운터)에 둔다.
+   * ⚠ 판매로는 **안 줄인다.** 줄이면 "올렸다 팔았다"로 값을 초기화하는 착취가 생긴다.
+   */
+  private upgradesDone = 0;
 
   refreshCost(): number {
     if (!this.freeUsed) return 0;
     return Math.round(REFRESH_BASE * REFRESH_GROWTH ** this.paidCount);
+  }
+
+  /**
+   * 지금 한 티어 올릴 때의 실비용. `baseCost` 는 티어표 값 그대로 넣는다.
+   * 값을 읽는 곳과 세는 곳을 한 객체에 묶어 둔 이유: 둘이 갈리면 화면에 뜬 값과
+   * 실제로 빠지는 값이 어긋난다(이 저장소가 반복해서 당한 꼴이다).
+   */
+  upgradeCostOf(baseCost: number): number {
+    return upgradeCostFor(baseCost, this.upgradesDone);
+  }
+
+  /** 업그레이드가 **성사된 뒤에만** 부른다 — 거부된 시도는 값을 안 올린다 */
+  onUpgraded(): void {
+    this.upgradesDone++;
   }
 
   private draw(ctx: SimCtx): CardState | null {

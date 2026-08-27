@@ -499,10 +499,13 @@ class Battle implements BattleSim {
     const t = ctx.world.findTower(towerId);
     if (!t || t.tier >= MAX_TIER) return false;
     const next = ctx.opts.towerDefs[t.defId].tiers[t.tier + 1];
-    if (!next || ctx.view.gold < next.cost) return false;
-    addGold(ctx, -next.cost);
+    // 사용자 지시로 압력이 배치 → 업그레이드로 옮겨졌다(balance.UPGRADE_GROWTH).
+    // 티어표 값이 아니라 **이 판에서 몇 번째 업그레이드인가**가 곱해진 실비용을 쓴다.
+    const cost = next ? this.economy.upgradeCostOf(next.cost) : 0;
+    if (!next || ctx.view.gold < cost) return false;
+    addGold(ctx, -cost);
     t.tier++;
-    t.invested += next.cost;
+    t.invested += cost;
     // 업그레이드 회복 정책: **늘어난 최대치만큼만 즉시 회복** (누적 피해량은 그대로 유지).
     // 전량 회복으로 하면 업그레이드가 곧 완전 수리가 되어 "부서지기 전에 한 티어 올려 버티기"가
     // 항상 정답이 되고 파괴 위협이 사라진다. 비율 유지로 하면 반대로 절반 남은 타워를
@@ -511,6 +514,8 @@ class Battle implements BattleSim {
     const nextMax = maxHpFor(ctx, t.defId, t.tier);
     t.hp = Math.max(1, t.hp + (nextMax - t.maxHp));
     t.maxHp = nextMax;
+    // 성사된 뒤에만 센다 — 위 거부 경로(골드 부족·만렙)는 값을 안 올린다
+    this.economy.onUpgraded();
     ctx.events.push({ type: 'towerUpgraded', towerId: t.id, defId: t.defId, tier: t.tier });
     return true;
   }
@@ -924,7 +929,9 @@ class Battle implements BattleSim {
     const t = this.ctx.world.findTower(towerId);
     if (!t) return null;
     const next = this.ctx.opts.towerDefs[t.defId].tiers[t.tier + 1];
-    return next ? next.cost : null;
+    // ⚠ 티어표 값이 아니라 **지금 실비용**이다 — 판 누적 업그레이드 횟수가 곱해진다
+    //   (balance.UPGRADE_GROWTH). 화면·봇·테스트가 전부 이 하나를 읽어야 값이 안 갈린다.
+    return next ? this.economy.upgradeCostOf(next.cost) : null;
   }
 
   sellRefund(towerId: number): number | null {
