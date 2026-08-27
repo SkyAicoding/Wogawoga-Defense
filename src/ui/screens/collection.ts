@@ -218,8 +218,14 @@ export function createCollectionScreen(): Screen<GameFacade> {
          * 여기서 보여 주는 것은 **레벨**이다: 사용자가 물은 것이 "어떤 모양으로 던지고
          * 터지는지"이고, 모양을 바꾸는 축이 레벨이기 때문이다(별은 수치만 바꾼다).
          */
+        /*
+         * ⚠ **잠긴 타워도 보여 준다.** 처음엔 해금한 것만 붙였다("잠긴 것을 보여 주면
+         *   광고가 된다"는 내 판단이었다). 사용자가 물렸다: "스테이지 안 열린것은 못 보내?"
+         *   맞는 지적이다 — **안 열린 것이야말로 궁금한 것**이고, 도감의 뜻이 원래 그거다.
+         *   해금 조건은 아래 `action` 이 따로 말하므로 정보가 겹치지도 않는다.
+         */
         let previewBlock: HTMLElement | null = null;
-        if (tp.unlocked) {
+        {
           if (!preview) preview = createTowerPreview();
           const pv = preview;
           const lvBtns: HTMLElement[] = [];
@@ -268,7 +274,7 @@ export function createCollectionScreen(): Screen<GameFacade> {
            * **액션 미리보기** — 해금한 타워에만 붙인다. 잠긴 타워는 판에 세울 수 없으므로
            * 동작을 보여 주는 것이 정보가 아니라 광고가 된다(해금 조건 안내가 그 자리의 뜻이다).
            */
-          tp.unlocked ? previewBlock : null,
+          previewBlock,
           h('div', { class: 'sheet-stats' },
             statRow('dmg', t('collection.statDmg'), hasAttack && tier0 ? String(tier0.dmg) : '—'),
             statRow(
@@ -301,7 +307,7 @@ export function createCollectionScreen(): Screen<GameFacade> {
           } }, sheet),
         );
         // 미리보기는 **DOM 에 붙은 뒤에** 켠다 — 캔버스 크기를 재야 카메라가 잡힌다
-        if (tp.unlocked && preview) preview.show(def, 0);
+        preview?.show(def, 0);
       };
 
       root = h(

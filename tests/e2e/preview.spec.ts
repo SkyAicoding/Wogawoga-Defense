@@ -56,6 +56,36 @@ test('도감 미리보기: 레벨을 고르면 동작과 숫자가 같이 간다
   expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
 });
 
+/**
+ * **잠긴 타워도 미리 볼 수 있다** — 사용자가 물린 자리:
+ *   > "스테이지 안 열린것은 못 보내?"
+ * 처음 판본은 해금한 타워에만 미리보기를 붙였다. 도감의 뜻이 **아직 못 쓰는 것을
+ * 미리 보는 것**이므로 정확히 거꾸로였다. 해금 조건 안내(`.sheet-hint`)는 그대로 뜬다 —
+ * 둘은 다른 정보라 겹치지 않는다.
+ */
+test('도감 미리보기: 스테이지 잠금 타워도 동작을 보여 준다', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  page.on('pageerror', (e) => errors.push(String(e)));
+
+  await openCodex(page);
+  const locked = page.locator('.coll-cell.is-locked');
+  const n = await locked.count();
+  expect(n, '잠긴 타워가 하나도 없다 — 이 계약이 공허하다').toBeGreaterThan(0);
+
+  await locked.first().click();
+  await page.waitForTimeout(1000);
+  const canvas = page.locator('.tower-preview .tp-canvas');
+  await expect(canvas, '잠긴 타워에 미리보기가 없다').toBeVisible();
+  const box = await canvas.boundingBox();
+  expect(box?.width ?? 0, '캔버스 폭이 0 이다').toBeGreaterThan(80);
+  await expect(page.locator('.tp-lv-btn'), '잠긴 타워에도 레벨 선택기가 있어야 한다').toHaveCount(5);
+  // 해금 조건 안내는 여전히 뜬다 (미리보기가 그것을 밀어내면 안 된다)
+  await expect(page.locator('.sheet-hint, .sheet-action').first(), '해금 안내가 사라졌다').toBeVisible();
+
+  expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
+});
+
 test('도감 미리보기: 여닫아도 WebGL 컨텍스트가 안 샌다', async ({ page }) => {
   const errors: string[] = [];
   const warns: string[] = [];
