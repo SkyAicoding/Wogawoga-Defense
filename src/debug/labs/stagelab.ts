@@ -152,6 +152,7 @@ export function run(): void {
       id: nextProjId++,
       kind: 'ballistic',
       towerDefId: rng.chance(0.5) ? 'catapult' : 'brazier',
+      tier: rng.int(0, 4), // 랩은 티어 연출을 눈으로 보려고 흩뿌린다
       x: startX, y: 0.5, z: startZ,
       prevX: startX, prevY: 0.5, prevZ: startZ,
       targetId: target.id,

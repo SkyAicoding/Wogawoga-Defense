@@ -1114,6 +1114,15 @@ export interface ProjectileState {
   id: number;
   kind: ProjectileKind;
   towerDefId: TowerId;
+  /**
+   * **쏜 타워의 0-base 티어 (0~4).** 렌더가 투사체를 티어만큼 키우고 밝히는 데 쓴다
+   * (사용자 요구: "강화된 만큼 날아가는 무기도 뭐 멋지고 화려하게").
+   *
+   * ⚠ 판정에는 안 쓴다 — 피해·속도·스플래시는 발사 시점에 이미 `dmg`/`speed`/`splash`
+   *   로 굳어 실려 있다. 곧 이 필드는 **연출 전용**이고, 여기를 읽어 판정을 바꾸면
+   *   같은 값이 두 곳에서 정해지는 꼴이 된다.
+   */
+  tier: number;
   x: number;
   y: number;
   z: number;

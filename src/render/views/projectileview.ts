@@ -40,6 +40,36 @@ const RAID_DUR_MAX = 0.5;
 const RAID_TINTED: ReadonlySet<TowerId> = new Set<TowerId>(['brazier']);
 
 /**
+ * ══ 티어가 오르면 **날아가는 것도 커지고 밝아진다** ═══════════════════════════
+ * 사용자 지적:
+ *   > "Lv 이 올라가면 (강화) 탑은 커지고 좋아지는데 탑에서 날아가는 무기는 동일한거
+ *   >  같아. 이 무기도 확실히 업그레이드를 시켜줘. 강화된 만큼 날아가는 무기도
+ *   >  머 멋지고 화려하게"
+ *
+ * ⚠⚠ **티어별로 지오메트리를 나누면 안 된다.** 이 뷰는 타워 종마다 `InstancedMesh`
+ *   하나이고, 티어를 키로 더하면 메시가 5배(= 드로우콜 5배)가 된다. 이 저장소의
+ *   전투 예산은 90콜이고 그 천장을 만드는 것이 이미 타워 수다
+ *   (`tests/e2e/smoke.spec.ts` '기준 프레임 예산'). 그래서 변화는 전부
+ *   **인스턴스별**로 준다 — 행렬 스케일과 `instanceColor` 둘뿐이고, **드로우콜은 0 증가**다.
+ *
+ * ── 왜 이 셋인가 ──────────────────────────────────────────────────────────
+ *  · **길이가 굵기보다 더 는다**(0.19 대 0.11). 같은 비율로 키우면 그냥 "큰 돌"이고,
+ *    앞으로 길어지면 **빠르고 꿰뚫는 것**으로 읽힌다. 투사체는 진행 방향(+x)으로 눕혀
+ *    그리므로(`FWD`) x 가 곧 길이다.
+ *  · **밝기가 1을 넘는다**(T5 에서 1.72배). `instanceColor` 는 정점색에 곱해지므로
+ *    1보다 큰 값이 그대로 과노출이 되고, ACES 톤매핑이 그것을 **발광**으로 굴린다 —
+ *    새 재질도, 블룸 패스도 없이 "빛나는 무기"가 된다(render 헤더의 '가짜 블룸'과 같은 수법).
+ *  · **따뜻한 쪽으로 민다**(r 0.22 > g 0.16 > b 0.08). 흰색으로만 밝히면 바래 보인다.
+ *    붉은 기가 남아야 "달궈진 것"으로 읽힌다.
+ *
+ * T1 은 배수 1.00 · 색 1.00 이라 **옛 그림과 한 픽셀도 다르지 않다** — 변화는 강화한
+ * 사람에게만 보인다. 그것이 이 요구의 뜻이다.
+ */
+const TIER_LEN_STEP = 0.19;
+const TIER_GIRTH_STEP = 0.11;
+const TIER_TINT_STEP: readonly [number, number, number] = [0.22, 0.16, 0.08];
+
+/**
  * 습격대 투척물 — **드로우콜 증가 0** 으로 무언가가 날아가게 하는 방법.
  *
  * 전용 InstancedMesh 를 만들면 무조건 +1콜이다. 대신 이미 만들어 둔 타워 투사체
@@ -121,9 +151,14 @@ export class ProjectileView {
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       // 색조가 필요한 메시만 instanceColor 를 켠다 — 켜 두면 three 가 배열을 0(검정)으로
       // 잡으므로 전 칸을 흰색으로 초기화해야 타워 투사체가 까맣게 나오지 않는다
-      if (RAID_TINTED.has(id)) {
-        for (let i = 0; i < CAPACITY; i++) mesh.setColorAt(i, WHITE);
-      }
+      /*
+       * ⚠ **이제 전 메시가 색조를 쓴다** (티어 밝기). 옛 판본은 `RAID_TINTED`(brazier)
+       *   에만 켰다 — three 가 `instanceColor` 배열을 0(검정)으로 잡으므로, 켜는 메시는
+       *   반드시 전 칸을 흰색으로 초기화해야 투사체가 까맣게 나온다. 그 규약은 그대로다.
+       *   `RAID_TINTED` 는 남는다: 습격대 투척물이 **색을 갈아 끼우는** 종을 가리는
+       *   별개의 뜻이고(아래 `updateRaidShots`), 티어 밝기와는 다른 축이다.
+       */
+      for (let i = 0; i < CAPACITY; i++) mesh.setColorAt(i, WHITE);
       mesh.count = 0;
       mesh.frustumCulled = false;
       this.meshes.set(id, mesh);
@@ -180,10 +215,22 @@ export class ProjectileView {
       }
 
       _quat.setFromUnitVectors(FWD, _dir);
+      // 티어 연출 — 길이가 굵기보다 더 늘고, 색이 1을 넘어 발광이 된다 (위 상수 주석)
+      const tier = Math.max(0, Math.min(4, p.tier));
+      const girth = 1 + tier * TIER_GIRTH_STEP;
+      _scl.set(1 + tier * TIER_LEN_STEP, girth, girth);
       _mat4.compose(_pos, _quat, _scl);
       mesh.setMatrixAt(idx, _mat4);
-      // 색조를 켠 메시(brazier)는 투척물이 지나간 칸이 물들어 있을 수 있다 — 되돌린다
-      if (mesh.instanceColor) mesh.setColorAt(idx, WHITE);
+      // ⚠ 매 프레임 **다시 쓴다**. 인스턴스 칸은 재사용되므로(습격대 투척물이 뒤에 붙고
+      //   투사체 수가 매 프레임 바뀐다) 안 쓰면 앞 프레임의 다른 티어 색이 남는다.
+      mesh.setColorAt(
+        idx,
+        _tint.setRGB(
+          1 + tier * TIER_TINT_STEP[0],
+          1 + tier * TIER_TINT_STEP[1],
+          1 + tier * TIER_TINT_STEP[2],
+        ),
+      );
     }
 
     // 습격대 투척물은 **타워 투사체 뒤에** 붙는다 — 칸이 모자라면 밀리는 쪽이 연출이다

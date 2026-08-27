@@ -110,8 +110,13 @@ export interface EnemySim extends EnemyState {
  */
 export interface ProjectileSim extends ProjectileState {
   sourceTowerId: number;
-  /** 발사 타워의 0-base 티어 (0~4) */
-  tier: number;
+  /*
+   * ⚠ `tier` 는 **공개 `ProjectileState` 로 올라갔다**(types.ts). 이유는 하나 —
+   *   렌더가 읽어야 하기 때문이다. 사용자 지적:
+   *     > "Lv 이 올라가면 (강화) 탑은 커지고 좋아지는데 탑에서 날아가는 무기는 동일한거
+   *     >  같아. 이 무기도 확실히 업그레이드를 시켜줘."
+   *   값 자체는 예전부터 여기 있었다(`attack.ts` 가 발사할 때 채운다). 뷰가 못 봤을 뿐이다.
+   */
 }
 
 function makeEnemy(): EnemySim {
