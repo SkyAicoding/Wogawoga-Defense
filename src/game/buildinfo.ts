@@ -34,7 +34,7 @@ export type BuildOrigin = '회사노트북' | '집노트북' | '아이폰';
  *   아는 유일한 주체라서 **배포를 준비할 때 이 한 줄을 손으로 맞춘다.**
  *   (환경변수로 빼도 값을 아는 쪽은 결국 세션이라 자리만 옮기는 셈이다.)
  */
-export const BUILD_ORIGIN: BuildOrigin = '회사노트북';
+export const BUILD_ORIGIN: BuildOrigin = '집노트북';
 
 /** 빌드 시각 (ISO 8601) — `vite.config.ts` 의 define 이 박는다 */
 export const BUILD_TIME: string = __BUILD_TIME__;
