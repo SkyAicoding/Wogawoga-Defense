@@ -200,12 +200,29 @@ export const allySlingerSvg = SVG(
    <circle cx="38" cy="35" r="5.5" fill="#9aa39a" stroke="#3f4640" stroke-width="2.5"/>`,
 );
 
-/** 방패 파수꾼 — 큰 나무 방패 (탱커) */
+/**
+ * 마법사 — **뼈 갈래 지팡이 + 작은 방패** (버티면서 고치는 사람).
+ *
+ * ⚠ 3D 모델(`meshlib/enemies.ts kitGuardian`)과 **손에 든 것이 같아야 한다** — 카드로
+ *   뽑은 사람이 판 위에서 다른 물건을 들고 있으면 그 카드가 무엇이었는지 두 번 배운다.
+ *   그래서 3D 가 방패를 줄이고 지팡이를 얹었을 때 이 아이콘도 같이 움직인다.
+ *
+ * ⚠ 방패를 안 지운 이유도 3D 와 같다: 역할이 안 바뀌었고(hp 560 · 봉쇄자) **회복은
+ *   화면에 안 보이는 능력**이라, "맞아 주는 사람"이라고 말하는 물건이 방패뿐이다.
+ *   지팡이만 들리면 뒤에 서는 원거리 딜러로 읽혀 실제 배치(앞줄)와 반대가 된다.
+ *
+ * 색: 자루는 나무(#8a6a3c), 갈래는 뼈(#e8e0cc), 결정은 **하늘빛**(#8fd8ef)이다.
+ * 하늘빛은 체력바의 '내 편' 청록·회복 배지와 같은 축이라 낱말 없이 "우리 편 회복"으로
+ * 읽힌다. ⚠ 민트(#6ff2c8)는 **적 주술사의 해골 지팡이 색**이라 일부러 피했다.
+ */
 export const allyGuardianSvg = SVG(
   `${ALLY_BODY}
-   <path d="M32 12 L45 16 L45 30 C45 37 38 42 38 42 C38 42 31 37 31 30 Z"
-     fill="#c49a5e" stroke="#4a3018" stroke-width="3" stroke-linejoin="round"/>
-   <path d="M38 18 L38 36" stroke="#7a5230" stroke-width="2.5"/>`,
+   <path d="M30 15 L28 41" stroke="#8a6a3c" stroke-width="3.4" stroke-linecap="round"/>
+   <path d="M30 15 Q26 10 24 12 M30 15 Q34 10 36 12"
+     fill="none" stroke="#e8e0cc" stroke-width="2.6" stroke-linecap="round"/>
+   <circle cx="30" cy="13" r="3.6" fill="#8fd8ef" stroke="#2f6b80" stroke-width="2"/>
+   <path d="M41 22 L47 25 L47 33 C47 38 44 41 44 41 C44 41 41 38 41 33 Z"
+     fill="#c49a5e" stroke="#4a3018" stroke-width="2.6" stroke-linejoin="round"/>`,
 );
 
 /**
