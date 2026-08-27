@@ -21,7 +21,12 @@ import { build, type Stage3D } from '@/render/stage3d';
 import { createProfile } from '@/meta/profile';
 import { BattleController } from './battlecontroller';
 
-export const APP_VERSION = '1.0.0';
+/**
+ * 버전은 `./buildinfo` 가 소유한다 — 빌드 시각·빌드 기기와 **한 자리에** 모여 있어야
+ * 배포할 때 한 곳만 보면 되기 때문이다. 여기서는 기존 소비자를 위해 재수출만 한다.
+ */
+export { APP_VERSION } from './buildinfo';
+import { APP_VERSION } from './buildinfo';
 
 export function createApp(): void {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;

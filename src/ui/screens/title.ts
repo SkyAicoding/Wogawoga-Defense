@@ -2,6 +2,7 @@
  * 타이틀 화면 — 돌도장 로고 + '탭하여 시작'. 화면 전체 탭 → 로비.
  */
 import type { GameFacade } from '@/data/types';
+import { buildStamp } from '@/game/buildinfo';
 import type { Screen } from '@/core/fsm';
 import { h, mount, unmount, uiRoot } from '../dom';
 import { t } from '../i18n';
@@ -51,7 +52,12 @@ export function createTitleScreen(): Screen<GameFacade> {
           h('div', { class: 'title-fire', html: fireSvg }),
           h('div', { class: 'title-spacer' }),
           h('div', { class: 'title-tap', text: t('title.tapToStart') }),
-          h('div', { class: 'title-version', text: t('title.version', { v: facade.version }) }),
+          /*
+           * 버전 · 빌드 시각 · 빌드 기기 (사용자 요구). `facade.version` 이 아니라
+           * `buildStamp()` 를 쓰는 이유: 시각과 기기는 파사드를 거칠 이유가 없는
+           * **빌드 상수**라, 파사드에 실으면 시뮬레이션 쪽 표면만 넓어진다.
+           */
+          h('div', { class: 'title-version', text: buildStamp() }),
         ),
       );
       mount(uiRoot(), root);

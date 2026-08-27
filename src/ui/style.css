@@ -159,7 +159,20 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .title-logo-bottom { font-size: clamp(2rem, 10vmin, 3.8rem); color: var(--gold); }
 .title-fire { width: min(26vw, 120px); animation: fire-wiggle 1.6s ease-in-out infinite; }
 .title-tap { font-size: 1.25rem; font-weight: 800; color: var(--cream); animation: tap-pulse 1.4s ease-in-out infinite; padding: 12px; }
-.title-version { font-size: 0.8rem; opacity: 0.55; padding-bottom: 6px; }
+/*
+ * 버전 · 빌드 시각 · 빌드 기기 한 줄. 종전('v1.0.0')보다 세 배 길어져서
+ * 좁은 폰(390px)에서 줄이 넘칠 수 있다 — 글자를 조금 줄이고 가운데 정렬로 접는다.
+ * `text-wrap: balance` 로 두 줄이 되어도 한쪽만 길게 남지 않는다.
+ */
+.title-version {
+  font-size: 0.72rem;
+  opacity: 0.55;
+  padding: 0 12px 6px;
+  text-align: center;
+  text-wrap: balance;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
 
 /* --- 로비 ---------------------------------------------------------------- */
 .screen--lobby {
