@@ -635,6 +635,10 @@ class Battle implements BattleSim {
       h = mix(h, e.gateTicks);
       h = mix(h, e.gateBiteCdLeft);
       h = mix(h, e.gateOwed);
+      // 문간 자리 목표 — x/z 에서 **유도되지 않는다.** 도착 전까지 앞으로의 궤적
+      // 전부가 이 값에 걸리고, resetEnemy 누락(풀 재사용)도 여기서 드러난다.
+      h = mix(h, Math.round(e.gateTgtX * 1000));
+      h = mix(h, Math.round(e.gateTgtZ * 1000));
       // 살점 값의 지급 이력 — **hp에서 유도되지 않는다.** 회복(healAura)으로 hp가
       // 되돌아온 적은 hp가 같아도 bountyPaid가 다르고, 곧 앞으로 받을 돈이 다르다.
       // 풀 재사용 리셋 누락(resetEnemy)도 여기서만 그 틱에 드러난다 — v.gold로도

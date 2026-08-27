@@ -228,6 +228,7 @@ import {
   GATE_HOLD_MIN_TICKS,
   GATE_STANDOFF_EDGE,
 } from '@/data/balance';
+import { TICK_DT } from '@/data/types';
 import { clamp } from '@/core/mathx';
 import { leakEnemy } from './combat';
 import type { EnemySim, SimCtx } from './entities';
@@ -243,6 +244,9 @@ export function gateEnabled(ctx: SimCtx): boolean {
 }
 
 /** 한 입의 주기(틱). 하한 1 — 0이면 같은 틱에 무한히 문다 */
+/** 문간 자리 잡기 — 이 거리 안이면 다 온 것으로 보고 정확히 박는다 (제곱) */
+const GATE_SETTLE_EPS2 = 0.0004; // 0.02 타일
+
 function biteTicks(ctx: SimCtx): number {
   return Math.max(1, Math.round(ctx.opts.stage.gate?.biteTicks ?? GATE_BITE_TICKS));
 }
@@ -365,10 +369,26 @@ function standAt(ctx: SimCtx, e: EnemySim, path: BattlePath, stopDist: number): 
   }
   // 마지막 방어선 — 셋 다 판 밖이면(경로가 맵 구석에서 끝나는 미래 데이터) 좌표를 자른다.
   // 마을 좌표가 언제나 구간 안이라 클램프는 마을 쪽으로만 민다 = 중심거리를 안 늘린다.
-  e.x = clamp(x, 0.5, stage.gridW - 0.5);
-  e.z = clamp(z, 0.5, stage.gridH - 0.5);
-  e.prevX = e.x;
-  e.prevZ = e.z;
+  /*
+   * ⚠⚠ **좌표를 박지 않는다 — 자기 자리로 걸어 들어간다** (사용자 지시).
+   *   > "공룡이 홈타운에 도착해서 공격을 할때 동작이 매우 부자연스러워. 갑자기 화면에서
+   *   >  공룡이 이동해서 나타나는 것처럼 보여."
+   *
+   *   원인이 정확히 여기였다. 종전에는 `e.x/e.z` 에 부채꼴 자리를 **대입하고
+   *   `prevX/prevZ` 까지 같은 값으로 덮어썼다** — 렌더가 두 값을 보간하므로
+   *   prev 를 덮으면 보간할 것이 없어져 **한 프레임에 순간이동**한다. 부채 폭이
+   *   한 타일 남짓이라 눈에 그대로 띈다.
+   *
+   *   지금은 그 자리를 **목표로만** 적어 두고(`gateTgtX/gateTgtZ`), `moveEnemies` 가
+   *   자기 속도로 걸어 들어간다. 도착 전까지는 걷는 자세이고, 닿으면 무는 자세다 —
+   *   곧 "공격 범위에 들어오면 그 자리에서 자세를 잡고 공격"이 그림으로 성립한다.
+   *
+   *   ⚠ `e.dist` 는 여기서 박는다. 경로상 위치는 이미 정지선이고, 그 값이 바뀌면
+   *     `moveEnemies` 가 다시 전진시킨다.
+   *   ⚠ `prevX/prevZ` 는 **손대지 않는다** — 지금 서 있던 자리가 보간의 시작점이다.
+   */
+  e.gateTgtX = clamp(x, 0.5, stage.gridW - 0.5);
+  e.gateTgtZ = clamp(z, 0.5, stage.gridH - 0.5);
   // 마을을 **바라본다** — 걷던 방향이 아니라 무는 방향이다(연출이 이 값으로 몸을 돌린다)
   e.heading = Math.atan2(base.z - e.z, base.x - e.x);
   e.dist = stopDist;
@@ -383,9 +403,13 @@ function standAt(ctx: SimCtx, e: EnemySim, path: BattlePath, stopDist: number): 
  */
 function bite(ctx: SimCtx, e: EnemySim): void {
   const v = ctx.view;
-  const amount = Math.min(GATE_BITE_AMOUNT, e.gateOwed);
-  if (amount <= 0) return;
-  e.gateOwed -= amount;
+  /*
+   * ⚠ **총액 상한이 없다** — 종전에는 `min(GATE_BITE_AMOUNT, e.gateOwed)` 라 `baseDamage`
+   *   만큼만 물고 멈췄다. 지금은 살아 있는 한 계속 문다(위 updateGate 의 ⚠⚠).
+   *   `gateOwed` 는 **표시용 잔액**으로만 남는다 — 0 밑으로는 안 내려간다.
+   */
+  const amount = GATE_BITE_AMOUNT;
+  e.gateOwed = Math.max(0, e.gateOwed - amount);
   e.gateBiteCdLeft = biteTicks(ctx);
   ctx.events.push({
     type: 'gateBite',
@@ -445,13 +469,52 @@ export function updateGate(ctx: SimCtx): void {
     if (e.gateTicks <= 0) continue;
     // ── 보조정리 A ── 무조건이다. 여기 앞에 아무 분기도 놓지 마라.
     e.gateTicks++;
-    // 규칙 7) 상한 — 뚫고 들어간다. 남은 잔액은 leakEnemy 가 한 방에 청구한다
-    if (e.gateTicks >= holdTicksFor(ctx, e)) {
-      leakEnemy(ctx, e); // 회수는 사망 처리 단계에서
-      continue;
+    /*
+     * 자기 부채꼴 자리로 **걸어 들어간다** (위 `standAt` 의 ⚠⚠). 한 틱 이동량은
+     * 걸을 때와 같은 `speed × TICK_DT` 라 속도가 안 튄다. 다 왔으면 정확히 박아
+     * 부동소수 꼬리가 안 남는다(해시가 그 꼬리에 걸린다).
+     * ⚠ 스턴·봉쇄와 무관하게 움직인다 — 이건 전투가 아니라 **자리 잡기**이고, 여기서
+     *   멈추면 순간이동을 없앤 자리에 "허공에 뜬 채 무는" 그림이 대신 생긴다.
+     */
+    {
+      const dx = e.gateTgtX - e.x;
+      const dz = e.gateTgtZ - e.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > GATE_SETTLE_EPS2) {
+        const d = Math.sqrt(d2);
+        const step = Math.min(d, e.def.speed * TICK_DT);
+        e.x += (dx / d) * step;
+        e.z += (dz / d) * step;
+      } else if (d2 > 0) {
+        e.x = e.gateTgtX;
+        e.z = e.gateTgtZ;
+      }
     }
-    // 규칙 6) 총액을 다 물었다 — 상한까지 그냥 서서 맞는다(마을·타워에게는 정지 표적이다)
-    if (e.gateOwed <= 0) continue;
+    /*
+     * ⚠⚠ **체류 상한과 총액 상한이 **둘 다 없어졌다** (사용자 지시).
+     *   > "공룡이 홈타운을 공격할때, 적 공룡 hp 가 남아 있는데도, 몇대 맞다가 죽는게
+     *   >  있어. 그러지 말고, hp 만큼 계속해서 살아서 홈 타운을 공격 하도록 해줘."
+     *
+     *   무엇이 그렇게 보였나: 랩터(baseDamage 1)의 체류 상한이 `clamp(1×60, 60, 720)`
+     *   = **60틱(2초)** 이었다. 한 입 물고 2초 뒤 `leakEnemy` 로 **HP 가 가득한 채
+     *   사라졌다.** 그리고 총액을 다 문 개체는 상한까지 **아무것도 안 하고 서 있었다**.
+     *   화면에서는 둘 다 "왜 저러지"로 보인다.
+     *
+     *   지금은: **죽을 때까지 서서 계속 문다.** 문간의 적은 이제 "지나가는 손실"이
+     *   아니라 **반드시 죽여야 하는 것**이다.
+     *
+     * ⚠ 잃은 것을 정직하게 적는다:
+     *   · 총액 항등식(`Σ한 입 + 잔액 = baseDamage`)이 사라졌다. 한 개체가 마을에 넣는
+     *     피해는 이제 **살아 있는 시간**이 정한다.
+     *   · 보조정리 A("모든 적의 문간 체류 ≤ GATE_HOLD_MAX_TICKS")가 거짓이 됐다.
+     *     종료는 여전히 성립하지만 **논거가 바뀐다**: 문 앞의 개체는 매 `biteTicks` 마다
+     *     마을 HP 를 GATE_BITE_AMOUNT 씩 깎으므로, 아무도 못 죽여도 마을 HP 가
+     *     `baseHp × biteTicks / GATE_BITE_AMOUNT` 틱 안에 0 이 되어 판이 끝난다.
+     *     곧 "적이 죽거나 마을이 죽거나" 둘 중 하나로 유한하다.
+     *     `tests/sim/wavetermination.test.ts` 가 그 새 상한을 잰다.
+     *   · `holdTicksFor` 는 **남겨 둔다** — 되돌릴 때 필요한 유도가 거기 다 있고,
+     *     `enemyAtGate` 이벤트가 아직 그 값을 싣는다(연출이 쓸 수 있다).
+     */
     // 규칙 8) 스턴 = 완전 무력화. 쿨다운도 안 흐른다 (siege.ts 규칙 5 그대로)
     if (isStunned(e)) continue;
     // 규칙 8) 봉쇄 = 표적 전환. 눈앞의 사람을 놔두고 마을을 물지 않는다.

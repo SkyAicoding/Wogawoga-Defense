@@ -86,7 +86,21 @@ export interface EnemySim extends EnemyState {
    * `siegeWalkLeft`·`bountyChunks`가 세운 "판정 전용 상태는 공개 안 한다" 규약과 같은
    * 자리다 — 여기 두면 UI가 재충전 게이지를 그리려 들고, 그 순간 연출이 판정을 흉내 낸다.
    */
-  shieldRechargeLeft: number;
+  shieldRechargeLeft: number;  /**
+   * **문간 자리 잡기 목표** (sim/gate.ts). 도착한 개체가 걸어 들어갈 부채꼴 자리다.
+   *
+   * 왜 상태가 필요한가: 종전에는 `standAt` 이 좌표를 **박고** `prevX/prevZ` 까지 덮어써서
+   * 렌더가 보간할 것이 없어졌다 — 화면에서 한 프레임 **순간이동**이었고 사용자가
+   * 그것을 지적했다("갑자기 화면에서 공룡이 이동해서 나타나는 것처럼 보여").
+   * 지금은 자리를 여기 적어 두고 `updateGate` 가 자기 속도로 걸어 들어간다.
+   *
+   * ⚠ `resetEnemy` 가 지운다 — 안 지우면 풀 재사용으로 새 개체가 앞사람의 자리로
+   *   걸어간다. ⚠ `battle.hash()` 가 접는다 — x/z 에서 유도되지 않는다(도착 전까지
+   *   앞으로의 궤적 전부가 이 값에 걸린다).
+   */
+  gateTgtX: number;
+  gateTgtZ: number;
+
 }
 
 /**
@@ -130,6 +144,9 @@ function makeEnemy(): EnemySim {
     gateTicks: 0,
     gateBiteCdLeft: 0,
     gateOwed: 0,
+    // 문간 자리 목표 — 실제 초기화는 resetEnemy 가 한다
+    gateTgtX: 0,
+    gateTgtZ: 0,
     def: null as unknown as EnemyDef, // 스폰 시 반드시 채워짐
     stunImmuneUntil: -1,
     siegeMul: 1,
@@ -176,6 +193,10 @@ function resetEnemy(e: EnemySim): void {
   e.gateTicks = 0;
   e.gateBiteCdLeft = 0;
   e.gateOwed = 0;
+  // 문간 자리 목표 — 안 지우면 풀 재사용으로 새 개체가 **앞사람의 자리로 걸어간다**
+  // (위 gateTgtX 주석). 그 갈림이 풀 순서를 타므로 hash 도 시드마다 갈린다.
+  e.gateTgtX = 0;
+  e.gateTgtZ = 0;
   // 살점 값의 **지급 이력**도 같다 — 안 지우면 trex(bountyPaid 480)를 죽인 슬롯을
   // 물려받은 compy가 "이미 480을 받은 적"으로 취급돼 평생 한 푼도 못 받는다.
   // 그 감소량이 풀 재사용 순서를 타므로 시드마다 갈리고, 곧 hash()가 갈린다.
