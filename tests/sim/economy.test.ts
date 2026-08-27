@@ -132,6 +132,81 @@ describe('economy', () => {
     expect(sim.upgradeCost(towerId), '거부가 값을 올렸다').toBe(before);
   });
 
+  /**
+   * **자리 교환** — 사용자 요구로 '선두 우선' 버튼이 빠지고 그 자리에 들어온 조작이다:
+   *   > "선두 우선 버튼은 별 필요 없는것 같아. 대신이 서로 위치 교환 할수 있도록 해줘.
+   *   >  물론 비용을 내고 교환 해야지"
+   *
+   * 이 계약이 잠그는 것은 **"타워가 이사하는 것이지 내용물이 바뀌는 것이 아니다"** 하나다.
+   * 자리만 맞바뀌고 티어·HP·투자금은 각자 따라가야 한다 — 이 둘을 헷갈리면 교환이
+   * "키운 타워를 안 키운 타워로 만드는" 버그가 된다. 그래서 **서로 다른 티어**로 재고,
+   * 자리뿐 아니라 **내용물이 안 섞였는지**까지 되읽는다.
+   */
+  it('자리 교환 — 자리만 바뀌고 티어·HP·투자금은 각자 따라간다', () => {
+    const sim = createBattle(options({ stage: stageDef({ startGold: 100_000 }) }));
+    sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: 3, cellZ: 1 });
+    sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: 4, cellZ: 1 });
+    const a = sim.state.towers[0]!;
+    const b = sim.state.towers[1]!;
+    // 한쪽만 두 번 키운다 — 티어가 갈려야 '내용물이 섞였는지'를 잴 수 있다
+    sim.applyCommand({ type: 'upgradeTower', towerId: a.id });
+    sim.applyCommand({ type: 'upgradeTower', towerId: a.id });
+    const before = {
+      aId: a.id, aCell: [a.cellX, a.cellZ], aTier: a.tier, aHp: a.hp, aInv: a.invested,
+      bId: b.id, bCell: [b.cellX, b.cellZ], bTier: b.tier, bHp: b.hp, bInv: b.invested,
+    };
+    expect(before.aTier, '두 타워의 티어가 같으면 이 계약이 공허하다').not.toBe(before.bTier);
+
+    const gold = sim.state.gold;
+    expect(sim.applyCommand({ type: 'swapTowers', aId: a.id, bId: b.id })).toBe(true);
+    expect(gold - sim.state.gold, '교환 값이 안 빠졌다').toBe(sim.swapCost());
+
+    // 자리는 **맞바뀌었다**
+    const a2 = sim.state.towers.find((t) => t.id === before.aId)!;
+    const b2 = sim.state.towers.find((t) => t.id === before.bId)!;
+    expect([a2.cellX, a2.cellZ], 'a 가 b 자리로 안 갔다').toEqual(before.bCell);
+    expect([b2.cellX, b2.cellZ], 'b 가 a 자리로 안 갔다').toEqual(before.aCell);
+    // 그 칸을 조회하면 **바뀐 타워**가 나온다 (판이 실제로 그렇게 보인다)
+    expect(sim.towerAt(before.bCell[0]!, before.bCell[1]!)?.id).toBe(before.aId);
+    expect(sim.towerAt(before.aCell[0]!, before.aCell[1]!)?.id).toBe(before.bId);
+    // 내용물은 **안 섞였다**
+    expect(a2.tier, 'a 의 티어가 b 것이 됐다').toBe(before.aTier);
+    expect(b2.tier, 'b 의 티어가 a 것이 됐다').toBe(before.bTier);
+    expect(a2.hp).toBe(before.aHp);
+    expect(b2.hp).toBe(before.bHp);
+    expect(a2.invested).toBe(before.aInv);
+    expect(b2.invested).toBe(before.bInv);
+    // 조준은 풀린다 — 자리가 바뀌면 사거리 안이던 적이 밖으로 나간다
+    expect(a2.targetId).toBe(-1);
+    expect(b2.targetId).toBe(-1);
+  });
+
+  /**
+   * 거부 경로 셋. **거부되면 골드가 한 톨도 안 나가야 한다** — 안 그러면 잘못 누른
+   * 탭이 조용히 결제된다(placement.ts 가 2단 무장을 쓰는 이유와 같은 자리).
+   */
+  it('자리 교환 거부 — 같은 타워 · 없는 타워 · 골드 부족', () => {
+    const sim = createBattle(options({ stage: stageDef({ startGold: 100_000 }) }));
+    sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: 3, cellZ: 1 });
+    sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: 4, cellZ: 1 });
+    const a = sim.state.towers[0]!.id;
+    const b = sim.state.towers[1]!.id;
+
+    let gold = sim.state.gold;
+    expect(sim.applyCommand({ type: 'swapTowers', aId: a, bId: a }), '자기 자신과 교환').toBe(false);
+    expect(sim.applyCommand({ type: 'swapTowers', aId: a, bId: 9999 }), '없는 타워').toBe(false);
+    expect(sim.state.gold, '거부인데 골드가 나갔다').toBe(gold);
+
+    sim.state.gold = sim.swapCost() - 1;
+    gold = sim.state.gold;
+    expect(sim.applyCommand({ type: 'swapTowers', aId: a, bId: b }), '골드 부족').toBe(false);
+    expect(sim.state.gold, '거부인데 골드가 나갔다').toBe(gold);
+    // 딱 맞는 골드면 된다 (문턱이 한 칸 어긋나 있지 않은지)
+    sim.state.gold = sim.swapCost();
+    expect(sim.applyCommand({ type: 'swapTowers', aId: a, bId: b })).toBe(true);
+    expect(sim.state.gold).toBe(0);
+  });
+
   it('최대 티어에서 업그레이드 불가', () => {
     const sim = createBattle(options());
     sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: 3, cellZ: 1 });

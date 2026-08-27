@@ -708,6 +708,26 @@ export class FxRouter {
           this.buzz(12);
           break;
         }
+        case 'towersSwapped': {
+          /*
+           * 자리 교환 — `TowerView.add` 는 **멱등이다**(첫 줄이 `remove(id)`), 그래서
+           * 새 좌표로 다시 심기만 하면 된다. 티어를 실어 보내는 이유가 여기다:
+           * `add` 는 티어로 메시를 새로 만들므로 안 실으면 전부 T1 모양으로 돌아간다.
+           * ⚠ 그림자·상태 데칼은 셀 좌표를 따라가므로 **양쪽 셀을 다 지운다** —
+           *   한쪽만 지우면 떠난 자리에 옛 잔해가 남는다.
+           */
+          s3.towerStatus.clearCell(ev.aCellX, ev.aCellZ);
+          s3.towerStatus.clearCell(ev.bCellX, ev.bCellZ);
+          s3.towers.add(ev.aId, ev.aDefId, ev.aTier, ev.aCellX, ev.aCellZ);
+          s3.towers.add(ev.bId, ev.bDefId, ev.bTier, ev.bCellX, ev.bCellZ);
+          for (const c of [[ev.aCellX, ev.aCellZ], [ev.bCellX, ev.bCellZ]] as const) {
+            const w = s3.cellToWorld(c[0] as number, c[1] as number, this.v);
+            s3.particles.ring(w.x, w.z, 0xd9c8a0, 0.7);
+          }
+          audio.play('towerPlace');
+          this.buzz(12);
+          break;
+        }
         case 'towerUpgraded': {
           s3.towers.upgrade(ev.towerId, ev.tier);
           const t = this.findTowerCell(ev.towerId);

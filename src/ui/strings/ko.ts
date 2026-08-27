@@ -96,6 +96,10 @@ export const ko: Record<string, string> = {
   'battle.upgrade': '강화',
   'battle.sell': '판매',
   'battle.lv': 'Lv.{n}',
+  // ⚠ 조준 우선순위 문구 넷은 **화면에서 안 쓴다** — 사용자가 그 버튼을 물렸다
+  //   ("선두 우선 버튼은 별 필요 없는것 같아"). 규칙과 커맨드는 살아 있어서 남겨 둔다.
+  'battle.swap': '자리 교환',
+  'battle.swap.pick': '바꿀 타워 탭',
   'battle.targeting.first': '선두 우선',
   'battle.targeting.last': '후미 우선',
   'battle.targeting.strongest': '강한 적 우선',

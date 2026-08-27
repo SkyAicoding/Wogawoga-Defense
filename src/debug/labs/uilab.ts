@@ -181,6 +181,7 @@ export function run(): void {
     towerAt: () => null,
     upgradeCost: () => 120,
     sellRefund: () => 45,
+    swapCost: () => 60,
     // 목: (3,4)에만 소품이 있다고 가정 — 제거 패널 레이아웃 확인용
     hasScenery: (x, z) => x === 3 && z === 4,
     // 위 st.resources가 비어 있는 것과 **같은 답**이어야 한다 — 둘이 갈리면

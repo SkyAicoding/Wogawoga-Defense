@@ -67,6 +67,8 @@ export class PlacementController {
   private hit = new THREE.Vector3();
   private selectedCardIndex: number | null = null;
   private selectedTowerId: number | null = null;
+  /** 자리 교환을 기다리는 첫 짝 (없으면 null) — `armSwap` 참조 */
+  private swapArmedId: number | null = null;
   /** 탭해서 고른 소품 셀 (제거 패널 대상) */
   private selectedSceneryCell: Vec2 | null = null;
   /** 홈타운(기지 셀)이 선택되어 있는가 — 레벨업 패널 대상 */
@@ -291,10 +293,55 @@ export class PlacementController {
     this.showAllyOrder(cell.x, cell.z);
   }
 
+  /**
+   * **자리 교환 무장** — 지금 고른 타워를 "바꿀 첫 짝"으로 잡아 둔다.
+   * 무장 중에 **다른 타워**를 탭하면 그 둘이 맞바뀐다(골드 소모).
+   *
+   * 왜 두 단계인가: 교환은 골드를 쓰고 되돌릴 수 없는데, 판 위 탭은 이 게임에서 가장
+   * 자주 나가는 동작이다. 한 단계로 만들면 "그냥 다른 타워를 보려던 탭"이 결제가 된다 —
+   * 소품 제거 패널이 같은 이유로 2단 확인을 쓴다(battlehud.ts ARM_TIMEOUT_MS 주석).
+   */
+  armSwap(): void {
+    if (this.selectedTowerId === null) return;
+    this.swapArmedId = this.selectedTowerId;
+  }
+
+  cancelSwap(): void {
+    this.swapArmedId = null;
+  }
+
+  /** 지금 교환을 기다리는 타워 id (없으면 null) — HUD 가 버튼 문구를 가른다 */
+  swapArmed(): number | null {
+    return this.swapArmedId;
+  }
+
   /** 셀 하나에 대한 선택 규칙 — 타워 > 홈타운 > 소품 > 해제 (셋은 상호배타) */
   private selectAt(cell: { x: number; z: number } | null): void {
     // 타워 선택/해제
     const tower = cell ? this.sim.towerAt(cell.x, cell.z) : null;
+    /*
+     * ── 교환 무장 중이면 이 탭이 **결제**다 ────────────────────────────────────
+     * 무장 뒤 처음 탭한 곳이:
+     *   · **다른 타워** → 그 둘을 맞바꾼다. 성공하면 바뀐 자리의 타워를 그대로 골라 둔다
+     *     (교환의 결과를 화면이 바로 보여 준다 = 무엇이 일어났는지 안 헷갈린다).
+     *   · **같은 타워 · 빈 곳 · 소품 · 마을** → 무장만 푼다. **골드는 안 나간다.**
+     *     빈 곳 탭이 곧 취소라 무장 상태에 갇히는 길이 없다.
+     */
+    if (this.swapArmedId !== null) {
+      const armed = this.swapArmedId;
+      this.swapArmedId = null;
+      if (tower && tower.id !== armed) {
+        if (this.sim.applyCommand({ type: 'swapTowers', aId: armed, bId: tower.id })) {
+          audio.play('uiTap');
+          // 교환 뒤에도 **처음 고른 그 타워**를 계속 고른 채로 둔다 — 사거리 링이 새
+          // 자리로 옮겨 가면서 "이만큼 옮겨졌다"가 한눈에 보인다.
+          this.selectedTowerId = armed;
+          this.showRangeFor(armed);
+          return;
+        }
+      }
+      // 실패·취소 — 아래 보통 선택 규칙으로 흘려보낸다
+    }
     if (tower) {
       this.clearScenerySelection();
       this.clearBaseSelection();
@@ -536,6 +583,8 @@ export class PlacementController {
   clearTowerSelection(): void {
     if (this.selectedTowerId !== null) this.stage3d.decals.hideCellMarker();
     this.selectedTowerId = null;
+    // 선택이 풀리면 무장도 같이 푼다 — 짝 없는 무장이 남으면 다음 탭이 엉뚱하게 결제된다
+    this.swapArmedId = null;
     this.stage3d.decals.hideRange();
   }
 

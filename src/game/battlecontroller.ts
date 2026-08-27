@@ -112,8 +112,19 @@ export interface BattleRallyApi {
   requestRallyAllies(): void;
 }
 
+/**
+ * **자리 교환** — 집결과 같은 이유로 계약이 아니라 확장이다. sim 쪽에는 `swapTowers`
+ * 커맨드가 있지만, "무장했다가 다음 탭에 결제한다"는 **조작 상태**는 순전히 화면 것이라
+ * (`game/placement.ts` 가 들고 있다) `BattleUiApi` 에 얹을 만한 개념이 아니다.
+ */
+export interface BattleSwapApi {
+  /** 무장 토글 — 켜면 다음 타워 탭이 교환이다 */
+  requestSwapArm(): void;
+  swapArmed(): boolean;
+}
+
 export class BattleController {
-  readonly api: BattleUiApi & BattleGatherApi & BattleRallyApi;
+  readonly api: BattleUiApi & BattleGatherApi & BattleRallyApi & BattleSwapApi;
   readonly sim: BattleSim;
   readonly stage3d: Stage3D;
   readonly camera = new DioramaCamera();
@@ -252,10 +263,22 @@ export class BattleController {
         self.placement.clearTowerSelection();
         self.placement.clearBaseSelection();
       },
+      /*
+       * ⚠ **화면에서 부르는 곳이 없다** — 사용자가 '선두 우선' 버튼을 물렸기 때문이다
+       *   ("별 필요 없는것 같아"). 계약(`BattleUiApi`)과 sim 커맨드는 **둘 다 남겨 뒀다**:
+       *   조준 규칙 자체는 살아 있고(기본 'first' · `attack.ts` 가 네 값을 다 구현한다),
+       *   되살릴 때 붙일 것은 버튼 하나뿐이다. 여기까지 지우면 그 사실이 잊힌다.
+       */
       requestSetTargeting: (mode: TargetingMode) => {
         const id = self.placement.selectedTower();
         if (id !== null) self.sim.applyCommand({ type: 'setTargeting', towerId: id, mode });
       },
+      requestSwapArm: () => {
+        // 무장 → 다음 타워 탭이 교환이다. 취소는 같은 버튼을 다시 누르거나 빈 곳 탭.
+        if (self.placement.swapArmed() !== null) self.placement.cancelSwap();
+        else self.placement.armSwap();
+      },
+      swapArmed: () => self.placement.swapArmed() !== null,
       requestTrainAlly: (defId: AllyId) => {
         // 경로는 sim이 결정론적으로 고른다 (allies.ts 규칙 1) — UI는 종만 고른다
         if (self.sim.applyCommand({ type: 'trainAlly', defId })) audio.play('uiTap');

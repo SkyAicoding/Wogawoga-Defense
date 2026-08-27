@@ -91,6 +91,8 @@ export const en: Record<string, string> = {
   'battle.upgrade': 'Upgrade',
   'battle.sell': 'Sell',
   'battle.lv': 'Lv.{n}',
+  'battle.swap': 'Swap',
+  'battle.swap.pick': 'Tap partner',
   'battle.targeting.first': 'Target: First',
   'battle.targeting.last': 'Target: Last',
   'battle.targeting.strongest': 'Target: Strongest',

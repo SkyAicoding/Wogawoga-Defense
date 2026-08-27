@@ -897,7 +897,15 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .screen--battle .tp-btn.is-disabled { pointer-events: none; }
 .tp-btn--up { background: linear-gradient(180deg, #ffd94a, #ff9d2e); }
 .tp-btn--sell { background: linear-gradient(180deg, #ff7a63, #e04f3f); color: #fff; }
-.tp-btn--target { background: linear-gradient(180deg, #9fdcf7, #58b7dd); }
+/* 자리 교환 — 옛 .tp-btn--target 자리 (사용자가 '선두 우선'을 물렸다) */
+.tp-btn--swap { background: linear-gradient(180deg, #9fdcf7, #58b7dd); }
+/* 무장 중 = "다음에 탭하는 타워와 바꾼다". 값이 아니라 **할 일**이 적혀 있으므로
+   색으로도 갈라 준다 — 안 그러면 눌렀는데 아무 일도 안 일어난 것처럼 보인다. */
+.tp-btn--swap.is-armed {
+  background: linear-gradient(180deg, #ffd98a, #f0a93c);
+  color: #2b1c07;
+  box-shadow: 0 0 0 2px rgba(255, 217, 138, 0.55);
+}
 /* 방해 지형지물 제거 — 흙/돌 톤으로 강화(금)·판매(빨강)와 구분 */
 .tp-btn--clear { background: linear-gradient(180deg, #d3b487, #a07a4a); }
 /*

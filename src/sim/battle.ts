@@ -41,7 +41,7 @@ import type {
   WavePreviewEntry,
 } from '@/data/types';
 import { Rng } from '@/core/rng';
-import { ALLY_MAX_ACTIVE, enemyTraitsOf, hideCapFor } from '@/data/balance';
+import { ALLY_MAX_ACTIVE, TOWER_SWAP_COST, enemyTraitsOf, hideCapFor } from '@/data/balance';
 import { isBuildableCell, rasterizePathCells, sceneryCells } from '@/data/grid';
 import {
   moveAlly,
@@ -431,6 +431,8 @@ class Battle implements BattleSim {
         t.targetId = -1; // 새 모드로 재조준
         return true;
       }
+      case 'swapTowers':
+        return this.cmdSwapTowers(cmd.aId, cmd.bId);
       case 'clearScenery':
         return this.cmdClearScenery(cmd.cellX, cmd.cellZ);
       case 'trainAlly':
@@ -517,6 +519,44 @@ class Battle implements BattleSim {
     // 성사된 뒤에만 센다 — 위 거부 경로(골드 부족·만렙)는 값을 안 올린다
     this.economy.onUpgraded();
     ctx.events.push({ type: 'towerUpgraded', towerId: t.id, defId: t.defId, tier: t.tier });
+    return true;
+  }
+
+  /**
+   * **두 타워의 자리를 맞바꾼다.** 바뀌는 상태는 `cellX/cellZ` 둘뿐이다 —
+   * HP·티어·투자금·침묵은 각자 그대로 따라간다(타워가 이사하는 것이다).
+   *
+   * 거부 조건: 같은 타워 · 둘 중 하나가 없음 · 골드 부족.
+   * ⚠ **조준은 반드시 푼다**(`targetId = -1`). 자리가 바뀌면 사거리 안이던 적이 밖으로
+   *   나가는데, 안 풀면 그 틱의 조준이 사거리 밖 적을 그대로 겨눈 채 남는다.
+   * ⚠ **쿨다운은 안 건드린다.** 자리를 바꾸는 것으로 발사 주기가 초기화되면 "교환 →
+   *   즉시 발사"가 공짜 딜이 되어 값싼 착취가 된다.
+   * ⚠ 버프 캐시(`buffDmgPct/buffRatePct`)도 안 건드린다 — 5틱마다 스스로 다시 계산되고,
+   *   여기서 손대면 그 재계산과 어느 쪽이 옳은지가 두 곳으로 갈린다.
+   */
+  private cmdSwapTowers(aId: number, bId: number): boolean {
+    const ctx = this.ctx;
+    if (aId === bId) return false;
+    const a = ctx.world.findTower(aId);
+    const b = ctx.world.findTower(bId);
+    if (!a || !b) return false;
+    const cost = TOWER_SWAP_COST;
+    if (ctx.view.gold < cost) return false;
+    addGold(ctx, -cost);
+    const ax = a.cellX;
+    const az = a.cellZ;
+    a.cellX = b.cellX;
+    a.cellZ = b.cellZ;
+    b.cellX = ax;
+    b.cellZ = az;
+    a.targetId = -1;
+    b.targetId = -1;
+    ctx.events.push({
+      type: 'towersSwapped',
+      aId: a.id, aDefId: a.defId, aTier: a.tier, aCellX: a.cellX, aCellZ: a.cellZ,
+      bId: b.id, bDefId: b.defId, bTier: b.tier, bCellX: b.cellX, bCellZ: b.cellZ,
+      cost,
+    });
     return true;
   }
 
@@ -932,6 +972,11 @@ class Battle implements BattleSim {
     // ⚠ 티어표 값이 아니라 **지금 실비용**이다 — 판 누적 업그레이드 횟수가 곱해진다
     //   (balance.UPGRADE_GROWTH). 화면·봇·테스트가 전부 이 하나를 읽어야 값이 안 갈린다.
     return next ? this.economy.upgradeCostOf(next.cost) : null;
+  }
+
+  /** 자리 교환 값 — 화면이 버튼에 적는 그 숫자. 정액이라 인자가 없다 */
+  swapCost(): number {
+    return TOWER_SWAP_COST;
   }
 
   sellRefund(towerId: number): number | null {

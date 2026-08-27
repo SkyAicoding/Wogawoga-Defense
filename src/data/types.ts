@@ -1194,6 +1194,18 @@ export type BattleCommand =
   | { type: 'sellTower'; towerId: number }
   | { type: 'refreshHand' }
   | { type: 'setTargeting'; towerId: number; mode: TargetingMode }
+  /**
+   * **두 타워의 자리를 맞바꾼다** (골드 소모). 사용자 요구로 '선두 우선' 버튼을 걷어내고
+   * 그 자리에 들어온 조작이다:
+   *   > "선두 우선 버튼은 별 필요 없는것 같아. 대신이 서로 위치 교환 할수 있도록 해줘.
+   *   >  물론 비용을 내고 교환 해야지"
+   *
+   * 판 위의 자리는 이 게임에서 **되돌릴 수 없는 결정**이었다 — 잘못 놓으면 팔고(60% 환급)
+   * 다시 세우는 길뿐이라 티어가 통째로 날아간다. 교환은 그 손실 없이 자리만 바꾼다.
+   * ⚠ 종·티어가 달라도 된다. 바뀌는 것은 `cellX/cellZ` 둘뿐이고 HP·티어·투자금은
+   *   **각자 따라간다**(타워가 이사하는 것이지 내용물이 바뀌는 것이 아니다).
+   */
+  | { type: 'swapTowers'; aId: number; bId: number }
   | { type: 'clearScenery'; cellX: number; cellZ: number } // 골드로 나무/바위 치우기
   | {
       /**
@@ -1379,6 +1391,16 @@ export type SimEvent =
     }
   | { type: 'towerPlaced'; towerId: number; defId: TowerId; cellX: number; cellZ: number }
   | { type: 'towerUpgraded'; towerId: number; defId: TowerId; tier: number }
+  /**
+   * 두 타워가 자리를 맞바꿨다. 좌표는 **바꾼 뒤**의 값이다 —
+   * 연출(render/game/fx.ts)이 그대로 다시 심으면 된다.
+   */
+  | {
+      type: 'towersSwapped';
+      aId: number; aDefId: TowerId; aTier: number; aCellX: number; aCellZ: number;
+      bId: number; bDefId: TowerId; bTier: number; bCellX: number; bCellZ: number;
+      cost: number;
+    }
   | { type: 'towerSold'; towerId: number; refund: number }
   | {
       /** 적 부족이 타워를 때렸다 — 체력바/피격 연출 */
@@ -1868,6 +1890,8 @@ export interface BattleSim {
   towerAt(cellX: number, cellZ: number): TowerState | null;
   upgradeCost(towerId: number): number | null;
   sellRefund(towerId: number): number | null;
+  /** 타워 두 기의 자리를 맞바꾸는 값 (정액 — balance.TOWER_SWAP_COST) */
+  swapCost(): number;
   /** 그 셀에 아직 치우지 않은 소품(나무/바위)이 있는가 */
   hasScenery(cellX: number, cellZ: number): boolean;
   /** 자원 칸 조회 — 소품이 없거나 격자 밖이면 null. HUD 패널과 e2e 훅이 쓴다 */

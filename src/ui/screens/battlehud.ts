@@ -72,9 +72,16 @@ type BattleUiApiExt = BattleUiApi & {
    * 선택 사항이라 없으면 버튼을 아예 안 그린다(이 파일 헤더의 기능 감지 규약).
    */
   requestRallyAllies?(): void;
+  /**
+   * **자리 교환 무장 토글** — 누르면 "다음에 탭하는 타워와 바꾼다" 상태가 되고,
+   * 다시 누르면 풀린다. 실제 교환은 판 위 탭이 한다(game/placement.ts `armSwap`).
+   * 사용자 요구로 '선두 우선' 버튼이 빠지고 그 자리에 들어왔다.
+   */
+  requestSwapArm?(): void;
+  /** 지금 무장 중인가 — 버튼 문구를 가른다 */
+  swapArmed?(): boolean;
 };
 
-const TARGETING_ORDER: readonly TargetingMode[] = ['first', 'last', 'strongest', 'nearest'];
 
 /** 제거 확인 무장이 자동으로 풀리는 시간 (ms) — 무장 상태가 잊힌 채 남지 않게 */
 const ARM_TIMEOUT_MS = 4000;
@@ -232,7 +239,8 @@ export function createBattleHud(): Screen<GameFacade> {
   let panelIco!: HTMLElement;
   let upBtnLabel!: HTMLElement;
   let sellBtnLabel!: HTMLElement;
-  let targetBtn!: HTMLElement;
+  let swapBtn!: HTMLElement;
+  let swapBtnLabel!: HTMLElement;
   let upBtn!: HTMLElement;
   // 소품(방해 지형지물) 제거 패널 — 선택 타워 패널과 같은 자리/같은 톤
   let scPanel!: HTMLElement;
@@ -380,12 +388,6 @@ export function createBattleHud(): Screen<GameFacade> {
     });
   };
 
-  const cycleTargeting = (b: BattleUiApiExt, tower: TowerState): void => {
-    const idx = TARGETING_ORDER.indexOf(tower.targeting);
-    const next = TARGETING_ORDER[(idx + 1) % TARGETING_ORDER.length] ?? 'first';
-    b.requestSetTargeting?.(next);
-  };
-
   return {
     enter(facade) {
       const b = api(facade);
@@ -486,15 +488,20 @@ export function createBattleHud(): Screen<GameFacade> {
       panelIco = h('span', { class: 'tp-ico' });
       upBtnLabel = h('span', { class: 'tp-btn-label' });
       sellBtnLabel = h('span', { class: 'tp-btn-label' });
-      targetBtn = h('button', {
-        class: 'tp-btn tp-btn--target hud-item',
+      swapBtnLabel = h('span', { class: 'tp-btn-label' });
+      /*
+       * ── '선두 우선' → **자리 교환** (사용자 요구) ────────────────────────────
+       *   > "선두 우선 버튼은 별 필요 없는것 같아. 대신이 서로 위치 교환 할수 있도록
+       *   >  해줘. 물론 비용을 내고 교환 해야지"
+       * 조준 우선순위는 판에서 눈에 안 보였고(적이 순식간에 갈린다) 네 값의 차이를
+       * 플레이어가 확인할 길이 없었다. 자리는 반대다 — **틀린 자리는 바로 보이는데
+       * 고칠 길이 팔고 다시 짓기뿐**이었고 그건 티어를 통째로 버리는 일이다.
+       */
+      swapBtn = h('button', {
+        class: 'tp-btn tp-btn--swap hud-item',
         attrs: { type: 'button' },
-        onClick: () => {
-          const bb = api(facade);
-          const tw = selectedTowerState(bb);
-          if (bb && tw) cycleTargeting(bb, tw);
-        },
-      });
+        onClick: () => api(facade)?.requestSwapArm?.(),
+      }, h('span', { text: `⇄ ${t('battle.swap')} ` }), swapBtnLabel);
       upBtn = h('button', {
         class: 'tp-btn tp-btn--up hud-item',
         attrs: { type: 'button' },
@@ -510,7 +517,7 @@ export function createBattleHud(): Screen<GameFacade> {
       // 캔버스로 흘려보내 패널에 가린 셀도 그대로 탭할 수 있게 한다
       panelHost = h('div', { class: 'tower-panel', attrs: { style: 'display:none' } },
         h('div', { class: 'tp-head' }, panelIco, panelName, panelLv),
-        h('div', { class: 'tp-btns' }, upBtn, sellBtn, targetBtn),
+        h('div', { class: 'tp-btns' }, upBtn, sellBtn, swapBtn),
       );
 
       // --- 방해 지형지물 제거 패널 -----------------------------------------
@@ -1018,7 +1025,16 @@ export function createBattleHud(): Screen<GameFacade> {
         cls(upBtn, 'is-disabled', up === null || up > s.gold);
         const refund = b.sim.sellRefund(tw.id);
         setText(sellBtnLabel, refund === null ? '—' : `+${fmt(refund)}`);
-        setText(targetBtn, t(`battle.targeting.${tw.targeting}`));
+        /*
+         * 교환 버튼은 상태가 둘이다. 무장 중에는 **값 대신 다음에 할 일**을 적는다 —
+         * 값만 적혀 있으면 "눌렀는데 아무 일도 안 일어난다"로 읽힌다(실제로 다음 탭을
+         * 기다리는 중이다). 무장 중 클래스가 붙어 색으로도 갈린다.
+         */
+        const armed = b.swapArmed?.() ?? false;
+        const swapCost = b.sim.swapCost();
+        setText(swapBtnLabel, armed ? t('battle.swap.pick') : fmt(swapCost));
+        cls(swapBtn, 'is-armed', armed);
+        cls(swapBtn, 'is-disabled', !armed && (swapCost > s.gold || s.towers.length < 2));
       }
 
       /*
