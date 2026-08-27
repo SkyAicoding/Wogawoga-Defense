@@ -9,3 +9,6 @@ playwright-report/
 # 임시 계측 프로브 — CLAUDE.md 7번(`git add -A` 가 계측 파일을 쓸어 담는 사고)의 재발 방지.
 # 스크래치 테스트는 `__` 로 시작하는 이름을 쓴다.
 tests/**/__*.test.ts
+
+# 서브에이전트 격리용 임시 worktree — 일회용 작업 공간이지 저장소 내용이 아니다.
+.claude/worktrees/
