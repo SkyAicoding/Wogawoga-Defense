@@ -115,15 +115,30 @@ WGD_SEEDS=80 npm run difficulty
 | `claude/primitive-defense-game-7covq4` | **배포 브랜치.** 여기 푸시하면 GitHub Pages 가 나간다. **검증 통과본만** 올린다 |
 | `claude/gate2-wip` | 미검증 작업분. 롤백 보험으로 **자주** 푸시한다 |
 
-⚠ CI(`ci.yml`)는 `branches-ignore: []` 라 **모든 푸시에서 돈다.** WIP 스냅샷마다 빨간 CI 가
-하나씩 남는 것은 정상이다. 배포(`pages.yml`)는 배포 브랜치에서만 돈다.
+### CI 는 어디서 도는가 (2026-08-27 개정)
+
+| 워크플로 | 언제 | 무엇 |
+|---|---|---|
+| `ci.yml` | **배포 브랜치 · PR · 수동**에서만 | typecheck · `test:fast`(봉투 제외) · build · e2e |
+| `envelope.yml` | **수동만** | `test:envelope` — 난이도 봉투 27계약(12~15분) |
+| `pages.yml` | 배포 브랜치 | GitHub Pages 배포 |
+
+⚠ 옛 판본은 `branches-ignore: []` 라 **모든 푸시**에서 돌았고, `check` 가 `npm test`(봉투
+포함)를 돌렸다. 두 가지가 겹쳐서 **CI 가 구조적으로 빨갰다** — WIP 스냅샷은 정의상
+미검증이라 빨갛고, 배포 브랜치는 게이트가 아닌 봉투를 게이트로 재서 빨갰다. 사용자에게는
+그것이 끊이지 않는 실패 메일로 갔다("git 에서 계속해서 오류 확인 메일이 와"). **빨강이
+상수가 되면 빨강은 아무것도 말하지 않는다.** 그래서 CI 는 **초록이어야 하는 것만** 잰다.
+
+WIP 브랜치를 한 번 돌려 보고 싶으면 Actions 탭에서 `CI` 를 수동 실행하면 된다.
 
 ## 명령
 
 ```bash
 npm install          # 의존성 (세션 훅이 자동으로 한다)
 npm run typecheck    # tsc --noEmit — 이 저장소의 린터다
-npm test             # vitest — 단위 + 난이도 봉투
+npm run test:fast    # vitest — **CI 가 재는 것**. 봉투 제외, 몇 분
+npm test             # vitest — 단위 + 난이도 봉투 (전부)
+npm run test:envelope # 난이도 봉투만 (12~15분, 백그라운드로)
 npm run build        # 프로덕션 빌드 → dist/
 npm run difficulty   # 난이도 보고서 (사용자가 "난이도 검토" 라고 할 때만)
 npm run e2e          # Playwright. PW_CHROMIUM=/opt/pw-browsers/chromium-1194/chrome-linux/chrome 필요

@@ -10,6 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
+    "test:fast": "vitest run --passWithNoTests --exclude '**/e2e/**' --exclude '**/sim/autoplay.test.ts'",
+    "test:envelope": "vitest run tests/sim/autoplay.test.ts",
     "test:watch": "vitest",
     "e2e": "playwright test",
     "difficulty": "WGD_DIFFICULTY=1 vitest run tests/sim/difficulty.report.test.ts"

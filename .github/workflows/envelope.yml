@@ -1,0 +1,36 @@
+# 난이도 봉투 — **수동으로만 돈다.**
+#
+# 이것이 왜 CI 에서 떨어져 나왔나. 사용자가 정한 일하는 순서(CLAUDE.md 「🔴 일하는 순서」)에서
+# 봉투(`tests/sim/autoplay.test.ts`, 27계약 12~15분)는 **배포 게이트가 아니다**:
+#
+#   > "봉투 계속 돌린다고 배포 못하고 하는데 앞으로는 그렇게 하지 말고,
+#   >  먼저 기획하고, 검토, 분석하고, 구현하고, 완료되면 배포하고, 내가 테스트하고…"
+#
+# 그런데 `ci.yml` 의 `check` 는 `npm test`(= 봉투 포함)를 돌리고 있었다. 곧 **CI 는
+# 규약상 빨간 것을 게이트로 재고 있었고**, 그래서 배포 브랜치가 구조적으로 빨갰다
+# (2026-08-27 실측: 배포 브랜치 마지막 초록은 05:40, 그 뒤 4연속 빨강). 빨강이 상수가
+# 되면 그 빨강은 아무것도 말하지 않는다 — 메일만 나가고 신호는 죽는다.
+#
+# 그래서 갈랐다:
+#   · `ci.yml`  → `npm run test:fast` (봉투 제외). **초록이어야 하는 것**만 잰다.
+#   · 이 파일   → `npm run test:envelope`. 난이도는 **물어볼 때** 대답한다.
+#
+# 봉투가 빨간 것은 배포를 막지 않는다. 다만 **무엇이 빨간지는 반드시 사용자에게 말한다**.
+# 난이도를 스테이지별 표로 보고 싶으면 봉투 말고 `npm run difficulty` 쪽이다.
+name: 난이도 봉투 (수동)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  envelope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:envelope

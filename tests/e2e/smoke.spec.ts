@@ -1191,21 +1191,41 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
   expect(ordered.length, '판 위의 부족원 전원').toBe(squad.n);
   /*
    * **선택한 종만 움직인다.** 이것이 이 조작의 계약이다 — 몽둥이꾼 하나를 탭했으니
-   * 몽둥이꾼 전원이 목표를 받고, 돌팔매꾼·파수꾼은 집결 지점을 그대로 지켜야 한다.
-   * toEqual이 아니라 축별 근사인 이유: 셀 좌표는 placement가 Math.round로 만들고,
+   * 몽둥이꾼 전원이 목표를 받고, 돌팔매꾼·마법사는 집결 지점을 그대로 지켜야 한다.
+   *
+   * ⚠⚠ **이 절은 정확히 뒤집혔다** (2026-08-27). 옛 판본은 움직이는 전원의 목표가
+   *   찍은 칸과 **정확히 같기**를 요구했다(`toBeCloseTo(target.x, 5)`). 사용자가 그
+   *   동작을 바로 그 이유로 물렸다:
+   *     > "한꺼번에 선택한 뒤 위치를 찍으면 애들이 걸어가서 한곳에 다 멈춰. 겹쳐지잖아."
+   *   `sim/allies.ts spreadSlot` 이 순번대로 벌리면서 옛 잣대가 빨개졌다(실측 어긋남
+   *   0.62 = `ALLY_SPREAD_SPACING` 첫 고리). **문턱을 푼 것이 아니라 재는 성질을 바꿨다** —
+   *   아래 셋은 옛 하나보다 강하다. 특히 ③은 옛 판본이 **재지도 못하던** 성질이고,
+   *   `spreadSlot` 을 되돌리면(전원 같은 점) ③이, 중심을 잃으면 ①이 빨개진다.
+   *
+   *  ① 정확히 **한 명**은 찍은 자리 그대로 선다 — 한 명만 보낼 때 엉뚱한 곳에 서면 안 된다.
+   *  ② 전원이 **그 칸 안**이다(1타일). 벌리는 것과 딴 데로 가는 것은 다르다.
+   *  ③ 목표가 **서로 다르다**. 이것이 사용자가 요구한 바로 그 성질이다.
+   *
+   * 축별 근사를 쓰는 이유는 그대로다: 셀 좌표는 placement가 Math.round로 만들고,
    * 가장자리 칸에서는 그 결과가 **-0**이라 toEqual(0)이 Object.is로 갈라진다(실측).
    */
+  const movedTgts: { id: number; tgtX: number; tgtZ: number }[] = [];
   for (const a of ordered) {
     const isMover = movers.includes(a.id);
+    const off = Math.hypot(a.tgtX - target.x, a.tgtZ - target.z);
     if (isMover) {
-      expect(a.tgtX, `#${a.id} 몽둥이꾼 목표 x`).toBeCloseTo(target.x, 5);
-      expect(a.tgtZ, `#${a.id} 몽둥이꾼 목표 z`).toBeCloseTo(target.z, 5);
+      expect(off, `#${a.id} 몽둥이꾼이 찍은 칸(${target.x},${target.z}) 밖에 선다`).toBeLessThan(1);
+      movedTgts.push({ id: a.id, tgtX: a.tgtX, tgtZ: a.tgtZ });
     } else {
-      const moved =
-        Math.abs(a.tgtX - target.x) < 1e-5 && Math.abs(a.tgtZ - target.z) < 1e-5;
-      expect(moved, `#${a.id}(다른 종족)이 같이 끌려갔다`).toBe(false);
+      expect(off, `#${a.id}(다른 종족)이 같이 끌려갔다`).toBeGreaterThan(1);
     }
   }
+  const centered = movedTgts.filter(
+    (m) => Math.abs(m.tgtX - target.x) < 1e-5 && Math.abs(m.tgtZ - target.z) < 1e-5,
+  );
+  expect(centered.length, '찍은 자리 그대로 서는 사람이 정확히 하나여야 한다').toBe(1);
+  const spots = new Set(movedTgts.map((m) => `${m.tgtX.toFixed(4)},${m.tgtZ.toFixed(4)}`));
+  expect(spots.size, `몽둥이꾼 ${movedTgts.length}명이 한 점에 포개졌다`).toBe(movedTgts.length);
   // 명령이 먹혔으면 선택은 스스로 풀린다(위에서 확인). 그리고 부족원을 탭하는 순간
   // 마을 선택은 **풀린다** — 판 위의 선택 셋(타워·소품·기지)과 상호 배타이기 때문이다
   // (탭 하나가 두 가지를 동시에 고르면 어느 패널을 띄울지 정할 수 없다).
@@ -1223,7 +1243,14 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
     g.sim.state.prepTicksLeft = 1e9;
     return {
       mid,
-      end: g.sim.state.allies.map((a) => ({ id: a.id, x: a.x, z: a.z, walked: a.walked })),
+      end: g.sim.state.allies.map((a) => ({
+        id: a.id,
+        x: a.x,
+        z: a.z,
+        walked: a.walked,
+        tgtX: a.tgtX,
+        tgtZ: a.tgtZ,
+      })),
       enemies: g.sim.state.enemies.length,
     };
   });
@@ -1234,8 +1261,17 @@ test('아군 이동 명령: 판 위 셀을 찍으면 전원이 그 칸으로 걸
     const end = walked.end.find((m) => m.id === a.id)!;
     if (movers.includes(a.id)) {
       expect(distTo(mid), `#${a.id} 4초 뒤 남은 거리`).toBeLessThan(distTo(a) - 1);
-      // 도착 판정(ARRIVE_EPS2)은 제곱거리 1e-6 — 눈금 하나 안쪽이면 선 것이다
-      expect(distTo(end), `#${a.id} 도착`).toBeLessThan(0.01);
+      /*
+       * 도착 판정(ARRIVE_EPS2)은 제곱거리 1e-6 — 눈금 하나 안쪽이면 선 것이다.
+       * ⚠ **자기 자리에 대고 잰다**(`spreadSlot` 뒤로 사람마다 자리가 다르다). 옛 판본은
+       *   전원을 칸 중심에 대고 쟀고, 벌리기가 들어오자 0.62(=`ALLY_SPREAD_SPACING`)로
+       *   빨개졌다 — 그건 안 선 것이 아니라 **다른 자리에 선 것**이다. 식을 베끼지 않고
+       *   sim 이 실제로 정한 목표를 되읽는 이유가 그것이다(CLAUDE.md 「처방」).
+       *   그러면서도 "그 칸으로 갔다"는 주장은 잃지 않는다 — 아래 한 줄이 그걸 잡는다.
+       */
+      const own = Math.hypot(end.x - end.tgtX, end.z - end.tgtZ);
+      expect(own, `#${a.id} 자기 자리 도착`).toBeLessThan(0.01);
+      expect(distTo(end), `#${a.id} 이 찍은 칸 밖에 섰다`).toBeLessThan(1);
       expect(end.walked, `#${a.id} 걸은 거리`).toBeGreaterThan(0);
     } else {
       // 명령을 안 받은 종족은 **한 걸음도** 안 걷는다 (집결 지점이 곧 목표라 walked 0)
@@ -1489,9 +1525,17 @@ test('터치 조작: 탭으로 고르고 탭으로 보낸다 · 명령 뒤 선�
     tgts: window.__wgd!.sim.state.allies.map((a) => ({ tgtX: a.tgtX, tgtZ: a.tgtZ })),
   }));
   expect(after.sel, '터치는 명령 뒤에 선택이 풀려야 한다').toBeNull();
+  /*
+   * ⚠ 위 '아군 이동 명령' 계약과 **같은 이유로 뒤집힌 자리**다 — `spreadSlot` 이 순번대로
+   *   벌리므로 둘째 사람부터는 찍은 칸에서 `ALLY_SPREAD_SPACING`(0.62) 만큼 떨어져 선다.
+   *   여기서 재려는 것은 **탭이 명령으로 해석됐는가** 하나뿐이므로, "그 칸으로 갔다"를
+   *   점 일치가 아니라 **칸 일치**(1타일 안)로 읽는다. 벌어짐 자체의 계약은 위에 있다.
+   */
   for (const g of after.tgts) {
-    expect(g.tgtX, '터치 탭이 명령으로 해석되지 않았다').toBeCloseTo(target.x, 5);
-    expect(g.tgtZ, '터치 탭이 명령으로 해석되지 않았다').toBeCloseTo(target.z, 5);
+    expect(
+      Math.hypot(g.tgtX - target.x, g.tgtZ - target.z),
+      '터치 탭이 명령으로 해석되지 않았다',
+    ).toBeLessThan(1);
   }
 
   expect(errors, `콘솔 에러: ${errors.join('\n')}`).toHaveLength(0);
