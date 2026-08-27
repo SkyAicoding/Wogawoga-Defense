@@ -42,6 +42,7 @@ export const ko: Record<string, string> = {
   'stage.6.name': '으르렁 화산',
 
   'collection.title': '타워 도감',
+  'collection.previewTitle': '레벨별 동작 미리보기',
   'collection.locked': '미보유',
   'collection.shards': '조각 {n}/{m}',
   'collection.starUp': '별 강화',

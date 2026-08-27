@@ -1220,3 +1220,55 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
    */
   .danger-vig.is-crit { animation: none; opacity: 1; }
 }
+
+
+/* ── 도감 액션 미리보기 (사용자 요구: "어떤 모양으로 던지고 터지는지 볼수 있는 메뉴") ── */
+.tp-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 4px;
+}
+.tp-caption {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.62);
+}
+/* 캔버스는 **부모가 크기를 정한다** — 위젯이 매 프레임 clientWidth/Height 를 읽어
+   렌더 타깃과 카메라를 맞추므로, 여기서 픽셀을 박으면 폰에서 잘린다 */
+.tower-preview {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 190px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #7fc8f0, #a9dcf5);
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.18);
+}
+.tower-preview .tp-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.tp-lv-row {
+  display: flex;
+  gap: 6px;
+}
+.tp-lv-btn {
+  flex: 1;
+  min-height: 34px;
+  border: 0;
+  border-radius: 9px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.12);
+}
+.tp-lv-btn.is-on {
+  color: #2b1c07;
+  background: linear-gradient(180deg, #ffd98a, #f0a93c);
+}

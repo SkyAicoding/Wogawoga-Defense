@@ -8,6 +8,7 @@ import type { Screen } from '@/core/fsm';
 import { h, fmt, mount, unmount, uiRoot, clearChildren } from '../dom';
 import { t } from '../i18n';
 import { amberSvg, starSvg, towerIconSvg, lockSvg } from '../widgets/card';
+import { createTowerPreview, type TowerPreview } from '../widgets/towerpreview';
 
 function starsRow(stars: number, cl: string): HTMLElement {
   const row = h('div', { class: cl });
@@ -55,6 +56,19 @@ function shake(el: HTMLElement): void {
 
 export function createCollectionScreen(): Screen<GameFacade> {
   let root: HTMLElement | null = null;
+  /**
+   * 액션 미리보기 — 시트가 열려 있는 동안만 산다. 사용자 요구:
+   *   > "게임 플레이 하기 전에 어떤 모양으로 던지고 터지는지 볼수 있는 메뉴"
+   * ⚠ WebGL 컨텍스트를 하나 더 여므로 **시트를 닫는 모든 길**에서 반드시 버려야 한다
+   *   (✕ 버튼 · 배경 탭 · 다른 타워로 갈아타기 · 화면 나가기). 하나라도 새면
+   *   도감을 여닫는 것만으로 컨텍스트 상한에 걸리고, 그때 죽는 것은 **가장 오래된 캔버스**
+   *   = 게임 본 화면이다. 그래서 여는 자리와 버리는 자리를 이 한 쌍으로 묶어 둔다.
+   */
+  let preview: TowerPreview | null = null;
+  const dropPreview = (): void => {
+    preview?.dispose();
+    preview = null;
+  };
 
   return {
     enter(facade) {
@@ -106,16 +120,44 @@ export function createCollectionScreen(): Screen<GameFacade> {
       };
 
       // --- 상세 시트 -------------------------------------------------------
+      const closeSheet = (): void => {
+        dropPreview();
+        clearChildren(sheetHost);
+      };
       const openSheet = (id: TowerId): void => {
+        dropPreview(); // 다른 타워로 갈아타는 길도 여기를 지난다
         clearChildren(sheetHost);
         const tp = p.data.towers[id];
         const def = defs[id];
         const tier0 = def.tiers[0];
-        const statRow = (label: string, value: string): HTMLElement =>
-          h('div', { class: 'sheet-stat' },
+        /*
+         * 스탯 값은 **레벨 선택기를 따라간다**. 처음엔 Lv1 고정이었는데, 미리보기에서
+         * Lv5 를 골라도 "공격력 12"가 그대로라 화면이 두 가지를 동시에 말했다 —
+         * 도감에서 본 숫자와 실제가 어긋나는 꼴이고, 이 저장소가 반복해서 당한 병이다.
+         * 그래서 값 칸만 붙잡아 두고 `pick()` 이 다시 쓴다.
+         */
+        const statVals = new Map<string, HTMLElement>();
+        const statRow = (key: string, label: string, value: string): HTMLElement => {
+          const v = h('span', { class: 'sheet-stat-v', text: value });
+          statVals.set(key, v);
+          return h('div', { class: 'sheet-stat' },
             h('span', { class: 'sheet-stat-k', text: label }),
-            h('span', { class: 'sheet-stat-v', text: value }),
+            v,
           );
+        };
+        /** 그 레벨의 스탯 넷을 다시 쓴다 (없는 축은 —) */
+        const writeStats = (n: number): void => {
+          const tr = def.tiers[n];
+          const atk = (tr?.dmg ?? 0) > 0;
+          const set = (k: string, s: string): void => {
+            const el = statVals.get(k);
+            if (el) el.textContent = s;
+          };
+          set('dmg', atk && tr ? String(tr.dmg) : '—');
+          set('rate', atk && tr ? t('collection.statRateUnit', { n: (TICK_RATE / tr.cooldownTicks).toFixed(1) }) : '—');
+          set('range', tr ? String(tr.range) : '—');
+          set('cost', tr ? String(tr.cost) : '—');
+        };
 
         let action: HTMLElement;
         if (!tp.unlocked) {
@@ -169,6 +211,39 @@ export function createCollectionScreen(): Screen<GameFacade> {
           );
         }
 
+        /*
+         * ── 미리보기 + 레벨 선택기 ────────────────────────────────────────────
+         * 레벨은 **판에서 강화할 수 있는 다섯 단계**(Lv1~Lv5)다. 별(★)과는 다른 축이라
+         * 따로 고른다 — 별은 영구 보너스이고 레벨은 판 안에서 골드로 올리는 것이다.
+         * 여기서 보여 주는 것은 **레벨**이다: 사용자가 물은 것이 "어떤 모양으로 던지고
+         * 터지는지"이고, 모양을 바꾸는 축이 레벨이기 때문이다(별은 수치만 바꾼다).
+         */
+        let previewBlock: HTMLElement | null = null;
+        if (tp.unlocked) {
+          if (!preview) preview = createTowerPreview();
+          const pv = preview;
+          const lvBtns: HTMLElement[] = [];
+          const pick = (n: number): void => {
+            pv.show(def, n);
+            writeStats(n); // 숫자도 같이 간다 — 화면이 두 가지를 동시에 말하면 안 된다
+            lvBtns.forEach((b, i) => b.classList.toggle('is-on', i === n));
+          };
+          for (let n = 0; n < def.tiers.length; n++) {
+            const b = h('button', {
+              class: `tp-lv-btn${n === 0 ? ' is-on' : ''}`,
+              attrs: { type: 'button' },
+              text: t('battle.lv', { n: n + 1 }),
+              onClick: () => pick(n),
+            });
+            lvBtns.push(b);
+          }
+          previewBlock = h('div', { class: 'tp-block' },
+            h('div', { class: 'tp-caption', text: t('collection.previewTitle') }),
+            pv.el,
+            h('div', { class: 'tp-lv-row' }, ...lvBtns),
+          );
+        }
+
         const hasAttack = (tier0?.dmg ?? 0) > 0;
         const bonus = bonusSummary(def);
         const fx = fxSummary(def);
@@ -179,7 +254,7 @@ export function createCollectionScreen(): Screen<GameFacade> {
             class: 'sheet-close',
             attrs: { type: 'button', 'aria-label': t('common.back') },
             text: '✕',
-            onClick: () => clearChildren(sheetHost),
+            onClick: closeSheet,
           }),
           h('div', { class: 'sheet-head' },
             h('div', { class: 'sheet-ico', html: towerIconSvg(id) }),
@@ -189,16 +264,22 @@ export function createCollectionScreen(): Screen<GameFacade> {
             ),
           ),
           h('div', { class: 'sheet-desc', text: t(def.descKey) }),
+          /*
+           * **액션 미리보기** — 해금한 타워에만 붙인다. 잠긴 타워는 판에 세울 수 없으므로
+           * 동작을 보여 주는 것이 정보가 아니라 광고가 된다(해금 조건 안내가 그 자리의 뜻이다).
+           */
+          tp.unlocked ? previewBlock : null,
           h('div', { class: 'sheet-stats' },
-            statRow(t('collection.statDmg'), hasAttack && tier0 ? String(tier0.dmg) : '—'),
+            statRow('dmg', t('collection.statDmg'), hasAttack && tier0 ? String(tier0.dmg) : '—'),
             statRow(
+              'rate',
               t('collection.statRate'),
               hasAttack && tier0
                 ? t('collection.statRateUnit', { n: (TICK_RATE / tier0.cooldownTicks).toFixed(1) })
                 : '—',
             ),
-            statRow(t('collection.statRange'), tier0 ? String(tier0.range) : '—'),
-            statRow(t('collection.statCost'), tier0 ? String(tier0.cost) : '—'),
+            statRow('range', t('collection.statRange'), tier0 ? String(tier0.range) : '—'),
+            statRow('cost', t('collection.statCost'), tier0 ? String(tier0.cost) : '—'),
           ),
           bonus
             ? h('div', { class: 'sheet-bonus' },
@@ -216,9 +297,11 @@ export function createCollectionScreen(): Screen<GameFacade> {
         );
         sheetHost.appendChild(
           h('div', { class: 'sheet-backdrop', onClick: (e) => {
-            if (e.target === e.currentTarget) clearChildren(sheetHost);
+            if (e.target === e.currentTarget) closeSheet();
           } }, sheet),
         );
+        // 미리보기는 **DOM 에 붙은 뒤에** 켠다 — 캔버스 크기를 재야 카메라가 잡힌다
+        if (tp.unlocked && preview) preview.show(def, 0);
       };
 
       root = h(
@@ -248,6 +331,7 @@ export function createCollectionScreen(): Screen<GameFacade> {
       mount(uiRoot(), root);
     },
     exit() {
+      dropPreview();
       if (root) unmount(root);
       root = null;
     },

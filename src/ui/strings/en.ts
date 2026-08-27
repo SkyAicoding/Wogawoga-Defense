@@ -37,6 +37,7 @@ export const en: Record<string, string> = {
   'stage.6.name': 'Grumbling Volcano',
 
   'collection.title': 'Tower Collection',
+  'collection.previewTitle': 'Action preview by level',
   'collection.locked': 'Locked',
   'collection.shards': 'Shards {n}/{m}',
   'collection.starUp': 'Star Up',
