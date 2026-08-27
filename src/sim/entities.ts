@@ -214,6 +214,22 @@ export interface AllySim extends AllyState {
    *   `gatherStarted` 이벤트가 예약당 한 번만 나가게 하는 장치다(types.ts SimEvent 주석).
    */
   gatherHpMark: number;
+  /**
+   * **회복 대상 키** (`AllyDef.heal` 이 있는 종만 쓴다. -1 = 없음).
+   * 타워면 그 타워의 `id`, 홈타운이면 `HEAL_KEY_BASE`(-2). sim/heal.ts 가 소유한다.
+   *
+   * 왜 매 틱 다시 고르지 않고 기억하는가: 회복은 대상의 hp 를 **올리므로**, "가장 위태로운
+   * 대상"을 매 틱 새로 뽑으면 한 번 고칠 때마다 순위가 뒤집혀 마법사가 **두 대상 사이를
+   * 왕복**한다(걷는 데 시간을 다 쓰고 아무것도 못 고친다). 지금 대상이 아직 다쳐 있으면
+   * 그대로 붙잡는 이력(hysteresis)이 그것을 막는다.
+   *
+   * ⚠ `hash()` 가 접는다 — 이 값은 x/z/tgt 에서 유도되지 않는다(다음 틱에 이 사람이
+   *   무엇을 할지 자체다). ⚠ `resetAlly` 가 지운다 — 안 지우면 풀 재사용으로 새 부족원이
+   *   앞사람의 대상을 물려받아 **명령 없이 태어나자마자 그리로 걸어간다.**
+   */
+  healKey: number;
+  /** 회복 쿨다운 잔여 틱 (sim/heal.ts). hash 접기·resetAlly 초기화 필수 — 위와 같은 논거 */
+  healCdLeft: number;
 }
 
 function makeAlly(): AllySim {
@@ -242,6 +258,9 @@ function makeAlly(): AllySim {
     gatherHpMark: 0,
     // ── 자동 행동 하나 (규칙 8) — false = 자동 켜짐
     autoHold: false,
+    // ── 회복 둘 (sim/heal.ts) — 실제 초기화는 resetAlly 가 한다
+    healKey: -1,
+    healCdLeft: 0,
   };
 }
 
@@ -274,6 +293,12 @@ function resetAlly(a: AllySim): void {
   //   화면에서는 "왜 얘만 안 움직이지"이고, 코드에서는 풀 재사용 순서가 곧 시드라
   //   같은 시드가 아니면 hash()가 갈린다 — 위 carryGold 문단과 같은 사고다.
   a.autoHold = false;
+  // ── 회복 상태 둘 (sim/heal.ts) — 위 다섯 줄과 정확히 같은 사고를 막는다.
+  //   healKey 가 남으면 새 부족원이 앞사람의 회복 대상으로 **명령 없이** 걸어가고,
+  //   healCdLeft 가 남으면 태어나자마자 회복하거나 반대로 한참을 못 한다. 둘 다
+  //   풀 재사용 순서를 타므로 시드가 같지 않으면 hash() 가 갈린다.
+  a.healKey = -1;
+  a.healCdLeft = 0;
 }
 
 /**

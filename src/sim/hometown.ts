@@ -155,10 +155,19 @@ export interface HometownSim {
   attackCdLeft: number;
   /** 조준 중인 적 id (-1 = 없음) — 규칙 2의 고정 타깃 */
   targetId: number;
+  /**
+   * **마법사가 이 판에서 되돌린 마을 HP 누계** (sim/heal.ts).
+   * 상한은 `balance.ALLY_HEAL_BASE_CAP_FRAC × baseHpMax` 이고, 그 상한이 없으면
+   * 위 규칙 4("홈타운은 절대 회복되지 않는다")가 지키던 **패배 조건이 사라진다** —
+   * 골드만 있으면 마법사를 계속 뽑아 무한히 버틸 수 있게 되기 때문이다.
+   * ⚠ 단조 증가만 한다. 줄이는 코드는 없다(레벨업으로 baseHpMax 가 올라도 이 값은 그대로라
+   *   상한이 함께 오른다 — 마을을 키운 만큼 더 고칠 수 있는 것이 뜻으로 맞는다).
+   */
+  baseHealed: number;
 }
 
 export function createHometown(): HometownSim {
-  return { attackCdLeft: 0, targetId: -1 };
+  return { attackCdLeft: 0, targetId: -1, baseHealed: 0 };
 }
 
 /** level(1-base)의 정의. 범위를 벗어나면 무장 해제 폴백 */

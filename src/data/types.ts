@@ -360,6 +360,27 @@ export interface EnemyDef {
 // ---------------------------------------------------------------------------
 // 아군 유닛 정의 (마을에서 출동시키는 부족원)
 // ---------------------------------------------------------------------------
+/**
+ * 아군 회복 능력 — `AllyDef.heal`. 대상은 **타워와 홈타운뿐**이다(아군 제외 근거는 그 필드 주석).
+ *
+ * 동작(sim/heal.ts): 매 틱 가장 위태로운 대상(**잃은 HP 비율**이 큰 쪽)을 고르고,
+ * 사거리 밖이면 걸어가고, 안이면 쿨다운마다 `amount` 만큼 되돌린다.
+ * 순서·동률이 전부 결정론이어야 하므로 규칙은 그 파일 한 곳에만 적혀 있다.
+ */
+export interface AllyHealSpec {
+  /** 한 번에 되돌리는 HP (절대값·정수). 정수라야 hash 가 부동소수에 안 흔들린다 */
+  amount: number;
+  /** 이 거리 안이면 회복한다 (타일) */
+  radius: number;
+  /** 회복 주기 (틱) */
+  cooldownTicks: number;
+  /**
+   * 대상을 찾아 **걸어가는** 최대 거리 (타일). 이보다 먼 대상은 못 본 척한다 —
+   * 없으면 마법사가 판 끝까지 쫓아다녀 전선에서 이탈한다.
+   */
+  seekRadius: number;
+}
+
 export interface AllyDef {
   id: AllyId;
   nameKey: string;
@@ -398,6 +419,23 @@ export interface AllyDef {
    * 전문: docs/counter-plan.md 단계 3.
    */
   sunder?: boolean;
+  /**
+   * **회복 🔷** — 이 아군은 손상된 **타워와 홈타운**에게 걸어가서 HP 를 되돌린다.
+   * 없으면(생략) 회복 능력이 없다.
+   *
+   * ── 왜 아군(부족원)은 회복 대상이 아닌가 (설계상 반드시 그래야 한다) ──────────
+   * 사용자 요구는 "우리 부족이나, 타워, 홈타운등의 hp"였지만 **부족원은 뺐다.** 근거 둘,
+   * 둘 다 이 저장소가 이미 증명해 둔 불변식이다:
+   *  ① **종료 증명** — `sim/allies.ts` 머리말이 못 박아 뒀다: "아군은 회복 수단이 없다 …
+   *     ⚠ 이 성질은 아군 회복/부활을 넣는 순간 깨진다. 넣으려면 스톨 가드를 함께 넣어라."
+   *     회복량이 난투 피해 이상이면 봉쇄가 영원히 안 풀려 **웨이브가 안 끝난다**(봉투
+   *     13.terminates). 타워·홈타운은 아무도 붙잡지 않으므로 이 위험이 원리적으로 없다.
+   *  ② **채집 중단 벌금** — `entities.ts AllySim.gatherHpMark` 가 "아군 hp 는 단조 감소"를
+   *     전제로 `hp < gatherHpMark` 하나로 "이 시도 중에 맞았다"를 판정한다. 맞은 뒤
+   *     회복되면 그 등가가 깨져 벌금이 **조용히** 사라진다 — tsc 도 봉투도 못 잡는다.
+   * 부족원 회복을 넣으려면 위 둘을 먼저 다시 짜야 한다. 지금은 안 넣는다.
+   */
+  heal?: AllyHealSpec;
   /**
    * 채집 **속도** 배수, 정수 퍼센트 (생략 = 100 = 기준 속도, 0 = 못 캔다).
    * 실제 틱 = max(1, round(자원.ticks × 100 / gatherPct)) — data/resources.ts gatherTicksFor.
@@ -1520,6 +1558,29 @@ export type SimEvent =
       defId: AllyId;
       x: number;
       z: number;
+    }
+  | {
+      /**
+       * **마법사가 고쳤다** (`AllyDef.heal`, src/sim/heal.ts).
+       * 연출이 "누가 무엇을 얼마나" 를 이 하나로 다 읽을 수 있게 싣는다.
+       *
+       * ⚠ `amount` 는 **실제로 되돌아간 양**이다(요청한 양이 아니다). 만피 근처거나
+       *   마을 상한(ALLY_HEAL_BASE_CAP_FRAC)에 걸리면 요청보다 작다 — 화면에 뜨는
+       *   "+N" 이 실제 회복량과 어긋나면 그건 화면이 거짓말을 하는 것이다.
+       *   (enemyDied 의 goldNow 가 bounty 가 아닌 것과 같은 논거)
+       */
+      type: 'allyHealed';
+      allyId: number;
+      /** 무엇을 고쳤나 — 마을이면 'base', 타워면 'tower' */
+      targetKind: 'tower' | 'base';
+      /** 타워면 그 타워 id, 마을이면 -1 */
+      towerId: number;
+      amount: number;
+      hpLeft: number;
+      maxHp: number;
+      /** 고쳐진 것의 자리 (셀 좌표) */
+      cellX: number;
+      cellZ: number;
     }
   // --- 채집 (src/sim/gather.ts) ----------------------------------------------
   | {
