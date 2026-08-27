@@ -335,7 +335,9 @@ if (vKind > 4.5) {
     // 7) 자원 배지 — 마름모 칩. vFill 하나가 세 상태를 나른다:
     //      1 = 아직 안 텄다 (금색 · 부족원을 고르고 있을 때만 뜬다)
     //      0.5 = 누가 캐러 가는 중이다 (한랭색 · 예약이 배타적이라 언제나 한 명)
-    //      0 = 텄다 (회색 그루터기 칩 · 항상 뜬다)
+    //      0 = 텄다 — ⚠ **이제 이 값은 안 들어온다.** 텄음 칸을 아예 안 그리기 때문이다
+    //          (위 '자원 배지' 주석). 아래 taken 분기는 그래서 도달하지 않는다.
+    //          되살리려면 그 continue 한 줄만 빼면 되므로 분기는 남겨 둔다.
     vec2 q = (vBarUv - 0.5) * 2.0;
     float d = abs(q.x) + abs(q.y);
     float body = smoothstep(1.0, 0.80, d);
@@ -575,7 +577,15 @@ if (vKind > 4.5) {
           n++;
         }
       }
-      // 자원 배지 — 텄음/예약은 항상, 안 턴 금색은 부족을 고르고 있을 때만
+      /*
+       * 자원 배지 — 예약(한랭)은 항상, 안 턴 금색은 부족을 고르고 있을 때만.
+       *
+       * ⚠ **텄음(taken) 칸은 안 그린다.** 예전에는 회색 칩을 남겼는데, 사용자가
+       *   "일꾼들이 채집하고 나서 남은 흔적이 보이는 4각형"이라고 지적했다 — 판이
+       *   진행될수록 회색 마름모가 수십 개 깔려 지형을 덮는다. 정보로도 남길 이유가
+       *   약하다: **없는 것이 곧 '텄다'** 이고, 부족을 고르는 중이면 금색 칩이 뜬 칸만
+       *   갈 수 있는 곳이라 오히려 읽기 쉽다.
+       */
       for (const c of gather.cells) {
         if (n >= CAPACITY) break;
         const key = c.cellZ * gather.gridW + c.cellX;
@@ -586,7 +596,8 @@ if (vKind > 4.5) {
             break;
           }
         }
-        if (!c.taken && !claimed && !gather.selecting) continue;
+        if (c.taken) continue; // 텄음 흔적을 안 남긴다 (위 주석)
+        if (!claimed && !gather.selecting) continue;
         cellToWorld(c.cellX, c.cellZ, _pos);
         _pos.y = RES_BADGE_Y;
         _mat.compose(_pos, _quat, _scl.set(RES_BADGE, RES_BADGE, 1));

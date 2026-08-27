@@ -26,10 +26,17 @@ export function sellRefundFor(invested: number): number {
   return Math.floor(invested * SELL_RATE);
 }
 
-/** 배치 지가 — 현재 배치된 타워 수 기준 실비용 */
-export function placementCostFor(baseCost: number, towerCount: number): number {
+/**
+ * 배치 지가 — 현재 배치된 타워 수 기준 실비용.
+ *
+ * `growth` 를 주면 전역 `PLACEMENT_GROWTH` 대신 그것을 쓴다 (`StageDef.placementGrowth`).
+ * **1 이면 동결** — 몇 기를 세워도 `baseCost` 그대로다(`1 ** n === 1`, 상한도 안 물린다).
+ * 곧 동결은 특수 분기가 아니라 **같은 식의 한 점**이라 코드 경로가 갈리지 않는다.
+ */
+export function placementCostFor(baseCost: number, towerCount: number, growth?: number): number {
   const n = Math.max(0, towerCount);
-  return Math.round(baseCost * Math.min(PLACEMENT_GROWTH ** n, PLACEMENT_MAX_MUL));
+  const g = growth ?? PLACEMENT_GROWTH;
+  return Math.round(baseCost * Math.min(g ** n, PLACEMENT_MAX_MUL));
 }
 
 /**
@@ -58,7 +65,14 @@ export class Economy {
     const id = deck[ctx.rng.int(0, deck.length - 1)] as TowerId;
     const tier0 = ctx.opts.towerDefs[id].tiers[0];
     const base = tier0 ? tier0.cost : 0;
-    return { towerId: id, cost: placementCostFor(base, ctx.world.towers.items.length) };
+    return {
+      towerId: id,
+      cost: placementCostFor(
+        base,
+        ctx.world.towers.items.length,
+        ctx.opts.stage.placementGrowth,
+      ),
+    };
   }
 
   /** 배치/판매로 타워 수가 바뀐 후 — 전 핸드 실비용 재계산 (handChanged 발행) */
@@ -66,7 +80,7 @@ export class Economy {
     const count = ctx.world.towers.items.length;
     for (const c of ctx.view.hand) {
       const tier0 = ctx.opts.towerDefs[c.towerId].tiers[0];
-      c.cost = placementCostFor(tier0 ? tier0.cost : 0, count);
+      c.cost = placementCostFor(tier0 ? tier0.cost : 0, count, ctx.opts.stage.placementGrowth);
     }
     ctx.events.push({ type: 'handChanged' });
   }
