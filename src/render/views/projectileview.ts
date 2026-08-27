@@ -8,6 +8,8 @@ import type { ProjectileState, TowerId } from '@/data/types';
 import { clamp01, lerp, parabola } from '@/core/mathx';
 import { additiveMat, flatMat, glowMat } from '../palette';
 import { GLOW_PROJECTILES, PROJECTILE_TOWERS, buildProjectile, projectileTint } from '../meshlib/projectiles';
+import { VARIANT_SEL_ATTR } from '../meshlib/gait';
+import { tierFlatMat, tierGlowMat } from '../meshlib/projmat';
 import type { CellToWorld } from '../meshlib/terrain';
 
 const CAPACITY = 64;
@@ -141,6 +143,8 @@ const FWD = new THREE.Vector3(1, 0, 0);
 
 export class ProjectileView {
   private meshes = new Map<TowerId, THREE.InstancedMesh>();
+  /** 인스턴스별 티어 선택자 (`aVarSel`) — 셰이더가 `태그 <= 이 값`인 정점만 남긴다 */
+  private tierSel = new Map<TowerId, THREE.InstancedBufferAttribute>();
   private beams: Beam[] = [];
   private raidShots: RaidShot[] = [];
   private group = new THREE.Group();
@@ -151,11 +155,31 @@ export class ProjectileView {
   ) {
     this.group.name = 'projectiles';
     for (const id of PROJECTILE_TOWERS) {
-      const geo = buildProjectile(id);
-      if (!geo) continue;
-      const mat = GLOW_PROJECTILES.has(id) ? glowMat() : flatMat();
+      const cached = buildProjectile(id);
+      if (!cached) continue;
+      /*
+       * ⚠⚠ **캐시본을 그대로 쓰면 안 된다.** 아래에서 인스턴스 어트리뷰트(`aVarSel`)를
+       *   지오메트리에 단다. `buildProjectile` 은 `cachedGeo` 로 **전역 캐시**를 돌려주므로
+       *   그대로 쓰면 뷰가 둘 이상 살 때(테스트가 매 케이스마다 만든다) 뒤에 만든 뷰가
+       *   앞 뷰의 선택자를 **통째로 갈아 치운다** — 앞 뷰의 투사체가 남의 티어로 그려진다.
+       *   `instanceMatrix`/`instanceColor` 는 메시 것이라 이 문제가 없고, **커스텀 인스턴스
+       *   어트리뷰트만** 지오메트리에 산다. 그래서 여기만 복제한다(투사체는 수십 삼각형이라 무료).
+       */
+      const geo = cached.clone();
+      // ⚠ 공유 `flatMat`/`glowMat` 이 아니라 **투사체 전용** 재질이다 — 티어 마스킹
+      //   셰이더를 공유 재질에 꽂으면 온 세상이 그 셰이더를 물려받는다(meshlib/projmat.ts).
+      const mat = GLOW_PROJECTILES.has(id) ? tierGlowMat() : tierFlatMat();
       const mesh = new THREE.InstancedMesh(geo, mat, CAPACITY);
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      /*
+       * 티어 선택자. 기본값 **5(만렙)** 인 이유: 태그가 하나도 없는 종(모닥불)은 어차피
+       * 전부 태그 0 이라 값에 무관하고, 태그가 있는 종은 **매 프레임 다시 쓴다**.
+       * 0 으로 두면 어트리뷰트를 안 쓴 프레임에 투사체가 통째로 접혀 사라진다.
+       */
+      const sel = new THREE.InstancedBufferAttribute(new Float32Array(CAPACITY).fill(5), 1);
+      sel.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute(VARIANT_SEL_ATTR, sel);
+      this.tierSel.set(id, sel);
       // 색조가 필요한 메시만 instanceColor 를 켠다 — 켜 두면 three 가 배열을 0(검정)으로
       // 잡으므로 전 칸을 흰색으로 초기화해야 타워 투사체가 까맣게 나오지 않는다
       /*
@@ -233,6 +257,8 @@ export class ProjectileView {
       const hue = projectileTint(p.towerDefId);
       const bright = 1 + tier * TIER_BRIGHT_STEP;
       mesh.setColorAt(idx, _tint.setRGB(hue[0] * bright, hue[1] * bright, hue[2] * bright));
+      // 모양 — 태그 `<= tier + 1` 인 파트만 남는다 (1-base: T1 이 1)
+      this.tierSel.get(p.towerDefId)?.setX(idx, tier + 1);
     }
 
     // 습격대 투척물은 **타워 투사체 뒤에** 붙는다 — 칸이 모자라면 밀리는 쪽이 연출이다
@@ -242,6 +268,8 @@ export class ProjectileView {
       mesh.count = counts.get(id) ?? 0;
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      const sel = this.tierSel.get(id);
+      if (sel) sel.needsUpdate = true;
     }
 
     // 빔 수명 감쇠
@@ -324,6 +352,13 @@ export class ProjectileView {
       _mat4.compose(_pos, _quat, _sclRaid.setScalar(s.scale));
       mesh.setMatrixAt(idx, _mat4);
       if (mesh.instanceColor) mesh.setColorAt(idx, _tint.setHex(s.tint));
+      /*
+       * ⚠ **습격대 투척물은 언제나 T1 모양이다.** 이 투척물은 타워 메시를 빌려 쓰는데
+       *   (`s.borrow`) 그 메시에는 이제 티어 파트가 함께 구워져 있다. 선택자를 안 쓰면
+       *   앞 프레임에 T5 를 그린 칸을 물려받아 **적이 던진 창에 불이 붙고 세 자루가 된다.**
+       *   습격대에는 티어가 없으므로 1 이 맞다.
+       */
+      this.tierSel.get(s.borrow)?.setX(idx, 1);
     }
   }
 
@@ -505,7 +540,12 @@ export class ProjectileView {
 
   dispose(): void {
     this.group.parent?.remove(this.group);
-    for (const mesh of this.meshes.values()) mesh.dispose();
+    // 복제본이므로 지오메트리도 우리 것이다 — 캐시본은 안 건드린다(위 ⚠⚠)
+    for (const mesh of this.meshes.values()) {
+      mesh.geometry.dispose();
+      mesh.dispose();
+    }
+    this.tierSel.clear();
     for (const beam of this.beams) {
       beam.mesh.geometry.dispose();
       beam.mat.dispose();

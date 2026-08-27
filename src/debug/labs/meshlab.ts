@@ -25,6 +25,7 @@ import {
 import { attackLean, makeGaitMaterials } from '@/render/meshlib/gait';
 import { assembleTower, buildTower, towerTierScale } from '@/render/meshlib/towers';
 import { PROJECTILE_TOWERS, buildProjectile } from '@/render/meshlib/projectiles';
+import { tierPreviewMat } from '@/render/meshlib/projmat';
 import { BASECAMP_LAYER_COUNT, createBasecamp } from '@/render/meshlib/basecamp';
 
 /*
@@ -182,15 +183,22 @@ function buildItems(filter: string | null): Item[] {
       const camp = createBasecamp();
       g.add(camp.group);
     }),
-    ...PROJECTILE_TOWERS.map((id) =>
-      makeItem(`proj:${id}`, (g) => {
-        const geo = buildProjectile(id);
-        if (geo) {
-          const mesh = new THREE.Mesh(geo, flatMat());
-          mesh.position.y = 0.5;
-          g.add(mesh);
-        }
-      }),
+    /*
+     * 투사체는 **티어 다섯을 나란히** 세운다 — 사용자 요구로 티어마다 모양이 달라졌고
+     * (창 묶음 · 불꽃 · 얼음 창 …), 하나만 그리면 마스킹이 통째로 빠져 **전 단계가 겹쳐
+     * 보인다**(그러면 랩이 실제 화면과 다른 것을 보여 준다 — 이 저장소가 세 번 당한 병).
+     */
+    ...PROJECTILE_TOWERS.flatMap((id) =>
+      [0, 1, 2, 3, 4].map((t) =>
+        makeItem(`proj:${id}:T${t + 1}`, (g) => {
+          const geo = buildProjectile(id);
+          if (geo) {
+            const mesh = new THREE.Mesh(geo, tierPreviewMat(t));
+            mesh.position.y = 0.5;
+            g.add(mesh);
+          }
+        }),
+      ),
     ),
   ];
   if (filter) {

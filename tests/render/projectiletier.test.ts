@@ -31,8 +31,9 @@ import {
   buildProjectile,
   projectileTint,
 } from '@/render/meshlib/projectiles';
+import { VARIANT_ATTR } from '@/render/meshlib/gait';
 import { ALL_TOWER_IDS, TOWER_DEFS } from '@/data';
-import type { ProjectileState } from '@/data/types';
+import type { ProjectileState, TowerId } from '@/data/types';
 
 const cellToWorld = (x: number, z: number, out?: THREE.Vector3): THREE.Vector3 =>
   (out ?? new THREE.Vector3()).set(x, 0, z);
@@ -79,6 +80,81 @@ function draw(tier: number): { sx: number; sy: number; col: THREE.Color; draws: 
   view.dispose();
   return { sx: scl.x, sy: scl.y, col, draws };
 }
+
+/**
+ * **모양이 티어마다 다른가** — 사용자가 물린 바로 그 자리:
+ *   > "창이 컬러만 바뀌거나 크기만 조금 커지는 그렇게 하지말고, 2~3개의 창이 묶음으로
+ *   >  날아가거나, 창에 불이 붙어 날아가거나 … 너무 단순해 지금은 컬러+크기 로는 구분이 안되"
+ *
+ * 그래서 **색도 크기도 안 본다.** 셰이더가 접고 남긴 **정점 자체**를 센다:
+ * `aVarTag <= 티어` 인 정점만 살아남으므로, 티어가 오르면 살아남는 정점 수가 **엄격히**
+ * 늘어야 한다. 색만 바꾸거나 스케일만 키우면 이 수가 티어마다 똑같다 = 빨강.
+ *
+ * ⚠ 셰이더를 GPU 로 돌리지 않고 **같은 규칙을 CPU 로 재현**한다. 이 규칙은 한 줄
+ *   (`태그 <= 선택`)이고 `projmat.ts` 의 GLSL 과 나란히 두면 어긋남이 눈에 보인다.
+ *   식이 아니라 **구운 태그**를 읽으므로, 파트를 지우거나 태그를 잘못 달면 여기가 잡는다.
+ */
+function liveVerts(id: TowerId, tier: number): number {
+  const geo = buildProjectile(id);
+  if (!geo) return 0;
+  const tag = geo.getAttribute(VARIANT_ATTR) as THREE.BufferAttribute | undefined;
+  const total = geo.getAttribute('position').count;
+  if (!tag) return total; // 태그가 없는 종은 전부 공통 파트다
+  let live = 0;
+  for (let i = 0; i < total; i++) {
+    const t = tag.getX(i);
+    if (t < 0.5 || t <= tier + 1) live++; // projmat.ts 와 같은 규칙 (태그 0 = 공통)
+  }
+  return live;
+}
+
+describe('투사체 모양이 티어마다 달라진다', () => {
+  /** 티어 파트를 단 종 — 모닥불은 습격대가 빌려 쓰므로 일부러 안 단다(projectiles.ts 참조) */
+  const SHAPED: readonly TowerId[] = [
+    'spear', 'catapult', 'frost', 'poison', 'ballista', 'rattletrap', 'shockstake',
+  ];
+
+  it('티어가 오를 때마다 **살아남는 정점이 는다** (색·크기가 아니라 모양이 바뀐다)', () => {
+    for (const id of SHAPED) {
+      const v = [0, 1, 2, 3, 4].map((t) => liveVerts(id, t));
+      for (let i = 1; i < v.length; i++) {
+        expect(v[i]!, `${id} T${i + 1} 에서 파트가 안 늘었다 (${v.join(' → ')})`)
+          .toBeGreaterThan(v[i - 1]!);
+      }
+    }
+  });
+
+  it('만렙은 1단계보다 파트가 **눈에 띄게** 많다 (조금 커진 정도가 아니다)', () => {
+    for (const id of SHAPED) {
+      const t1 = liveVerts(id, 0);
+      const t5 = liveVerts(id, 4);
+      expect(t5 / t1, `${id} T5/T1 정점비 ${(t5 / t1).toFixed(2)} (${t1} → ${t5})`)
+        .toBeGreaterThan(1.6);
+    }
+  });
+
+  /**
+   * 창은 사용자가 **그림까지 지정했다** — "2~3개의 창이 묶음으로 날아가거나, 창에 불이
+   * 붙어 날아가거나". 그래서 창만은 그 둘이 실제로 있는지 따로 못 박는다:
+   *  · 묶음 = T3·T4 에서 **자루(cyl)가 는다**
+   *  · 불   = T5 에서 **불색 정점이 생긴다** (붉은 채널이 크고 푸른 채널이 작은 색)
+   */
+  it('창: T3~T4 는 묶음이 되고 T5 는 불이 붙는다 (사용자가 그림까지 지정했다)', () => {
+    const geo = buildProjectile('spear')!;
+    const tag = geo.getAttribute(VARIANT_ATTR) as THREE.BufferAttribute;
+    const col = geo.getAttribute('color') as THREE.BufferAttribute;
+    const total = geo.getAttribute('position').count;
+    let bundle = 0;
+    let flame = 0;
+    for (let i = 0; i < total; i++) {
+      const t = tag.getX(i);
+      if (t === 3 || t === 4) bundle++;
+      if (t === 5 && col.getX(i) > 0.75 && col.getZ(i) < 0.55) flame++;
+    }
+    expect(bundle, '창 묶음(T3·T4) 파트가 없다').toBeGreaterThan(0);
+    expect(flame, '창의 불(T5) 파트가 없다').toBeGreaterThan(0);
+  });
+});
 
 describe('투사체 티어 연출', () => {
   it('① T1 은 크기가 안 변하고, 색은 그 종의 색조다', () => {
