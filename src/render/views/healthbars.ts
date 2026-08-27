@@ -216,6 +216,18 @@ export interface GatherViewInfo {
    * 말없이 가르치고, 뒤는 "저기는 이미 사람이 간다"라 선택 중이 아니어도 알아야 한다.
    */
   selecting: boolean;
+  /**
+   * **지금 고른 자원 칸 하나** (없으면 null/생략).
+   *
+   * 사용자 지적: "1개의 자원을 선택하면 그 자원만 선택된 마름모 표지가 나와야 하는데,
+   * 모든 자원들에 마름모 표지가 표시된다."
+   *
+   * `selecting` 과 뜻이 다르다: 저것은 "**어디로** 보낼까"(갈 수 있는 칸이 전부 켜진다),
+   * 이것은 "**이** 칸이 뭐지"(그 칸만 켜진다). 둘을 한 불리언으로 합쳐 놓았던 것이
+   * 판 전체가 켜지던 원인이다.
+   * ⚠ 이 값이 있으면 `selecting` 보다 **우선한다** — 하나를 콕 집은 것이 더 좁은 의도다.
+   */
+  focus?: { x: number; z: number } | null;
 }
 
 /**
@@ -631,7 +643,14 @@ if (vKind > 4.5) {
           }
         }
         if (c.taken) continue; // 텄음 흔적을 안 남긴다 (위 주석)
-        if (!claimed && !gather.selecting) continue;
+        /*
+         * ⚠ **콕 집은 칸이 있으면 그 칸만 그린다** (사용자 요구 — 위 `focus` 주석).
+         *   예약(claimed)은 그래도 남긴다: "저기는 이미 사람이 간다"는 고르는 중이
+         *   아니어도 알아야 하는 사실이라 위 `selecting` 주석이 그렇게 못 박아 뒀다.
+         */
+        const focused = gather.focus != null && gather.focus.x === c.cellX && gather.focus.z === c.cellZ;
+        if (gather.focus != null && !focused && !claimed) continue;
+        if (!claimed && !focused && !gather.selecting) continue;
         cellToWorld(c.cellX, c.cellZ, _pos);
         _pos.y = RES_BADGE_Y;
         _mat.compose(_pos, _quat, _scl.set(RES_BADGE, RES_BADGE, 1));

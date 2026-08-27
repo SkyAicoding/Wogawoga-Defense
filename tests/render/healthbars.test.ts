@@ -379,4 +379,35 @@ describe('HealthBarView', () => {
     expect(mesh.count).toBeLessThanOrEqual(mesh.instanceMatrix.count);
     view.dispose();
   });
+
+  /**
+   * **콕 집은 자원 칸 하나만 켠다** (사용자 지적: "1개의 자원을 선택하면 그 자원만
+   * 선택된 마름모 표지가 나와야 하는데, 모든 자원들에 마름모 표지가 표시된다").
+   *
+   * `selecting`("어디로 보낼까" — 전부 켠다)과 `focus`("이 칸이 뭐지" — 하나만)의
+   * 뜻이 다르다는 것이 이 항목의 본문이다. 종전에는 둘이 한 불리언이라 뒤쪽에서도
+   * 판 전체가 켜졌다.
+   */
+  it('자원 칸 하나를 고르면 **그 칸만** 배지가 뜬다 (전부 켜지지 않는다)', () => {
+    const scene = new THREE.Scene();
+    const view = new HealthBarView(scene);
+    const mesh = meshesOf(scene)[0]!;
+    const cells = [
+      cell({ cellX: 1, cellZ: 1 }),
+      cell({ cellX: 2, cellZ: 1 }),
+      cell({ cellX: 3, cellZ: 1 }),
+    ];
+    const draw = (focus: { x: number; z: number } | null, selecting: boolean): void => {
+      view.update([], [], 1, cellToWorld, [], [], null, { cells, gridW: GRID_W, selecting, focus });
+    };
+    // ① 하나를 콕 집었다 → 딱 하나. `selecting` 이 켜져 있어도 **집은 쪽이 이긴다**
+    draw({ x: 2, z: 1 }, true);
+    expect(mesh.count, '집은 칸 하나만 떠야 한다').toBe(1);
+    // ② 아무것도 안 집고 부족을 고르는 중 → 전부 (종전 동작이 여기서 산다)
+    draw(null, true);
+    expect(mesh.count, '부족을 고르는 중이면 갈 수 있는 칸이 전부').toBe(3);
+    // ③ 둘 다 아님 → 하나도 안 뜬다 (배지밭 방지)
+    draw(null, false);
+    expect(mesh.count).toBe(0);
+  });
 });

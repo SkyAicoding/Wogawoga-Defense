@@ -451,7 +451,20 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .side-btn:active { transform: scale(0.93); }
 .side-btn.is-on { background: linear-gradient(180deg, #8be36a, #55a838); color: var(--ink); }
-.hud-bottom { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+/*
+ * 하단 열 — **아래에서 위로 쌓인다.** `justify-content: flex-end` 가 그 규약을 못 박는다:
+ * 열이 자랄 여지가 있어도 내용이 언제나 바닥에 붙어 있어야, 위에서 무엇이 뜨고 져도
+ * 아래쪽 항목(손패·홈타운 패널)의 화면 좌표가 안 움직인다.
+ * 쌓는 **순서**의 근거는 battlehud.ts 의 `const bottom` 주석에 있다(뜨고 지는 것을 위로,
+ * 손이 가는 것을 아래로).
+ */
+.hud-bottom {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 10px;
+  align-items: center;
+}
 /*
  * ── 마을 위급 테두리 ─────────────────────────────────────────────────────────
  * 화면 가장자리에 어리는 붉은 빛. 기지 HP 가 35% 아래면 켜지고 15% 아래면 뛴다.

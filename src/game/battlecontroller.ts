@@ -439,6 +439,8 @@ export class BattleController {
         cells: st.resources,
         gridW: this.stage.gridW,
         selecting: this.placement.showingResourceBadges(),
+        // 자원 칸 하나를 고른 상태면 **그 칸만** 켠다 (placement.focusedResourceCell 주석)
+        focus: this.placement.focusedResourceCell(),
       },
     );
     s3.projectiles.update(st.projectiles, alpha, dt);
