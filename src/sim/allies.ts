@@ -144,6 +144,7 @@ import {
   ALLY_MUSTER_FORWARD,
   ALLY_MUSTER_ROW_GAP,
   ALLY_MUSTER_SPACING,
+  ALLY_SPREAD_SPACING,
   BRAWL_BRUSH_RANGE,
   BRAWL_COOLDOWN_TICKS,
   allyCostFor,
@@ -157,6 +158,7 @@ import { dist2 } from '@/core/mathx';
 import { ARRIVE_EPS2, isGathering, isWorkerDef } from '@/data/resources';
 import { addGold, damageAlly, damageEnemy } from './combat';
 import { fillAliveAllyIds, type AllySim, type EnemySim, type SimCtx } from './entities';
+import { HEAL_STANDOFF } from './heal';
 import { setGatherTarget } from './gather';
 import { allyCapFor } from './hometown';
 import { isStunned } from './status';
@@ -215,6 +217,32 @@ function musterPoint(ctx: SimCtx, n: number): { x: number; z: number } {
     x: base.x + f.dx * forward + px * col * ALLY_MUSTER_SPACING,
     z: base.z + f.dz * forward + pz * col * ALLY_MUSTER_SPACING,
   };
+}
+
+/**
+ * **겹쳐 서지 않게 벌린 자리** — 한 명령을 받은 i번째 사람이 설 점.
+ *
+ * 사용자 지적: "한꺼번에 선택한 뒤 위치를 찍으면 애들이 걸어가서 한곳에 다 멈춰.
+ * 겹쳐지잖아." 이 게임은 유닛끼리 충돌이 없어서(성능·결정론) 안 벌리면 전원이 한 점에
+ * 포개진다 — 집결 지점이 이미 같은 이유로 3열 대열을 쓴다(`musterPoint`).
+ *
+ * 배치는 **중심 하나 + 육각 고리**다: 0번은 찍은 자리 그대로(한 명만 보내면 정확히 그
+ * 자리에 선다), 1~6번이 첫 고리, 7~18번이 둘째 고리… 고리 r 에는 6r 명이 들어간다.
+ * ⚠ `i` 는 **id 오름차순 순번**이라(호출부가 `orderOrder` 를 돈다) 같은 시드·같은
+ *   명령이면 언제나 같은 사람이 같은 자리에 선다 — 결정론이 유지된다.
+ * ⚠ `Math.random` 을 안 쓴다(규칙). 각도는 순번에서만 나온다.
+ */
+function spreadSlot(cx: number, cz: number, i: number): { x: number; z: number } {
+  if (i <= 0) return { x: cx, z: cz };
+  let ring = 1;
+  let rest = i - 1;
+  while (rest >= 6 * ring) {
+    rest -= 6 * ring;
+    ring++;
+  }
+  const ang = (rest / (6 * ring)) * Math.PI * 2;
+  const rad = ring * ALLY_SPREAD_SPACING;
+  return { x: cx + Math.cos(ang) * rad, z: cz + Math.sin(ang) * rad };
 }
 
 /**
@@ -319,6 +347,12 @@ export function moveAlly(
   //    옛 코드가 루프 밖의 값 하나(`hold`)를 전원에게 발라서 명령이 증발했다.
   const base = stage.baseCell;
   const isBase = onCell && cellX === base.x && cellZ === base.z;
+  /*
+   * 찍은 칸에 **내 타워가 서 있는가** — 회복하는 사람이 건물 안으로 안 들어가게 하는
+   * 판정(아래 목표 자리 ①). 타워 수가 한 자리~수십이라 선형 조회로 충분하고, 이 함수는
+   * **명령마다 한 번**만 돈다(매 틱이 아니다).
+   */
+  const hasTowerAt = ctx.world.towers.items.some((t) => t.cellX === cellX && t.cellZ === cellZ);
 
   // ── ② 대상 목록 — id 오름차순 (풀 순서 의존 금지, 계약 B) ───────────────────
   fillAliveAllyIds(ctx.world.allies.items, orderOrder);
@@ -389,8 +423,35 @@ export function moveAlly(
     } else if (only !== null) {
       if (a !== only) continue; // 자원 칸 = 한 사람만. 나머지는 **자리도 안 바꾼다**(E-9)
     } else if (defId !== undefined && a.defId !== defId) continue;
-    a.tgtX = cellX;
-    a.tgtZ = cellZ;
+    /*
+     * ── 목표 자리 ─────────────────────────────────────────────────────────────
+     * 찍은 칸을 그대로 쓰지 않는다. 두 가지를 얹는다(둘 다 사용자 지적에서 나왔다):
+     *
+     *  ① **회복하는 사람은 건물 안으로 안 들어간다.** "내가 직접 힐러 하라고 보내면,
+     *     건물 위치를 선택 하잖아, 그럼 그 건물로 들어가 버려. 그러지 말고 … 그 건물
+     *     옆칸에서 힐링을 시작 해." 타워·마을 메시가 사람보다 커서 같은 칸에 서면 몸이
+     *     통째로 가려진다. 자동 경로(sim/heal.ts)는 이미 그렇게 하는데 **손으로 내린
+     *     명령만 그대로 들어가고 있었다** — 같은 규칙을 여기에도 건다.
+     *  ② **여럿이 한 점에 포개지지 않는다.** `spreadSlot` 이 순번대로 벌린다.
+     *
+     * 순서가 중요하다: 먼저 건물에서 물러선 다음, 그 물러선 점을 중심으로 벌린다.
+     * 반대로 하면 벌어진 자리가 다시 건물 안으로 들어갈 수 있다.
+     */
+    let tx = cellX;
+    let tz = cellZ;
+    if (a.def.heal !== undefined && (isBase || hasTowerAt)) {
+      const bx = tx - a.x;
+      const bz = tz - a.z;
+      const d = Math.sqrt(bx * bx + bz * bz);
+      if (d > 1e-4) {
+        const back = Math.min(HEAL_STANDOFF, d) / d;
+        tx -= bx * back;
+        tz -= bz * back;
+      }
+    }
+    const slot = spreadSlot(tx, tz, count);
+    a.tgtX = slot.x;
+    a.tgtZ = slot.z;
     // 채집 — 자원이 없거나 이미 텄거나 남이 예약했거나 짐이 가득 찼으면
     // 조용히 기존 명령만 푼다(E-2 ~ E-7). 바깥 계약은 안 바뀐다.
     setGatherTarget(ctx, a, key);

@@ -295,7 +295,17 @@ describe('홈타운 앞 집결과 자유 이동 (규칙 1·2)', () => {
     expect(new Set(spots.map((s) => s.join(','))).size).toBe(6);
   });
 
-  it('moveAlly가 목표를 셀 중심에 박고 allyOrdered가 나간다', () => {
+  /**
+   * ⚠⚠ **이 항목의 부호가 하나 뒤집혔다.** 옛 계약은 "전원이 **셀 중심**에 목표를 박는다"
+   *   였는데, 그것이 곧 사용자가 지적한 결함이었다: "한꺼번에 선택한 뒤 위치를 찍으면
+   *   애들이 걸어가서 한곳에 다 멈춰. 겹쳐지잖아." 유닛 충돌이 없는 설계라 같은 점을
+   *   주면 **전원이 포개져 한 명처럼 보인다.**
+   *   지금은 `spreadSlot` 이 순번대로 벌린다 — 첫 사람은 찍은 자리 그대로(한 명만
+   *   보내면 정확히 그 자리다), 나머지는 육각 고리로 나간다.
+   *   ⚠ 이벤트(`allyOrdered`)는 **여전히 찍은 칸**을 싣는다 — 화면의 목표 표식은
+   *     "여기로 가라"는 명령을 그리는 것이지 각자의 발자국이 아니다.
+   */
+  it('moveAlly가 전원을 보내되 **겹치지 않게** 벌린다 · allyOrdered는 찍은 칸을 싣는다', () => {
     const sim = allySim({ delay: NO_ENEMIES });
     for (let i = 0; i < 3; i++) expect(train(sim)).toBe(true);
     sim.drainEvents();
@@ -306,10 +316,20 @@ describe('홈타운 앞 집결과 자유 이동 (규칙 1·2)', () => {
     expect(ev[0]!.count).toBe(3);
     expect(ev[0]!.cellX).toBe(4);
     expect(ev[0]!.cellZ).toBe(1);
-    for (const a of sim.state.allies) {
-      expect(a.tgtX).toBe(4);
-      expect(a.tgtZ).toBe(1);
+    const tgts = sim.state.allies.map((a) => [r3(a.tgtX), r3(a.tgtZ)] as const);
+    // ① 첫 사람은 찍은 자리 그대로 — 한 명만 보내면 정확히 그 칸이다
+    expect(tgts[0]).toEqual([4, 1]);
+    // ② 목표가 **전부 다르다** (이것이 이 항목의 본문이다)
+    expect(new Set(tgts.map((t) => t.join(','))).size).toBe(3);
+    // ③ 서로 반경 합보다 멀다 = 메시가 안 겹친다. 가장 큰 아군 반경이 0.3 이다
+    for (let i = 0; i < tgts.length; i++) {
+      for (let j = i + 1; j < tgts.length; j++) {
+        const d = Math.hypot(tgts[i]![0] - tgts[j]![0], tgts[i]![1] - tgts[j]![1]);
+        expect(d, `${i}번과 ${j}번이 겹친다`).toBeGreaterThanOrEqual(0.6);
+      }
     }
+    // ④ 그래도 찍은 자리 **근처**다 — 벌린다고 딴 데로 가면 명령이 아니다
+    for (const t of tgts) expect(Math.hypot(t[0] - 4, t[1] - 1)).toBeLessThanOrEqual(1);
   });
 
   it('allyId를 찍으면 그 한 명만 움직인다', () => {

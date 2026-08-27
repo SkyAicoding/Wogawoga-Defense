@@ -259,9 +259,14 @@ describe('채집 — 밭과 명령', () => {
     expect(a.gatherKey, '낮은 id가 맡는다').toBeGreaterThanOrEqual(0);
     expect(b.gatherKey).toBe(-1);
     expect({ x: b.tgtX, z: b.tgtZ }, '둘째는 목표조차 안 바뀐다').toEqual({ x: bx, z: bz });
-    // 자원 칸이 **아닌** 칸이면 지금까지와 똑같이 전원이 움직인다
+    // 자원 칸이 **아닌** 칸이면 지금까지와 똑같이 전원이 움직인다.
+    // ⚠ 다만 이제 **겹치지 않게 벌린다**(allies.ts `spreadSlot`) — 사용자 요구였다.
+    //   첫 사람만 찍은 칸 그대로이고 둘째부터 옆으로 나간다. 여기서 재려는 것은
+    //   "전원이 움직였는가"이므로 **자리가 바뀌었는지**로 본다(정확한 좌표가 아니라).
     expect(sim.applyCommand({ type: 'moveAlly', allyId: -1, defId: 'gatherer', cellX: 5, cellZ: 2 })).toBe(true);
-    expect(b.tgtX).toBe(5);
+    expect(a.tgtX, '첫 사람은 찍은 칸 그대로').toBe(5);
+    expect(b.tgtX, '둘째도 움직였다 (자리는 옆으로 벌어진다)').not.toBe(bx);
+    expect(Math.hypot(b.tgtX - 5, b.tgtZ - 2), '벌어져도 찍은 칸 근처다').toBeLessThanOrEqual(1);
   });
 
   it('E-9 고르는 규칙은 **gatherPct 내림차순 → id 오름차순**이다 (결정론이라 규칙이 하나다)', () => {
