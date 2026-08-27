@@ -138,9 +138,20 @@ export function updateAllyHeal(ctx: SimCtx): void {
     const spec = a.def.heal;
     if (!spec) continue;
     if (a.healCdLeft > 0) a.healCdLeft--;
-    // 교전 중에는 회복도 이동도 없다 (위 ⚠)
-    if (a.targetId >= 0) { a.healKey = HEAL_KEY_NONE; continue; }
-
+    /*
+     * ⚠⚠ **회복과 이동의 조건이 다르다.** 종전에는 교전 중이면 둘 다 안 했는데,
+     *   마법사는 봉쇄자(hp 560 · blocks)라 **자주 싸운다** — 그러면 가동률이 바닥이고,
+     *   실제로 봉투가 그것을 말했다(완주율 80% → 20%. 자동 수리를 없앤 뒤 마법사가
+     *   그 자리를 못 메웠다).
+     *
+     *   그래서 갈랐다: **싸우면서도 사거리 안은 고치고, 자리는 안 뜬다.**
+     *   "버티면서 고치는 사람"이라는 이 카드의 정의 그대로다. 버리면 안 되는 것은
+     *   **전선**이지 주문이 아니다 — 막고 있는 적을 놓고 고치러 걸어가면 그 적이
+     *   그대로 마을로 간다.
+     *   ⚠ 스톨 위험은 여기 없다. 그 위험은 **아군**이 대상일 때의 이야기이고
+     *     (types.ts AllyDef.heal), 여기 대상은 타워와 마을뿐이라 아무도 안 붙잡는다.
+     */
+    const fighting = a.targetId >= 0;
     const target = pickTarget(ctx, a, spec, a.healKey);
     if (target === null) { a.healKey = HEAL_KEY_NONE; continue; }
     a.healKey = target.key;
@@ -149,8 +160,8 @@ export function updateAllyHeal(ctx: SimCtx): void {
     const dz = target.z - a.z;
     const d2 = dx * dx + dz * dz;
     if (d2 > spec.radius * spec.radius) {
-      // 사거리 밖 — 걸어간다 (autoHold 면 제자리)
-      if (!a.autoHold) { a.tgtX = target.x; a.tgtZ = target.z; }
+      // 사거리 밖 — 걸어간다. **교전 중이거나 `autoHold` 면 자리를 안 뜬다.**
+      if (!fighting && !a.autoHold) { a.tgtX = target.x; a.tgtZ = target.z; }
       continue;
     }
     if (a.healCdLeft > 0) continue;
