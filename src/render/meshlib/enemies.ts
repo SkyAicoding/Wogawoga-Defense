@@ -1537,7 +1537,7 @@ function kitGuardian(ids: RaiderIds): PartSpec[] {
      * 실측 최저점도 y **0.163** 이다.
      */
     ...tag(ids.armR, [
-      link([0.088, 0.0, sz], [0.298, 0.812, sz], 0.038, 0.038, C.wood, { kind: 'cyl', seg: 4 }),
+      link([0.088, 0.222, sz], [0.298, 0.812, sz], 0.038, 0.038, C.wood, { kind: 'cyl', seg: 4 }),
       // 가죽 감은 손잡이 — 어디를 쥐고 있는지 눈으로 짚어 준다(습격대 창 자루와 같은 처방)
       link([0.079, 0.197, sz], [0.113, 0.293, sz], 0.062, 0.062, C.rope, { hueJitter: 0.02 }),
       /**

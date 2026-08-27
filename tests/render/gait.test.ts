@@ -149,7 +149,7 @@ describe('보행 리그', () => {
   });
 
   /**
-   * **아군 장비도 지면을 뚫지 않는다.**
+   * **아군 장비도 발바닥 아래로 내려가지 않는다.**
    *
    * ⚠ 이 it 이 왜 따로 있는가 — 위 루프는 `buildEnemy` 만 돈다. 3단계에는 아군 장비가
    * 습격대 지오메트리에 변형 5~7로 **함께 구워져** 있어서 위 루프가 아군 무기까지
@@ -157,21 +157,36 @@ describe('보행 리그', () => {
    * **그 커버리지가 조용히 사라졌다.** 그 뒤로 아군 손에 무엇을 쥐여 주든 이 파일은
    * 아무 말도 하지 않았다.
    *
-   * 실제로 걸릴 수 있는 계약인지 확인한 방법: 주술사 지팡이 밑동을 y 0.222 → 0.02 로
-   * 내리면 `guardian 아군 장비가 지면을 뚫음` 으로 **빨개진다**(−0.129). 지금 값에서는
-   * 최저점이 0(발바닥)이다 — 걸음 스윙(±0.34rad)이 밑동을 y 0.203 까지만 내린다.
-   * 같은 함정을 hexer 주석이 "지팡이 밑동은 y=0.055 위로"로 적어 두고 있다.
+   * ⚠⚠ **잣대가 위 루프와 다르다** — 그리고 그 차이가 이 it 의 전부다.
+   * 위 루프는 그 지오메트리 **자신의** 최저점(rest)을 기준선으로 쓴다("정지 자세에서
+   * 이미 파묻힌 것은 리그 책임이 아니다"). 팔에 매달린 물건에 그 잣대를 그대로 쓰면
+   * **아무것도 못 잡는다**: 무기를 낮출수록 rest 도 같이 내려가 문턱이 따라 내려간다.
+   * 실측으로 확인했다 — 지팡이 밑동을 y 0.222 → 0.0 으로 내려도 rest −0.0048 /
+   * 최저 −0.0041 이라 rest 기준으로는 **초록**이다. 그래서 기준선을 **몸통(변형 0)의
+   * 최저점 = 발바닥**으로 고정한다. 이 잣대에서는 같은 개악이 −0.0041 < −0.0015 로
+   * 곧장 **빨개진다**(실제로 그렇게 돌려 확인했다).
+   *
+   * 뜻: "무기가 발보다 아래로 내려가면 지면을 뚫은 것이다." 어깨 피벗이 y 0.42 이고
+   * 보행 스윙이 ±0.34rad 이므로, 팔에 다는 물건이 **어깨 아래로 0.42 이상** 내려오면
+   * 여기서 걸린다(주술사 지팡이 밑동은 0.198, hexer 는 0.365 — 둘 다 그 안이다).
    *
    * ⚠ 단품(buildAllySolo)이 아니라 **공유본**(buildAlly)을 돈다. 전투에서 실제로
    * 그려지는 것이 공유본이고, 접지 보정 표(groundLift)도 그 지오메트리에서 뽑힌다.
    */
-  it('아군 4종의 장비도 보행 한 주기 내내 지면을 뚫지 않는다', () => {
+  it('아군 4종의 장비가 보행 한 주기 내내 발바닥 아래로 내려가지 않는다', () => {
     const rig = allyRig();
     expect(rig.groundLift.length, '아군 접지 표가 비었다').toBeGreaterThan(0);
     const geo = buildAlly();
     const vtag = geo.getAttribute(VARIANT_ATTR)!;
     const pos = geo.getAttribute('position')!;
     const limb = geo.getAttribute(LIMB_ATTR)!;
+    // 기준선 = 몸통(변형 0)의 정지 최저점. 전 종 공통 규약대로 발바닥 y=0 이다.
+    let sole = 0;
+    for (let i = 0; i < pos.count; i++) {
+      if (Math.round(vtag.getX(i)) === 0) sole = Math.min(sole, pos.getY(i));
+    }
+    expect(sole, '아군 몸통 발바닥이 y=0 규약을 벗어났다').toBeCloseTo(0, 3);
+
     for (const id of ALL_ALLY_IDS) {
       // 그 종이 실제로 쓰는 정점만 남긴다 — 다른 종의 장비는 셰이더가 접어 없앤다
       const v = allyVariant(id);
@@ -180,8 +195,6 @@ describe('보행 리그', () => {
         const t = Math.round(vtag.getX(i));
         if (t === 0 || t === v) keep.push(i);
       }
-      let rest = 0;
-      for (const i of keep) rest = Math.min(rest, pos.getY(i));
       let under = 0;
       for (let s = 0; s < 64; s++) {
         const g = (s / 64) * Math.PI * 2;
@@ -192,7 +205,7 @@ describe('보행 리그', () => {
           under = Math.min(under, y + body);
         }
       }
-      expect(under, `${id} 아군 장비가 지면을 뚫음`).toBeGreaterThan(rest - 0.0015);
+      expect(under, `${id} 장비가 발바닥 아래로 내려간다`).toBeGreaterThan(sole - 0.0015);
     }
   });
 });
