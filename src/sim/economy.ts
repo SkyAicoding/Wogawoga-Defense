@@ -12,6 +12,7 @@ import type { CardState, TowerId } from '@/data/types';
 import {
   PLACEMENT_GROWTH,
   PLACEMENT_MAX_MUL,
+  PLACEMENT_BASE_MUL,
   PLACEMENT_STAGE_MAX_STEP,
   PLACEMENT_STAGE_STEP,
   SCENERY_CLEAR_BASE_COST,
@@ -37,7 +38,7 @@ export function sellRefundFor(invested: number): number {
  */
 export function placementStageMul(stageId: number): number {
   const steps = Math.min(PLACEMENT_STAGE_MAX_STEP, Math.max(0, stageId - 1));
-  return PLACEMENT_STAGE_STEP ** steps;
+  return PLACEMENT_BASE_MUL * PLACEMENT_STAGE_STEP ** steps;
 }
 
 /**
