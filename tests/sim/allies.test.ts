@@ -231,6 +231,39 @@ describe('출동 경제 (규칙 4·8)', () => {
     expect(sim.canTrainAlly('clubber')).toBe(true);
   });
 
+  /**
+   * **난투에도 공격 동작이 실린다** — 사용자 지적:
+   *   > "공룡 옆에 우리 주민이 가까이 가면 그냥 죽어 버리는데 닫는다고 죽으면 안되고,
+   *   >  공룡이 자기를 공격하는 주민에게 공격하는 애니매이션을 하고 주민을 죽어야 해."
+   *
+   * 판정은 한 줄도 안 바뀌었다(피해·쿨다운·대상 선택 전부 그대로). 없던 것은
+   * **화면이 그 판정을 말할 근거**다: 난투는 `towerTargetId` 도 `gateTicks` 도 안 쓰므로
+   * 뷰의 어떤 채널에도 안 걸려 있었고, 그래서 공룡이 미동도 없이 서 있는데 주민만 죽었다.
+   * 이제 습격대가 타워를 칠 때 쓰는 그 카운터(`attackAnimLeft`)를 난투도 채운다.
+   *
+   * ⚠ 이 값은 `battle.ts hash()` 가 접는다 — 연출 전용이지만 **타격 시점의 파생값**이라
+   *   여기가 갈리면 판정도 갈렸다는 뜻이다. 곧 이 계약은 결정론 표면도 함께 잠근다.
+   */
+  it('난투로 때릴 때 공격 동작 카운터가 실린다 (주민이 소리 없이 죽지 않는다)', () => {
+    const sim = allySim({
+      caps: [1, 1, 1],
+      enemy: { speed: 1, brawl: { dmg: 1, cooldownTicks: 20 } },
+      ally: { clubber: { hp: 9999 } }, // 안 죽어야 여러 번의 난투를 관찰할 수 있다
+    });
+    expect(train(sim)).toBe(true);
+    sim.applyCommand({ type: 'callWave' });
+    let sawAnim = false;
+    let sawHit = false;
+    for (let i = 0; i < 400; i++) {
+      sim.tick();
+      for (const ev of sim.drainEvents()) if (ev.type === 'allyDamaged') sawHit = true;
+      // 난투가 실제로 일어난 판에서, 어느 프레임에는 동작이 재생 중이어야 한다
+      if (sim.state.enemies.some((e) => e.attackAnimLeft > 0)) sawAnim = true;
+    }
+    expect(sawHit, '난투가 한 번도 안 일어났다 — 이 계약이 공허하다').toBe(true);
+    expect(sawAnim, '주민을 때리는데 공격 동작이 하나도 안 실렸다').toBe(true);
+  });
+
   it('전투가 끝나면 출동할 수 없다', () => {
     const sim = allySim();
     (sim.state as { phase: string }).phase = 'lost';

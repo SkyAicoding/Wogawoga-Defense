@@ -36,6 +36,7 @@ import { HealthBarView } from '@/render/views/healthbars';
 import {
   RAIDER_GEO_KEY,
   allyAttackAnim,
+  allyHealAnim,
   allyGeoKey,
   allyRig,
   allyVariant,
@@ -103,6 +104,7 @@ function ally(o: Partial<AllyState> = {}): AllyState {
     walked: 0,
     heading: Math.PI,
     attackCdLeft: 0,
+    healCdLeft: 0,
     targetId: -1,
     gatherKey: -1,
     gatherTicks: 0,
@@ -545,6 +547,38 @@ describe('아군 공격 동작 — 쿨다운 잔여 틱에 물린 한 번의 타
       anim.impact,
       6,
     );
+    view.dispose();
+  });
+
+  /**
+   * **④ 마법사는 회복할 때도 손을 쓴다** — 사용자 지적:
+   *   > "마법사가 hp 힐링 할때 애니메이션을 넣어줘. 지금은 가만 서 있어.
+   *   >  뭔가 지팡일을 움직인다던지 액션이 필요해."
+   *
+   * 회복(`sim/heal.ts`)은 `targetId` 를 안 쓴다 — 싸우는 것이 아니기 때문이다.
+   * 그래서 위 ②("적이 없으면 0")가 마법사에게는 **언제나** 참이었고, 판 위에서 마법사만
+   * 한 번도 안 움직였다. 지금은 같은 채널을 **회복 쿨다운**이 굴린다.
+   *
+   * 잠그는 것 셋:
+   *   ⓐ 회복 중이면 진행도가 0 이 아니다 (= 손이 움직인다)
+   *   ⓑ 회복이 들어가는 틱에 진행도가 `impact` 다 (연출과 손이 같은 순간이다)
+   *   ⓒ **자세가 공격과 반대다** — 회복 동작의 `lean` 이 음수라 몸이 뒤로 젖혀진다.
+   *      이게 없으면 "지팡이를 든다"와 "몽둥이로 내려친다"가 화면에서 같아진다.
+   * ⚠ ②는 안 건드렸다 — 회복 능력이 없는 종은 `healCdLeft` 가 언제나 0 이라 그대로 0 이다.
+   */
+  it('④ 마법사는 회복 쿨다운으로 손을 움직인다 (싸우지 않아도 안 얼어붙는다)', () => {
+    const scene = new THREE.Scene();
+    const view = new EnemyView(scene);
+    const heal = allyHealAnim('guardian');
+    // ⓐ·ⓑ 회복이 들어가는 틱 = 쿨다운이 전체로 채워지는 그 프레임
+    const atImpact = drawOne(view, ally({ defId: 'guardian', targetId: -1, healCdLeft: heal.cooldown }))[0];
+    expect(atImpact, '회복 중인데 손이 멈춰 있다').not.toBe(0);
+    expect(atImpact, '회복 틱의 진행도가 impact 가 아니다').toBeCloseTo(heal.impact, 6);
+    // 회복도 안 하고 싸우지도 않으면 0 (대기 자세) — ②와 같은 규칙이 유지된다
+    expect(drawOne(view, ally({ defId: 'guardian', targetId: -1, healCdLeft: 0 }))[0]).toBe(0);
+    // ⓒ 몸통 기울임의 **부호가 공격과 반대**여야 두 동작이 화면에서 갈린다
+    expect(heal.lean, '회복 자세가 공격과 같은 방향으로 숙인다').toBeLessThan(0);
+    expect(allyAttackAnim('guardian').lean).toBeGreaterThan(0);
     view.dispose();
   });
 

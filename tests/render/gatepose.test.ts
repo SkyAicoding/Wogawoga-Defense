@@ -103,13 +103,24 @@ const _m = new THREE.Matrix4();
  * `heading = 0` 이면 뷰의 회전은 `Ry(0) · Rz(pitch)` 라 전방 단위벡터가
  * `(cos pitch, sin pitch, 0)` 이다. 앞으로 숙이는 각은 `−pitch` 다(뷰 주석과 같은 규약).
  * 10초를 돌려 조준 자세(`anim.aim`)가 1 로 수렴한 뒤의 한 주기를 전부 본다.
+ *
+ * ⚠⚠ **하네스가 한 입 쿨다운을 굴린다** (2026-08-27). 옛 뷰는 문간 위상을 벽시계
+ *   (`this.time`)로 자유 진동시켰으므로 정지 픽스처로도 한 주기가 돌았다. 그 자유 진동이
+ *   사용자 지적으로 걷혔다 — 동작이 **실제 한 입과 박자가 어긋나** "때리는 것 같지도 않은데
+ *   HP만 준다"로 보였기 때문이다(views/enemyview.ts `biteEnvelope` 주석).
+ *   지금 위상의 출처는 sim 의 `gateBiteCdLeft` 하나뿐이라, 그 값을 안 굴리면 자세가
+ *   0 에 굳어 이 파일이 **아무것도 못 잰다**(실측: 코끝이 정지값 1.45 로 나왔다).
+ *   그래서 하네스가 sim 과 **같은 방식**으로 센다: 한 입 직후 주기 전체로 채우고 매 틱 1씩 준다.
  */
+const HARNESS_BITE_TICKS = 60;
 function maxForwardLeanFromView(id: EnemyId): number {
   const view = new EnemyView(new THREE.Scene());
   const e = gatedEnemy(id);
   const boss = BOSS_ENEMIES.has(id);
   let best = 0;
   for (let f = 0; f < 600; f++) {
+    // sim/gate.ts 와 같은 규약 — 0 이 되는 틱이 곧 한 입이고, 그 자리에서 다시 채워진다
+    e.gateBiteCdLeft = e.gateBiteCdLeft > 0 ? e.gateBiteCdLeft - 1 : HARNESS_BITE_TICKS;
     view.update([e], 1, cellToWorld, 1 / 60);
     if (f < 300) continue; // 앞의 5초는 aim 이 수렴하는 구간
     const inner = view as unknown as {

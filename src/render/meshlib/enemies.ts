@@ -1791,6 +1791,31 @@ export function allyAttackAnim(id: AllyId): AllyAttackAnim {
 }
 
 /**
+ * **회복 동작 파라미터** — 사용자 지적으로 생겼다:
+ *   > "마법사가 hp 힐링 할때 애니메이션을 넣어줘. 지금은 가만 서 있어.
+ *   >  뭔가 지팡일을 움직인다던지 액션이 필요해."
+ *
+ * 회복은 `targetId` 를 안 쓰므로 공격 채널이 0 으로 굳어 마법사만 정지 자세였다.
+ * 같은 채널을 **회복 쿨다운**으로 굴리면 손이 움직인다 — 새 채널을 만들지 않은 이유가
+ * 그것이다(팔·머리는 어차피 한 배역이고, 회복하는 사람은 싸우지 않으므로 겹칠 일이 없다).
+ *
+ * 공격과 다르게 잡은 값 둘:
+ *  · `ticks` 가 훨씬 길다(공격 12틱 → 회복 최대 30틱). 지팡이를 **치켜들고 머무는**
+ *    동작이라 내려치기처럼 짧으면 "떠는 것"으로 보인다.
+ *  · `impact` 가 늦다(0.75). 회복이 들어가는 틱에 지팡이가 **가장 높이** 있어야
+ *    빛나는 연출(fx.ts allyHealed)과 손이 같은 순간에 맞는다. 내려치기는 반대로
+ *    타격 순간이 호의 아래쪽이다.
+ *  · `lean` 이 **음수**다. 공격은 앞으로 숙이지만 회복은 **뒤로 젖혀** 하늘을 향한다 —
+ *    같은 채널을 쓰면서도 두 동작이 화면에서 즉시 갈린다.
+ */
+const ALLY_HEAL_ANIM_TICKS = 30;
+export function allyHealAnim(id: AllyId): AllyAttackAnim {
+  const spec = ALLY_DEFS[id].heal;
+  const cd = Math.max(1, Math.round(spec ? spec.cooldownTicks : ALLY_HEAL_ANIM_TICKS));
+  return { ticks: Math.min(ALLY_HEAL_ANIM_TICKS, cd), cooldown: cd, impact: 0.75, lean: -0.9 };
+}
+
+/**
  * 장비 세트 — **적 습격대 4벌과 아군 3벌을 서로 다른 지오메트리에 굽는다.**
  *
  * ── 왜 5단계에서 갈랐는가 (한 지오메트리 → 둘) ─────────────────────────────

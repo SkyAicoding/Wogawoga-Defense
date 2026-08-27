@@ -51,6 +51,7 @@ import {
   BOSS_RENDER_SCALE,
   allyAttackAnim,
   allyGeoKey,
+  allyHealAnim,
   allyRig,
   allyVariant,
   buildAlly,
@@ -100,6 +101,34 @@ const ATTACK_LEAN = 0.22;
  * 실제로도 개체의 한 입 시각은 **도착한 틱**이 정하므로 제각각이다.
  */
 const GATE_SWING_PERIOD = 1;
+
+/**
+ * **한 입의 포락선** 0..1 → 0..1 — 뒤로 젖혔다가 앞으로 꽂고 되돌아온다.
+ *
+ * `sin(p·2π)` 한 주기를 쓰지 않은 이유는 그것이 **대칭**이기 때문이다. 대칭 곡선은
+ * 들어가는 시간과 나오는 시간이 같아 "물어뜯는다"가 아니라 "흔들린다"로 읽힌다
+ * (사용자가 물린 그 화면이 정확히 그랬다 — 게다가 옛 위상은 실제 한 입과 박자도 어긋나 있었다).
+ *
+ * 여기서는 셋으로 나눈다:
+ *   p < WIND(0.55) : 0 → −0.25  **뒤로 젖힌다** (때릴 것을 예고한다 = 눈이 따라온다)
+ *   p < STRIKE(0.75): −0.25 → 1  **앞으로 꽂는다** (짧고 빠르다. 끝점이 곧 피해 틱)
+ *   그 뒤            : 1 → 0     되돌아온다 (젖히기보다 길게 = 무게가 실린다)
+ * 되돌아온 끝값이 0 이라 다음 주기와 이어져도 자세가 안 튄다(옛 sin 과 같은 성질).
+ * 음수 구간이 있으므로 호출부는 **빼기**로 쓴다 — 젖힐 때는 뒤로, 꽂을 때는 앞으로.
+ */
+const BITE_WIND = 0.55;
+const BITE_STRIKE = 0.75;
+const BITE_BACK = 0.25;
+function biteEnvelope(p: number): number {
+  if (p <= 0 || p >= 1) return 0;
+  if (p < BITE_WIND) return -BITE_BACK * Math.sin((p / BITE_WIND) * Math.PI);
+  if (p < BITE_STRIKE) {
+    const q = (p - BITE_WIND) / (BITE_STRIKE - BITE_WIND);
+    return -BITE_BACK + (1 + BITE_BACK) * q * q; // 가속하며 꽂는다
+  }
+  const q = (p - BITE_STRIKE) / (1 - BITE_STRIKE);
+  return 1 - q * q * (3 - 2 * q); // smoothstep 으로 되돌아온다
+}
 /*
  * ── ⚠⚠ 옛 `GATE_LEAN = 0.34` 이 여기 있었다. 상수를 지운 이유 ────────────────
  * 그 각은 `swinging`(ATTACK_LEAN 0.22)과 **겹쳐** 있었다 — 아래 `marking` 이
@@ -143,6 +172,16 @@ interface Anim {
   flash: number;
   /** 조준 자세 블렌드 0..1 — siegeHoldLeft 를 따라 완만히 오르내린다 */
   aim: number;
+  /**
+   * **관측한 한 입 주기 (틱)** — 문간 물기 위상의 분모다. 0 = 아직 한 입도 못 봤다.
+   *
+   * 왜 상수를 안 쓰고 **관측**하는가: 주기는 `balance.GATE_BITE_TICKS` 가 기본값이지만
+   * 스테이지가 `stage.gate.biteTicks` 로 덮어쓸 수 있다(sim/gate.ts `biteTicks`).
+   * 상수를 import 하면 그 덮어쓴 판에서 동작과 실제 한 입이 어긋나고, 그건 정확히
+   * 옛 자유 진동이 하던 잘못이다. `gateBiteCdLeft` 는 한 입 직후 주기 전체로 채워지므로
+   * **관측 최댓값이 곧 그 판의 주기**다 — 원본에서 오는 값이라 절대 안 낡는다.
+   */
+  biteCd: number;
 }
 
 /**
@@ -411,7 +450,7 @@ export class EnemyView {
       seen.add(e.id);
       let anim = this.anims.get(e.id);
       if (!anim) {
-        anim = { age: 0, flash: 0, aim: 0 };
+        anim = { age: 0, flash: 0, aim: 0, biteCd: 0 };
         this.anims.set(e.id, anim);
       }
       // 일시정지 프레임은 dt 로 0 대신 0.0001 이 들어온다(battlecontroller).
@@ -459,9 +498,27 @@ export class EnemyView {
        * (gait.ts attackEnvelope) 톱니가 되감기는 순간에도 자세가 안 튄다.
        */
       const atGate = e.gateTicks > 0;
-      const gateP = atGate
-        ? ((this.time / GATE_SWING_PERIOD + phaseOffset01(e.id)) % 1 + 1) % 1
-        : 0;
+      /*
+       * ⚠⚠ **자유 진동을 걷어냈다** (사용자 지적: "공룡이 홈타운을 공격할때 …
+       *   지금은 가만 있잖아"). 옛 위상은 `this.time / GATE_SWING_PERIOD` 였고
+       *   `GATE_SWING_PERIOD = 1초` 는 **그 시절 한 입 주기(30틱)** 에 맞춘 값이었다.
+       *   그 뒤 `GATE_BITE_TICKS` 가 30 → 60(2초)이 되면서 동작이 **한 입당 두 번**
+       *   돌게 됐다 — 곧 물어뜯는 시늉과 마을이 실제로 깎이는 순간이 영영 안 맞고,
+       *   화면에서는 "때리는 것 같지도 않은데 HP만 준다"로 읽힌다.
+       *
+       *   지금은 sim 의 **한 입 쿨다운**에서 역산한다(아군 `allyAttackProgress` 와 같은
+       *   규약). 주기는 관측값이라(anim.biteCd) 스테이지가 덮어써도 따라간다.
+       *   한 입이 들어가는 그 틱에 목이 가장 깊이 들어간다.
+       */
+      if (atGate) anim.biteCd = Math.max(anim.biteCd, e.gateBiteCdLeft);
+      const biteP =
+        atGate && anim.biteCd > 0
+          ? clamp01((anim.biteCd - e.gateBiteCdLeft + alpha) / anim.biteCd)
+          : 0;
+      // 물기 포락선 — 뒤로 젖혔다가(0~0.55) 앞으로 꽂고(0.55~0.75) 되돌아온다(~1).
+      // `sin` 한 주기가 아니라 **비대칭**이라야 "때린다"로 읽힌다: 되돌아오는 구간이
+      // 길면 늘어져 보이고, 짧으면 튄다.
+      const gateP = biteP;
       const atkP = atGate
         ? gateP
         : lean > 0
@@ -478,7 +535,17 @@ export class EnemyView {
        * **통째로 얼어붙는다**. 이 게임에서 가장 오래 보이는 정지 장면이 그거라면
        * 사용자 요구("문 앞에서 서로 때린다")가 화면에 도착하지 않는다.
        */
-      const marking = lean === 0 && (atGate || (e.towerTargetId >= 0 && step < STOPPED_EPS));
+      /*
+       * ⚠ **주민을 때리는 중(난투)도 여기 들어온다** — 사용자 지적:
+       *   > "공룡 옆에 우리 주민이 가까이 가면 그냥 죽어 버리는데 … 공격하는
+       *   >  애니매이션을 하고 주민을 죽어야 해."
+       * 난투는 `towerTargetId` 도 `gateTicks` 도 안 쓴다(타워도 마을도 아닌 사람을
+       * 때린다). 그래서 옛 조건으로는 **공룡이 미동도 없이 서 있는데 주민만 죽었다.**
+       * sim 이 난투 때 `attackAnimLeft` 를 채워 주므로(sim/allies.ts) 그 값으로 잡는다.
+       */
+      const brawling = e.attackAnimLeft > 0;
+      const marking =
+        lean === 0 && (atGate || brawling || (e.towerTargetId >= 0 && step < STOPPED_EPS));
       const swing = marking ? this.time * ATTACK_SWING_RATE : 0;
       const gait = rigged
         ? wrapGait(travel * rig.gaitPerDist + off + swing)
@@ -540,7 +607,16 @@ export class EnemyView {
        * 들어가고, 문간을 떠나면 같은 속도로 풀린다.
        */
       if (atGate && lean === 0) {
-        pitch -= Math.max(0, Math.sin(gateP * TAU)) * enemyGateLean(e.defId) * anim.aim;
+        pitch -= biteEnvelope(gateP) * enemyGateLean(e.defId) * anim.aim;
+      } else if (brawling && lean === 0) {
+        /*
+         * **난투 물어뜯기** — 문간과 같은 각(`enemyGateLean`)을 쓴다. 그 각은 메시에서
+         * 역산한 "코끝이 몸 앞 얼마나 나가는가"라 대상이 마을이든 사람이든 같은 뜻이고,
+         * 종마다 자기 몸에 맞는 깊이가 나온다. 여기서 새 상수를 만들면 그 역산이
+         * 두 벌이 되고, 이 저장소가 세 번 당한 "잣대가 두 벌"이 다시 생긴다.
+         * 위상은 sim 의 동작 카운터에서 온다 — 곧 **피해가 들어가는 틱에 가장 깊다**.
+         */
+        pitch -= biteEnvelope(attackProgress(e.attackAnimLeft, e.attackAnimTicks, alpha));
       }
 
       _quat.setFromAxisAngle(AXIS_Y, -e.heading);
@@ -639,7 +715,7 @@ export class EnemyView {
       seen.add(a.id);
       let anim = this.anims.get(a.id);
       if (!anim) {
-        anim = { age: 0, flash: 0, aim: 0 };
+        anim = { age: 0, flash: 0, aim: 0, biteCd: 0 };
         this.anims.set(a.id, anim);
       }
       const step = Math.hypot(a.x - a.prevX, a.z - a.prevZ);
@@ -649,7 +725,10 @@ export class EnemyView {
         // 조준 자세는 **멈춰 서서 적을 물고 있을 때만** 든다. 걸어가는 중에는 0이라
         // 팔이 보행 스윙 그대로 남고, 그 위로 타격 동작만 잠깐 얹힌다(take = wb+fw).
         // 서서 겨누는 동안에는 젖힌 자세로 굳어 "몽둥이를 들고 벼르는" 그림이 된다.
-        const want = a.targetId >= 0 && step < STOPPED_EPS ? 1 : 0;
+        // ⚠ **회복 중도 '멈춰서 무언가 하는 중'이다.** 마법사는 `targetId` 가 −1 이라
+        //   이 줄만으로는 자세가 0 으로 굳는다 — 사용자가 물린 그 정지 화면이다.
+        const busy = a.targetId >= 0 || a.healCdLeft > 0;
+        const want = busy && step < STOPPED_EPS ? 1 : 0;
         anim.aim += (want - anim.aim) * Math.min(1, dt * AIM_RATE);
       }
       const idx = counts.get(key) ?? 0;
@@ -676,10 +755,22 @@ export class EnemyView {
       // 단, 캐는 중이면 같은 채널을 **채집 위상**이 가져간다(위 GATHER_SWING_TICKS).
       // 같은 채널을 쓰므로 포즈가 겹칠 걱정이 없다: 캐는 사람은 전투 불능이라 조준도
       // 타격도 없고(targetId −1), 반대로 싸우는 사람은 gatherKey가 −1이라 여기 안 온다.
-      const atk = allyAttackAnim(a.defId);
+      /*
+       * ── 배역이 셋이다: 채집 · 전투 · **회복** ──────────────────────────────
+       * 셋 다 같은 채널(팔·머리)을 쓰고 서로 배타다. 우선순위는 위에서부터고, 회복이
+       * 전투보다 **뒤**인 이유는 마법사가 싸우면서도 회복하기 때문이다(sim/heal.ts) —
+       * 싸우는 중이면 내려치는 자세가 맞고, 회복만 할 때 지팡이를 든다.
+       *
+       * ⚠ 회복 배역이 없던 동안 마법사는 판 위에서 **한 번도 안 움직였다**(사용자 지적).
+       *   `targetId` 가 −1 이라 `allyAttackProgress` 가 언제나 0 을 돌려줬기 때문이다.
+       */
+      const healing = a.targetId < 0 && a.healCdLeft > 0;
+      const atk = healing ? allyHealAnim(a.defId) : allyAttackAnim(a.defId);
       const atkP = isGathering(a)
         ? ((a.gatherTicks + alpha) % GATHER_SWING_TICKS) / GATHER_SWING_TICKS
-        : allyAttackProgress(a.attackCdLeft, atk, a.targetId >= 0, alpha);
+        : healing
+          ? allyAttackProgress(a.healCdLeft, atk, true, alpha)
+          : allyAttackProgress(a.attackCdLeft, atk, a.targetId >= 0, alpha);
       const pop = anim.age < 0.28 ? easeOutBack(anim.age / 0.28) : 1;
       _pos.y = groundLiftAt(rig, Math.abs(Math.sin(gait))) * pop;
       // 온몸으로 내려친다 — 치켜들 때 뒤로, 내려칠 때 앞으로. 셰이더와 **같은 포락선**이다

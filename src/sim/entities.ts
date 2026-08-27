@@ -249,8 +249,15 @@ export interface AllySim extends AllyState {
    *   앞사람의 대상을 물려받아 **명령 없이 태어나자마자 그리로 걸어간다.**
    */
   healKey: number;
-  /** 회복 쿨다운 잔여 틱 (sim/heal.ts). hash 접기·resetAlly 초기화 필수 — 위와 같은 논거 */
-  healCdLeft: number;
+  /*
+   * ⚠ `healCdLeft` 는 **공개 `AllyState` 로 올라갔다**(types.ts). 이유는 하나 —
+   *   렌더가 읽어야 하기 때문이다. 사용자 지적:
+   *     > "마법사가 hp 힐링 할때 애니메이션을 넣어줘. 지금은 가만 서 있어."
+   *   회복은 `targetId` 를 안 쓰므로(싸우는 것이 아니다) 뷰의 공격 채널이 0 으로 굳어
+   *   마법사만 **정지 자세로 얼어붙어 있었다**. 쿨다운 잔여 틱이 있어야 `allyAttackProgress`
+   *   와 같은 역산으로 "회복이 들어가는 틱"에 손을 맞출 수 있다.
+   *   hash 접기·`resetAlly` 초기화 의무는 그대로다(자리만 옮겼다).
+   */
 }
 
 function makeAlly(): AllySim {

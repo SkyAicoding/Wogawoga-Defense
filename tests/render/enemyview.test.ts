@@ -188,24 +188,115 @@ describe('EnemyView', () => {
   });
 
   /**
+   * ⚠⚠ **이 계약은 2026-08-27 에 출처가 바뀌었다** — 문턱을 푼 것이 아니라 **재는 것이
+   *   강해졌다.** 옛 판본은 "개체 위상이 `id` 해시로 흩어진다"를 쟀다. 그 위상은
+   *   벽시계 자유 진동이었고, 사용자가 바로 그것을 물렸다:
+   *     > "공룡이 홈타운을 공격할때 애니메이션을 넣어줘. 지금은 가만 있잖아."
+   *   자유 진동의 진짜 문제는 흩어짐이 아니라 **박자**였다: `GATE_SWING_PERIOD` 1초는
+   *   옛 한 입 주기(30틱)에 맞춘 값인데 `GATE_BITE_TICKS` 가 60 이 되면서 동작이 한 입당
+   *   **두 번** 돌았다. 곧 물어뜯는 시늉과 마을이 깎이는 순간이 영영 안 맞았다.
+   *
+   * 지금 위상의 출처는 sim 의 `gateBiteCdLeft` 하나다. 그래서 여기서 잠그는 것도 둘로 는다:
+   *   ① **위상이 한 입 쿨다운을 따라간다** — 쿨다운이 줄면 위상이 단조 증가한다.
+   *      이것이 옛 계약이 **재지도 못하던** 성질이고, 자유 진동으로 되돌리면 여기가 빨개진다.
+   *   ② 흩어짐은 그대로 잠근다. 다만 출처가 id 해시가 아니라 **도착 틱**이다 —
+   *      실제로도 개체의 한 입 시각은 문 앞에 선 틱이 정하므로 제각각이다(gate.ts).
+   */
+  it('문간 공격 위상이 한 입 쿨다운을 따라간다 (자유 진동이 아니다)', () => {
+    const key = enemyGeoKeyOf('blade');
+    const cd = 60;
+    const e = enemy({ id: 51, defId: 'blade', x: 9, prevX: 9, dist: 12, gateTicks: 4 });
+    // 첫 프레임이 주기를 관측한다(뷰는 상수를 import 하지 않는다 — 스테이지가 덮어쓸 수 있다)
+    e.gateBiteCdLeft = cd;
+    view.update([e], 1, cellToWorld, 0.033);
+    const ps: number[] = [];
+    for (let left = cd; left >= 0; left -= 6) {
+      e.gateBiteCdLeft = left;
+      view.update([e], 1, cellToWorld, 0.033);
+      ps.push(atkOf(view, key, 0).p);
+    }
+    // 쿨다운이 줄수록 위상이 **오른다** — 한 입이 들어가는 틱(left 0)이 곧 동작의 끝이다
+    for (let i = 1; i < ps.length; i++) {
+      expect(ps[i]!, `left ${cd - i * 6} 에서 위상이 안 늘었다: ${ps.map((v) => v.toFixed(3)).join(' ')}`)
+        .toBeGreaterThan(ps[i - 1]!);
+    }
+    expect(ps[0]!, '시작 위상이 0 이 아니다').toBeLessThan(0.1);
+    expect(ps[ps.length - 1]!, '한 입 틱에서 위상이 끝까지 안 갔다').toBeGreaterThan(0.9);
+  });
+
+  /**
+   * **주민을 때릴 때도 몸을 쓴다** — 사용자 지적:
+   *   > "공룡 옆에 우리 주민이 가까이 가면 그냥 죽어 버리는데 … 공격하는 애니매이션을
+   *   >  하고 주민을 죽어야 해."
+   *
+   * 난투(`sim/allies.ts`)는 타워도 마을도 아닌 **사람**을 때리므로 `towerTargetId` 도
+   * `gateTicks` 도 안 쓴다. 그래서 옛 뷰에서는 어떤 채널에도 안 걸려 공룡이 미동도
+   * 없이 서 있었다. 지금은 sim 이 채워 주는 `attackAnimLeft` 가 그 자리를 잡는다.
+   *
+   * ⚠ **자세를 되읽는다**(인스턴스 행렬 → 전방 벡터). 식을 베끼면 뷰만 고치는 회귀가
+   *   조용히 통과한다 — `gatepose.test.ts` 가 같은 이유로 같은 방식을 쓴다.
+   */
+  it('난투 중인 공룡은 앞으로 물어뜯는다 (가만 서 있지 않는다)', () => {
+    const key = enemyGeoKeyOf('raptor');
+    const idle = enemy({ id: 71, defId: 'raptor', x: 9, prevX: 9, dist: 12 });
+    const forwardOf = (): number => {
+      const m = new THREE.Matrix4();
+      const q = new THREE.Quaternion();
+      const v = new THREE.Vector3();
+      meshOf(view, key).getMatrixAt(0, m);
+      m.decompose(new THREE.Vector3(), q, new THREE.Vector3());
+      v.set(1, 0, 0).applyQuaternion(q);
+      return -Math.atan2(v.y, v.x); // 앞으로 숙인 각(rad)
+    };
+    for (let i = 0; i < 20; i++) view.update([idle], 1, cellToWorld, 0.033);
+    const still = forwardOf();
+
+    /*
+     * ⚠⚠ **대조군이 필요하다.** "가만 서 있는 것보다 숙인다"만 재면 이 계약이 물기를
+     *   재는 것이 아니라 **제자리걸음**(`marking` → `ATTACK_LEAN`)을 재게 된다 —
+     *   난투도 `marking` 을 켜므로 물기 자세를 통째로 지워도 초록이었다(실측: 사보타주 P3 통과).
+     *   그래서 팔을 둘로 가른다. 둘 다 `marking` 이 켜져 있고 **난투 여부만 다르다**:
+     *     대조 = 타워를 노려 멈춰 선 상태(`towerTargetId ≥ 0`) · 동작 카운터 0
+     *     실험 = 같은 자세 + 난투 동작 재생 중
+     *   두 팔의 최심 각 차이가 곧 **물기 한 동작이 화면에 더한 몫**이다.
+     */
+    const deepestOver = (brawling: boolean): number => {
+      const e = enemy({ id: 71, defId: 'raptor', x: 9, prevX: 9, dist: 12, towerTargetId: 5 });
+      e.attackAnimTicks = 18;
+      let deep = -Infinity;
+      for (let left = 18; left >= 0; left--) {
+        e.attackAnimLeft = brawling ? left : 0;
+        view.update([e], 1, cellToWorld, 0.033);
+        deep = Math.max(deep, forwardOf());
+      }
+      return deep;
+    };
+    const control = deepestOver(false);
+    const brawl = deepestOver(true);
+    expect(control, '대조군이 제자리걸음조차 안 한다 — 이 계약이 공허하다')
+      .toBeGreaterThan(still + 0.05);
+    expect(brawl - control, `난투 ${brawl.toFixed(4)} · 대조 ${control.toFixed(4)} · 정지 ${still.toFixed(4)}`)
+      .toBeGreaterThan(0.1);
+  });
+
+  /**
    * 문 앞에는 홍수 웨이브에서 열몇 마리가 **동시에** 선다(s1 w31 = 57마리).
    * 위상이 같으면 대열이 한 몸처럼 내려쳐 "무리"가 아니라 "한 덩어리"로 읽힌다.
-   * 개체 위상은 시간이 아니라 **id 해시**가 정하므로 순회 순서에 안 기댄다.
+   * 지금 그 흩어짐을 만드는 것은 **각자의 한 입 쿨다운**이다(도착 틱이 제각각이므로).
    */
-  it('문간 공격 위상이 개체마다 어긋난다 (연속 id 여도 뭉치지 않는다)', () => {
+  it('한 입 시각이 다른 개체는 동작 위상도 갈린다 (대열이 한 몸으로 안 움직인다)', () => {
     const key = enemyGeoKeyOf('blade');
     const foes = [51, 52, 53, 54, 55, 56].map((id, i) =>
       enemy({ id, defId: 'blade', x: 9 + i * 0.4, prevX: 9 + i * 0.4, dist: 12, gateTicks: 4 }),
     );
+    // 첫 프레임에 주기를 관측시키고, 그 뒤 도착 틱이 다른 것처럼 쿨다운을 흩는다
+    for (const f of foes) f.gateBiteCdLeft = 60;
+    view.update(foes, 1, cellToWorld, 0.033);
+    foes.forEach((f, i) => { f.gateBiteCdLeft = 60 - i * 10; });
     view.update(foes, 1, cellToWorld, 0.033);
     const ps = foes.map((_, i) => atkOf(view, key, i).p);
-    // 한 주기(0..1)에 흩어져 있어야 대열이 한 몸처럼 안 내려친다.
-    // ⚠ **두 마리만 비교하면 안 된다** — 해시는 이웃한 id 를 붙여 놓기도 한다
-    //   (실측: id 51/52 는 0.012 차이). 무리로 재는 것이 이 성질의 뜻이다.
-    expect(Math.max(...ps) - Math.min(...ps)).toBeGreaterThan(0.4);
-    // 그리고 등차수열이 아니다 — `id × 상수` 로 흩뿌리면 파도타기가 된다(이 파일 위 선례)
-    const d = ps.slice(1).map((v, i) => v - ps[i]!);
-    expect(new Set(d.map((v) => v.toFixed(3))).size).toBeGreaterThan(1);
+    expect(Math.max(...ps) - Math.min(...ps), `위상 ${ps.map((v) => v.toFixed(3)).join(' ')}`)
+      .toBeGreaterThan(0.4);
   });
 
   /**

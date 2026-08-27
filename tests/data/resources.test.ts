@@ -583,6 +583,7 @@ describe('isGathering — 상태를 저장하지 않고 유도한다 (§3-4)', (
     walked: 0,
     heading: 0,
     attackCdLeft: 0,
+    healCdLeft: 0,
     targetId: -1,
     gatherKey: -1,
     gatherTicks: 0,

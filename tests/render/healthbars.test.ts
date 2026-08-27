@@ -101,6 +101,7 @@ function ally(o: Partial<AllyState> = {}): AllyState {
     walked: 0,
     heading: 0,
     attackCdLeft: 0,
+    healCdLeft: 0,
     targetId: -1,
     autoHold: false,
     gatherKey: -1,

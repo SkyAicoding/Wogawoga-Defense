@@ -605,6 +605,16 @@ const autoOrder: AllySim[] = [];
  *    읽으려면 봉쇄가 먼저 서 있어야 한다.
  * 즉 "봉쇄 확정 → 공성 → 이동"이 한 틱 안의 인과 순서다.
  */
+/**
+ * 난투 동작의 **최대** 길이 (틱). 실제 길이는 min(이 값, 난투 쿨다운).
+ *
+ * 습격대의 `RAID_ATTACK_ANIM_TICKS`(12)보다 긴 18인 이유: 던지는 동작이 아니라
+ * **물어뜯는 동작**이라 젖혔다 꽂는 두 박자가 다 보여야 한다(render `biteEnvelope`).
+ * ⚠ 순수 연출 길이지만 `attackAnimLeft` 가 hash() 에 접히므로 **결정론 표면**이다 —
+ *   상수여야 하고, 종·시드·프레임률 어느 것에도 의존하면 안 된다.
+ */
+const BRAWL_ANIM_TICKS = 18;
+
 export function updateAllies(ctx: SimCtx): void {
   const allies = ctx.world.allies.items;
   const enemies = ctx.world.enemies.items;
@@ -684,8 +694,29 @@ export function updateAllies(ctx: SimCtx): void {
     }
     const spec = e.def.brawl;
     const dmg = spec ? spec.dmg : enemyBrawlDmgFor(e.def.cost);
+    const cd = Math.max(1, Math.round(spec ? spec.cooldownTicks : BRAWL_COOLDOWN_TICKS));
+    /*
+     * **동작 카운터를 채운다** — 사용자 지적:
+     *   > "공룡 옆에 우리 주민이 가까이 가면 그냥 죽어 버리는데 닫는다고 죽으면 안되고,
+     *   >  공룡이 자기를 공격하는 주민에게 공격하는 애니매이션을 하고 주민을 죽어야 해."
+     *
+     * 판정은 한 줄도 안 바뀐다(피해·쿨다운·대상 선택 전부 그대로다). 바뀌는 것은
+     * **화면이 그 판정을 말하는가**다. 난투는 `towerTargetId` 도 `gateTicks` 도 안 쓰므로
+     * 뷰의 어떤 채널에도 안 걸려 있었고, 그래서 공룡이 미동도 없이 서 있는데 주민만
+     * 죽었다. 습격대가 타워를 칠 때 쓰는 그 카운터를 여기서도 채우면(siege.ts
+     * `fireAtTower` 와 같은 두 줄) 뷰가 이미 가진 공격 채널이 그대로 재생된다.
+     *
+     * ⚠ **연출 전용이지만 hash() 가 접는다**(battle.ts) — 타격 시점의 파생값이라
+     *   여기가 갈리면 판정도 갈렸다는 뜻이기 때문이다. 그래서 `Math.random` 없이
+     *   쿨다운에서만 유도한다. `updateSiege` 가 매 틱 1씩 줄이는 것도 그대로 쓴다.
+     * ⚠ 동작 길이를 쿨다운으로 **자르는** 이유: 길이가 쿨다운보다 길면 다음 타격이
+     *   시작될 때 앞 동작이 안 끝나 자세가 튄다(습격대 쪽 `RAID_ATTACK_ANIM_TICKS` 와 같은 사정).
+     */
+    const animTicks = Math.max(1, Math.min(BRAWL_ANIM_TICKS, cd));
+    e.attackAnimTicks = animTicks;
+    e.attackAnimLeft = animTicks;
     damageAlly(ctx, victim, dmg, e);
-    e.brawlCdLeft = Math.max(1, Math.round(spec ? spec.cooldownTicks : BRAWL_COOLDOWN_TICKS));
+    e.brawlCdLeft = cd;
   }
 }
 
