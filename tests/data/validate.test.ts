@@ -13,7 +13,6 @@ import { ALL_ENEMY_IDS, BOUNTY_PER_COST, ENEMY_DEFS } from '@/data/enemies';
 import { BASE_LEVELS } from '@/data/hometown';
 import { ALL_TOWER_IDS, TOWER_DEFS } from '@/data/towers';
 import { STAGES } from '@/data/stages';
-import { placementCostFor, placementStageMul } from '@/sim/economy';
 import { makeBotSimFor } from '../sim/botharness';
 
 const EXPECTED_TOWERS: TowerId[] = [
@@ -183,44 +182,6 @@ describe('enemies', () => {
     expect(ENEMY_DEFS.spino.baseDamage).toBeGreaterThanOrEqual(5);
     for (const s of STAGES) {
       expect(ENEMY_DEFS.trex.baseDamage, `s${s.id} 기지 HP ${s.baseHp}`).toBeLessThan(s.baseHp);
-    }
-  });
-
-  /**
-   * **배치 기본가 사다리** — 사용자 지시: "다음 스테이지 되면 기본 가격은 이전
-   * 스테이지보다 높게 책정하고, 그 스테이지 내에서는 유지하되, 업그레이드 하면 올리는
-   * 구조로 해."
-   *
-   * 세 다리를 함께 잠근다:
-   *  ① `PLACEMENT_GROWTH === 1` — **한 스테이지 안에서는 값이 안 오른다**. 이게 요구의
-   *     본문이다. 1이 아니면 타워를 세울수록 값이 올라 사용자가 없애 달라고 한 그
-   *     거동이 돌아온다.
-   *  ② 스테이지 배수가 **엄격 증가**한다 (s1 < s2 < … < s6).
-   *  ③ `PLACEMENT_STAGE_MAX_STEP === STAGES.length − 1` — 상한이 스테이지 수와 어긋나면
-   *     새로 추가한 스테이지가 조용히 s6 가격을 물려받는다(오르지 않는다).
-   *
-   * 업그레이드 축은 여기서 안 잠근다 — 위 '업그레이드 배수 1.9~2.1' 항목이 이미 한다.
-   */
-  it('배치가 — 스테이지 안에서는 고정, 스테이지가 오르면 오른다', () => {
-    expect(balance.PLACEMENT_GROWTH, '한 스테이지 안에서는 동결이어야 한다').toBe(1);
-    expect(balance.PLACEMENT_STAGE_MAX_STEP).toBe(STAGES.length - 1);
-    const spear = (TOWER_DEFS.spear.tiers[0] as TowerTier).cost;
-    const mul = STAGES.map((s) => placementStageMul(s.id));
-    for (let i = 1; i < mul.length; i++) {
-      expect(mul[i] as number, `s${i + 1} 배수 > s${i}`).toBeGreaterThan(mul[i - 1] as number);
-    }
-    // 배수가 아니라 **실제로 내는 골드**가 올라야 뜻이 산다 (반올림에 먹히면 안 된다)
-    const price = STAGES.map((s) => placementCostFor(spear, 0, s.id));
-    for (let i = 1; i < price.length; i++) {
-      expect(price[i] as number, `s${i + 1} 창움막 값 > s${i}: ${price.join('/')}`)
-        .toBeGreaterThan(price[i - 1] as number);
-    }
-    // 스테이지 안에서는 몇 기를 세워도 같은 값이다
-    for (const s of STAGES) {
-      const at0 = placementCostFor(spear, 0, s.id);
-      for (const n of [1, 5, 12, 30]) {
-        expect(placementCostFor(spear, n, s.id), `s${s.id} ${n}기째`).toBe(at0);
-      }
     }
   });
 

@@ -88,12 +88,6 @@ export const stage01: StageDef = {
    */
   leakDamage: { compy: 3 },
   baseCell: v(9, 13),
-  /*
-   * 배치 지가 **동결**은 이제 스테이지1만의 예외가 아니라 **전역 규칙**이다
-   * (사용자 지시로 s2~s6 까지 확장 — balance.PLACEMENT_GROWTH 주석).
-   * 그래서 여기 있던 `placementGrowth: 1` 한 줄과 그 실측표는 balance.ts 로 옮겼다.
-   * 스테이지1의 고정가는 `PLACEMENT_STAGE_STEP^0 = 1` 이라 `tiers[0].cost` 그대로다.
-   */
   baseHp: 25,
   startGold: 300,
   waveCount: 50,

@@ -746,12 +746,6 @@ export interface GatherSpec {
 }
 
 export interface StageDef {
-  /**
-   * 스테이지 번호(1-base). **배치 기본가가 여기서 유도된다** —
-   * `tiers[0].cost × PLACEMENT_STAGE_STEP^(id−1)` (sim/economy.ts `placementStageMul`).
-   * 곧 "다음 스테이지가 더 비싸다"는 데이터 오타로 깨질 수 없는 구조적 사실이고,
-   * 스테이지별 덮어쓰기 필드는 **일부러 두지 않았다**.
-   */
   id: number;
   nameKey: string;
   biome: BiomeId;
