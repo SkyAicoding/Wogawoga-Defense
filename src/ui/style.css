@@ -530,6 +530,18 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   animation: gate-in 0.22s ease both;
 }
 /*
+ * **집결 버튼만 남은 띠** (사용자 요구로 정보 줄을 걷어냈다 — battlehud.ts 그 자리 주석).
+ * 본문이 없어졌으므로 상자를 버튼 크기로 오므린다: 안 그러면 화면 폭을 가로지르는
+ * **빈 붉은 막대**가 남아서, 정보를 지운 목적(화면을 비우는 것)과 정반대가 된다.
+ * 왼쪽 정렬은 종전 자리를 그대로 지킨다 — 이 버튼을 찾던 손이 다른 데를 짚지 않게.
+ */
+.gate-hud--rally-only {
+  width: auto;
+  align-self: flex-start;
+  padding: 5px;
+  gap: 0;
+}
+/*
  * 집결 버튼 — **44×44 이상이 계약이다.**
  * 이 저장소에서 히트 영역을 `::after { inset: -N }` 으로 넓혔다가 padding box 기준이라
  * 실측 41px 로 샌 전례가 두 번 있다. 그래서 여기서는 ::after 를 안 쓰고 **버튼 상자

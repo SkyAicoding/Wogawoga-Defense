@@ -311,15 +311,6 @@ export function createBattleHud(): Screen<GameFacade> {
    */
   let gateHud!: HTMLElement;
   let gateRallyBtn!: HTMLButtonElement;
-  let gateIco!: HTMLElement;
-  let gateWho!: HTMLElement;
-  let gateMore!: HTMLElement;
-  let gateOwedBadge!: HTMLElement;
-  let gateHpFill!: HTMLElement;
-  let gateHpNum!: HTMLElement;
-  let gateBreach!: HTMLElement;
-  let gateBreachFill!: HTMLElement;
-  let gateBreachTxt!: HTMLElement;
   /** 띠가 지금 보이는가 — 켜짐/꺼짐 전환에만 DOM 을 만진다 */
   let gateShown = false;
   /*
@@ -341,7 +332,6 @@ export function createBattleHud(): Screen<GameFacade> {
   /** 직전 프레임의 위급 단계 (0 안전 · 1 위험 · 2 치명) — 바뀔 때만 DOM 을 만진다 */
   let lastDanger = -1;
   /** 아이콘 innerHTML 은 비싸다 — 종이 바뀔 때만 다시 그린다 */
-  let lastGateDefId = '';
 
   // 마을 패널 — 선택 타워/소품 패널과 같은 자리, 같은 톤. 레벨업(2단 확인) + 출동(1탭)
   let htPanel!: HTMLElement;
@@ -825,15 +815,6 @@ export function createBattleHud(): Screen<GameFacade> {
       }, h('span', { class: 'refresh-ico', text: '🔄' }), refreshLabel);
 
       // --- 문간 띠 (적이 문 앞에 선 동안에만) --------------------------------
-      gateIco = h('span', { class: 'gate-ico' });
-      gateWho = h('span', { class: 'gate-who' });
-      gateMore = h('span', { class: 'gate-more' });
-      gateOwedBadge = h('span', { class: 'gate-owed' });
-      gateHpFill = h('div', { class: 'gate-hp-fill' });
-      gateHpNum = h('span', { class: 'gate-hp-num' });
-      gateBreachFill = h('div', { class: 'gate-breach-fill' });
-      gateBreachTxt = h('span', { class: 'gate-breach-txt' });
-      gateBreach = h('div', { class: 'gate-breach' }, gateBreachFill, gateBreachTxt);
       /*
        * 집결 버튼 — **44×44 이상**이 계약이라 폭·높이를 CSS 에 못 박고 e2e 가
        * getBoundingClientRect 로 실측한다. 이 저장소에서 `::after { inset: -N }` 으로
@@ -861,21 +842,26 @@ export function createBattleHud(): Screen<GameFacade> {
         h('span', { class: 'gate-rally-txt', text: t('battle.gate.rally') })) as HTMLButtonElement;
       // 컨테이너에는 hud-item 을 안 준다 — 띠의 빈 자리를 탭하면 판으로 통과해야 한다
       // (소품/마을 패널 배경과 같은 규약).
-      gateHud = h('div', { class: 'gate-hud', attrs: { style: 'display:none' } },
+      /*
+       * ⚠⚠ **정보 줄을 걷어냈다 (사용자 요구).**
+       *   > "보스전 할때 여기 보이는 정보는 필요 없어 이거 지워줘.
+       *   >  어짜피 보스 머리 위에 hp 게이지 보이니까, 이건 필요 없어."
+       *
+       *   걷어낸 것: 적 아이콘·이름·마릿수 · 빚 배지(`문 앞 −n`) · **마을 HP 바** ·
+       *   돌파 게이지(`돌파까지 N초`).
+       *   ⚠ 사용자는 저 막대를 보스 HP 로 읽었지만 실제로는 **마을 HP**(21/25)였다.
+       *     그래도 지운다: 마을 HP 는 3D 마을 위 바(healthbars kind 4)가 상시로 그리고,
+       *     보스 HP 는 보스 머리 위 바가 그린다 — 화면에서 사라지는 사실은 없고,
+       *     빚·돌파 시계만 없어진다. 되살리려면 이 커밋을 되돌리면 된다.
+       *
+       *   ⚠ **집결 버튼은 남긴다.** 저건 정보가 아니라 **조작**이다(채집 나간 일꾼을
+       *     되부른다). 같은 상자 안에 있었을 뿐이라 같이 지우면 기능이 사라진다.
+       *   ⚠ `gateBandModel` 은 계속 쓴다 — 이 상자를 **언제 띄울지**(문 앞에 누가
+       *     섰는가)와 집결 가능 여부를 그 모델이 정하기 때문이다. 곧 죽은 코드가
+       *     아니고 `tests/ui/gateband.test.ts` 의 계약도 그대로 유효하다.
+       */
+      gateHud = h('div', { class: 'gate-hud gate-hud--rally-only', attrs: { style: 'display:none' } },
         gateRallyBtn,
-        h('div', { class: 'gate-body' },
-          h('div', { class: 'gate-row gate-row--who' },
-            gateIco,
-            gateWho,
-            gateMore,
-            h('span', { class: 'gate-row-spacer' }),
-            gateOwedBadge,
-          ),
-          h('div', { class: 'gate-row gate-row--meter' },
-            h('div', { class: 'gate-hp' }, gateHpFill, gateHpNum),
-            gateBreach,
-          ),
-        ),
       );
 
       // --- 웨이브 미리보기 띠 ------------------------------------------------
@@ -947,7 +933,6 @@ export function createBattleHud(): Screen<GameFacade> {
        */
       gateHoldTicks.clear();
       gateShown = false;
-      lastGateDefId = '';
       lastDanger = -1;
     },
 
@@ -1419,7 +1404,6 @@ export function createBattleHud(): Screen<GameFacade> {
     if (!m.visible) {
       if (gateShown) {
         gateShown = false;
-        lastGateDefId = '';
         // 문간이 비면 표도 비운다 — 개체 id 는 풀에서 재사용된다(위 모듈 주석)
         gateHoldTicks.clear();
         gateHud.style.display = 'none';
@@ -1429,80 +1413,6 @@ export function createBattleHud(): Screen<GameFacade> {
     if (!gateShown) {
       gateShown = true;
       gateHud.style.display = '';
-    }
-
-    if (m.defId !== lastGateDefId) {
-      lastGateDefId = m.defId;
-      gateIco.innerHTML = enemyIconSvg(m.defId as EnemyId);
-      setText(gateWho, t(`enemy.${m.defId}.name`));
-    }
-    setText(gateMore, m.count > 1 ? t('battle.gate.more', { n: m.count }) : '');
-    gateMore.style.display = m.count > 1 ? '' : 'none';
-
-    /*
-     * 빚 배지 — "저기 선 것들을 하나도 못 죽이면 마을이 이만큼 잃는다".
-     * 한 입이 마을 HP 1이라 **초 수이기도 하다**(빚 9 = 앞으로 9초에 걸쳐 −9).
-     * 이 값이 마을 HP 이상이면 붉은 경보(`doomed`)다 — 비율 30% 같은 문턱을 안 쓰는
-     * 이유는, 문간에서 행동을 바꾸는 사실이 "몇 % 남았나"가 아니라 **"이대로면 지는가"**
-     * 하나이기 때문이다. 그리고 이 판정은 두 자리(배지·HP 바)가 **같은 사실**로 켜진다 —
-     * 한 화면에서 두 경보가 다른 말을 하던 gate-wip 의 사고를 막는 유일한 방법이다.
-     */
-    /*
-     * ⚠ 배지 슬롯은 **언제나 "이대로 두면 마을이 잃을 HP"** 하나만 판다. 그 값이 어디서
-     *   오는지만 바뀐다:
-     *     · 문 앞에 빚이 남았다        → `문 앞 −n`   (지금 물리고 있다)
-     *     · 문 앞은 다 갚았고 뒤가 온다 → `오는 중 −n` (곧 물린다)
-     *     · 판 위가 통째로 0            → 접는다       (진짜로 위협이 없다)
-     *   둘째 줄이 12단계에 새로 생겼다: `baseDamage 1` 인 11종은 도착 틱에 전액을 물어
-     *   다음 프레임부터 문 앞 빚이 0 이고, 그러면 종전 코드는 배지를 통째로 감췄다 —
-     *   랩터 8마리가 문을 덮고 마을이 4/25 인데 띠가 "랩터 ×8" 만 그렸다
-     *   (70-phone844-danger1.png). 값은 정직했지만 **읽히는 뜻이 거짓**이었다.
-     */
-    const owedShown = m.owedTotal > 0 ? m.owedTotal : m.owedIncoming;
-    setText(
-      gateOwedBadge,
-      m.owedTotal > 0
-        ? t('battle.gate.owed', { n: m.owedTotal })
-        : t('battle.gate.incoming', { n: m.owedIncoming }),
-    );
-    gateOwedBadge.style.display = owedShown > 0 ? '' : 'none';
-    cls(gateOwedBadge, 'is-crit', m.doomed);
-    // 문 앞이 아니라 '오는 중'이면 아직 한 대도 안 맞았다 — 같은 슬롯이지만 톤을 낮춘다
-    cls(gateOwedBadge, 'is-soon', m.owedTotal === 0 && m.owedIncoming > 0);
-
-    // 마을 HP — 상시 HUD 에서는 3D 바로 옮겨 갔지만(render/views/healthbars.ts kind 4),
-    // 문간에서는 빚과 **같은 눈높이**에 있어야 뜻이 선다: 이 띠가 파는 것은
-    // "빚이 얼마인가"가 아니라 "그 빚을 마을이 감당하는가"다.
-    gateHpFill.style.width = `${(m.hpFrac * 100).toFixed(1)}%`;
-    // ⚠ `doomed`(예보) **또는** `hpLow`(상태). 종전에는 doomed 만 봤는데, 문 앞이 다
-    //   갚은 프레임에서는 doomed 가 꺼져 **마을 4/25 가 초록으로** 그려졌다(규칙 2-b).
-    cls(gateHpFill, 'is-low', m.doomed || m.hpLow);
-    setText(gateHpNum, `${Math.ceil(m.baseHp)}/${m.baseHpMax}`);
-
-    /*
-     * 돌파 게이지. **봉쇄·기절 중에도 계속 찬다** — `gateTicks` 는 무엇에도 상관없이
-     * 매 틱 흐르기 때문이다(gate.ts 규칙 7·8). 이 한 줄이 "붙잡으면 안전하다"는
-     * 오해를 막는다: 글자는 "붙잡는 중"인데 게이지는 계속 차오르고, 상한에서 남은
-     * 빚이 한 방에 떨어진다.
-     * 상한을 모르면(이벤트를 놓친 프레임·목 UI) **통째로 접는다** — 모르는 것을
-     * 아는 척하지 않는다.
-     */
-    gateBreach.style.display = m.knownBreach ? '' : 'none';
-    if (m.knownBreach) {
-      gateBreachFill.style.width = `${(m.breachFrac * 100).toFixed(1)}%`;
-      const secs = (m.breachTicks / TICK_RATE).toFixed(1);
-      setText(
-        gateBreachTxt,
-        m.held
-          ? t('battle.gate.heldBreach', { s: secs })
-          : m.stunned
-            ? t('battle.gate.stunnedBreach', { s: secs })
-            : t('battle.gate.breach', { s: secs }),
-      );
-      // 붙잡음/기절은 "지금은 안 물린다"라 초록으로 쉬어 준다. 그래도 게이지는
-      // 계속 차므로 색만 바뀔 뿐 시계가 멈춘 것처럼 보이지 않는다.
-      cls(gateBreach, 'is-held', m.held || m.stunned);
-      cls(gateBreach, 'is-imminent', m.imminent);
     }
 
     /*
