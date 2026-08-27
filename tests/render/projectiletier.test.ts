@@ -124,6 +124,65 @@ describe('투사체 모양이 티어마다 달라진다', () => {
     }
   });
 
+  /**
+   * ⚠⚠ **정점이 늘었다고 보이는 것은 아니다.** 사용자가 그 자리를 물렸다:
+   *   > "창던지기 1 lv 2 lv 차이가 없어"
+   * 그때 창 T2 는 파트를 **정말로 하나 더** 갖고 있었다 — 두께 0.03 짜리 덧날이라
+   * 위 정점 계약은 초록이었고 **화면만 똑같았다.** 이 저장소가 네 번째로 같은 병에
+   * 걸린 것이다(잣대가 재려는 것과 다른 것을 잰다).
+   *
+   * 그래서 **보이는 양**을 두 축으로 잰다. 두 축인 이유는 실패 방식이 둘이기 때문이다:
+   *  · **부피**(경계상자) — 붙인 파트가 본체 **안에 숨는** 경우를 잡는다.
+   *    실측 적발: 옛 발리스타 T2 는 대에 감은 띠가 대보다 0.015 굵었을 뿐이라 **1.00** 이었다.
+   *  · **투영 면적**(xz 로 내린 삼각형 면적 합) — 파트가 **얇은 조각**이라 윤곽은 늘리는데
+   *    눈에 띄는 양이 없는 경우를 잡는다. 실측 적발: 옛 창 T2 는 부피는 1.122 로 통과하는데
+   *    투영이 **1.064**(잉크 6% 증가)였다 — 그것이 "차이가 없어" 의 정체다.
+   *  어느 한 축만으로는 다른 쪽 결함이 통과한다. 그래서 둘 다 건다.
+   *
+   * ⚠ 문턱 1.10 은 실측 최악(**부피 1.195 · 투영 1.181**) 아래이면서 위 두 결함
+   *   (1.00 · 1.064)보다는 위다. 실측에 딱 붙이면 파트를 한 자리 옮기는 것만으로
+   *   빨개져 잣대가 아니라 족쇄가 된다.
+   * ⚠ 투영 면적은 겹침을 무시한 **상계**다. 정확한 실루엣이 아니지만 이 계약이 재려는
+   *   것에는 충분하다 — "파트를 더했는데 잉크가 거의 안 늘었다"는 상계로도 잡힌다.
+   */
+  it('티어마다 **보이는 양이 는다** (숨은 파트·얇은 조각을 잡는다)', () => {
+    const seen = (id: TowerId, tier: number): { vol: number; area: number } => {
+      const geo = buildProjectile(id)!;
+      const tag = geo.getAttribute(VARIANT_ATTR) as THREE.BufferAttribute | undefined;
+      const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+      const box = new THREE.Box3();
+      const a = new THREE.Vector3();
+      const b = new THREE.Vector3();
+      const c = new THREE.Vector3();
+      let area = 0;
+      for (let i = 0; i < pos.count; i += 3) {
+        const t = tag ? tag.getX(i) : 0;
+        if (t >= 0.5 && t > tier + 1) continue; // projmat.ts 와 같은 규칙
+        a.fromBufferAttribute(pos, i);
+        b.fromBufferAttribute(pos, i + 1);
+        c.fromBufferAttribute(pos, i + 2);
+        box.expandByPoint(a);
+        box.expandByPoint(b);
+        box.expandByPoint(c);
+        area += Math.abs((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x)) / 2;
+      }
+      const s = box.getSize(new THREE.Vector3());
+      return { vol: s.x * s.y * s.z, area };
+    };
+    for (const id of SHAPED) {
+      const m = [0, 1, 2, 3, 4].map((t) => seen(id, t));
+      const vr = m.slice(1).map((x, i) => x.vol / m[i]!.vol);
+      const ar = m.slice(1).map((x, i) => x.area / m[i]!.area);
+      const show = `부피 ${vr.map((v) => v.toFixed(2)).join(' ')} · 투영 ${ar.map((v) => v.toFixed(2)).join(' ')}`;
+      vr.forEach((r, i) => {
+        expect(r, `${id} T${i + 1}→T${i + 2} 파트가 본체 안에 숨었다 (${show})`).toBeGreaterThan(1.1);
+      });
+      ar.forEach((r, i) => {
+        expect(r, `${id} T${i + 1}→T${i + 2} 보이는 양이 거의 안 늘었다 (${show})`).toBeGreaterThan(1.1);
+      });
+    }
+  });
+
   it('만렙은 1단계보다 파트가 **눈에 띄게** 많다 (조금 커진 정도가 아니다)', () => {
     for (const id of SHAPED) {
       const t1 = liveVerts(id, 0);

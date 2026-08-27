@@ -37,8 +37,20 @@ function spearProj(): PartSpec[] {
   return [
     ...shaft(0),
     { kind: 'box', pos: [-0.3, 0.02, 0], rot: [0, 0, 0.3], scale: [0.1, 0.08, 0.02], color: 0xe0512e },
-    // T2 — 흑요석 덧날. 촉이 길어지고 검게 번뜩인다
-    { kind: 'cone', pos: [0.47, 0, 0], rot: [0, 0, -Math.PI / 2], scale: [0.07, 0.18, 0.03], color: 0x2b2733, seg: 4, variant: 2 },
+    /*
+     * T2 — **흑요석 창으로 바뀐다.** ⚠ 사용자 지적: "창던지기 1 lv 2 lv 차이가 없어".
+     *   옛 T2 는 촉 끝에 붙인 두께 0.03 짜리 덧날 하나여서, 날아가는 작은 물체에서는
+     *   **실루엣이 한 픽셀도 안 바뀌었다.** 층을 하나 더 얹는 것만으로는 부족하고
+     *   **실루엣이 달라져야** 한다 — 그래서 셋을 한꺼번에 준다:
+     *     ① 창이 **길어진다** (검은 촉이 앞으로 0.2 더 뻗는다)
+     *     ② **미늘 둘**이 촉 뒤에 벌어진다 (뾰족한 윤곽이 생긴다)
+     *     ③ **가죽 손잡이**가 자루 가운데를 감는다 (색 대비로 자루가 두 토막으로 읽힌다)
+     *   ①이 길이, ②가 폭, ③이 명암 — 셋이 서로 다른 축이라 어느 각도에서도 하나는 보인다.
+     */
+    { kind: 'cone', pos: [0.56, 0, 0], rot: [0, 0, -Math.PI / 2], scale: [0.1, 0.34, 0.1], color: 0x2b2733, seg: 4, variant: 2 },
+    { kind: 'cone', pos: [0.34, 0.08, 0], rot: [0, 0, 2.4], scale: [0.06, 0.2, 0.06], color: 0x2b2733, seg: 4, variant: 2 },
+    { kind: 'cone', pos: [0.34, -0.08, 0], rot: [0, 0, -2.4], scale: [0.06, 0.2, 0.06], color: 0x2b2733, seg: 4, variant: 2 },
+    { kind: 'cyl', pos: [-0.06, 0, 0], rot: [0, 0, Math.PI / 2], scale: [0.09, 0.18, 0.09], color: C.hide, seg: 6, variant: 2 },
     // T3·T4 — **묶음으로 날아간다** (사용자가 이름 대서 지정한 그림)
     ...shaft(0.13, 3),
     ...shaft(-0.13, 4),
@@ -55,18 +67,40 @@ function rockProj(): PartSpec[] {
   return [
     { kind: 'ico', pos: [0, 0, 0], rot: [0.4, 0.7, 0.2], scale: 0.3, color: C.stone, hueJitter: 0.02 },
     { kind: 'ico', pos: [0.08, 0.08, 0.06], scale: 0.14, color: C.stoneDark },
-    // T2 — 덩어리가 붙어 뭉치가 커진다
-    { kind: 'ico', pos: [-0.1, -0.06, -0.08], rot: [0.9, 0.2, 0.5], scale: 0.17, color: C.stoneDark, variant: 2 },
+    /*
+     * T2 — **깨진 바위**가 된다. 옛 T2 는 덩어리 하나를 본체 **안쪽**에 붙여서 실루엣이
+     * 그대로였다 — 창 T2 와 **정확히 같은 결함**이라(사용자: "1 lv 2 lv 차이가 없어")
+     * 같은 처방을 쓴다: 윤곽을 바꾼다. 뭉치가 밖으로 튀어나와 **두 덩이**로 읽히고,
+     * 모난 조각 둘이 가장자리에 박혀 매끈한 공이 아니라 **깨진 돌**이 된다.
+     */
+    { kind: 'ico', pos: [-0.19, -0.11, -0.14], rot: [0.9, 0.2, 0.5], scale: 0.26, color: C.stoneDark, variant: 2 },
+    { kind: 'box', pos: [0.16, -0.16, 0.08], rot: [0.7, 0.4, 0.3], scale: [0.16, 0.1, 0.12], color: C.stone, variant: 2 },
+    { kind: 'box', pos: [-0.02, 0.2, -0.14], rot: [0.2, 0.9, 0.6], scale: [0.13, 0.13, 0.09], color: C.stoneDark, variant: 2 },
     // T3 — **둘째 바위**
     { kind: 'ico', pos: [-0.02, 0.04, 0.26], rot: [1.1, 0.3, 0.8], scale: 0.24, color: C.stone, hueJitter: 0.02, variant: 3 },
-    // T4 — 박힌 돌가시 셋
-    { kind: 'cone', pos: [0.24, 0.1, 0], rot: [0, 0, -0.9], scale: [0.08, 0.24, 0.08], color: C.stoneDark, seg: 4, variant: 4 },
-    { kind: 'cone', pos: [-0.04, 0.26, 0.1], rot: [0.4, 0, 0], scale: [0.07, 0.22, 0.07], color: C.stoneDark, seg: 4, variant: 4 },
-    { kind: 'cone', pos: [-0.02, -0.02, 0.42], rot: [0, 0, 1.2], scale: [0.07, 0.2, 0.07], color: C.stoneDark, seg: 4, variant: 4 },
-    // T5 — **불타는 운석**: 뒤로 끌리는 불꼬리 + 불티
-    { kind: 'cone', pos: [-0.34, 0.02, 0.06], rot: [0, 0, Math.PI / 2], scale: [0.2, 0.5, 0.2], color: 0xff7a2e, seg: 5, variant: 5 },
-    { kind: 'cone', pos: [-0.26, 0.02, 0.06], rot: [0, 0, Math.PI / 2], scale: [0.14, 0.3, 0.14], color: 0xffd24a, seg: 4, variant: 5 },
-    { kind: 'ico', pos: [-0.52, 0.1, -0.06], scale: 0.07, color: 0xffe9a8, variant: 5 },
+    // T4 — 박힌 돌가시 넷 (T3→T4 가 가장 약한 단계라 하나 더 길게 박았다 — 계기가 잡았다)
+    { kind: 'cone', pos: [0.3, 0.14, 0], rot: [0, 0, -0.9], scale: [0.09, 0.34, 0.09], color: C.stoneDark, seg: 4, variant: 4 },
+    { kind: 'cone', pos: [-0.06, 0.32, 0.1], rot: [0.4, 0, 0], scale: [0.08, 0.3, 0.08], color: C.stoneDark, seg: 4, variant: 4 },
+    { kind: 'cone', pos: [-0.02, -0.04, 0.5], rot: [0, 0, 1.2], scale: [0.08, 0.28, 0.08], color: C.stoneDark, seg: 4, variant: 4 },
+    { kind: 'cone', pos: [-0.24, -0.16, -0.1], rot: [0, 0, 2.4], scale: [0.08, 0.28, 0.08], color: C.stoneDark, seg: 4, variant: 4 },
+    /*
+     * T5 — **돌덩이에 불이 붙는다.** ⚠ 사용자 지적: "투석기 5lv 이상해 뭔가 모양이 이상해
+     *   … 돌 덩이에 불을 붙여서 던지던지".
+     *   옛 T5 는 바위 **뒤에** 큰 원뿔 하나를 길게 달았다. 원뿔은 옆에서 보면 삼각형이라
+     *   화면에서 **바위와 분리된 납작한 주황 판때기**로 읽혔다 — 불이 아니라 깃발이었다.
+     *   지금은 사용자 말 그대로 **바위 표면에 불꽃을 붙인다**: 작은 불꽃 여섯이 바위를
+     *   감싸고 바깥으로 뻗는다. 하나하나가 작아 어느 각도에서도 바위 윤곽을 안 가리고,
+     *   여러 방향이라 **덩어리째 타는 것**으로 읽힌다(원뿔 하나로는 절대 안 나오는 그림).
+     *   뒤로 흐르는 것은 불티 둘뿐이다 — 꼬리는 속도가 만들지 크기가 만들지 않는다.
+     */
+    { kind: 'cone', pos: [0.1, 0.2, 0.02], rot: [0, 0, 0.35], scale: [0.13, 0.3, 0.13], color: 0xff7a2e, seg: 5, variant: 5 },
+    { kind: 'cone', pos: [-0.14, 0.14, 0.16], rot: [0.5, 0, 0.9], scale: [0.11, 0.26, 0.11], color: 0xffa53c, seg: 4, variant: 5 },
+    { kind: 'cone', pos: [-0.06, 0.06, -0.16], rot: [-0.6, 0, 1.4], scale: [0.11, 0.24, 0.11], color: 0xff7a2e, seg: 4, variant: 5 },
+    { kind: 'cone', pos: [-0.18, -0.02, 0.3], rot: [0.3, 0, 1.9], scale: [0.1, 0.24, 0.1], color: 0xffc24a, seg: 4, variant: 5 },
+    { kind: 'cone', pos: [-0.2, 0.1, 0.04], rot: [0, 0, 2.1], scale: [0.12, 0.28, 0.12], color: 0xffc24a, seg: 5, variant: 5 },
+    { kind: 'cone', pos: [0.08, -0.14, 0.18], rot: [0, 0, -0.5], scale: [0.09, 0.2, 0.09], color: 0xffa53c, seg: 4, variant: 5 },
+    { kind: 'ico', pos: [-0.42, 0.12, -0.04], scale: 0.06, color: 0xffe9a8, variant: 5 },
+    { kind: 'ico', pos: [-0.56, 0.02, 0.14], scale: 0.045, color: 0xfff3c4, variant: 5 },
   ];
 }
 
@@ -94,7 +128,7 @@ function iceProj(): PartSpec[] {
     { kind: 'cone', pos: [-0.12, 0, 0], rot: [0, 0, Math.PI / 2], scale: [0.12, 0.3, 0.12], color: C.iceDeep, seg: 5 },
     { kind: 'ico', pos: [0.02, 0.08, 0.02], scale: 0.08, color: 0xe2faff },
     // T2 — 서리 결정이 엉겨 붙는다
-    { kind: 'ico', pos: [-0.06, -0.08, 0.06], scale: 0.09, color: 0xcdf1ff, variant: 2 },
+    { kind: 'ico', pos: [-0.11, -0.15, 0.13], scale: 0.14, color: 0xcdf1ff, variant: 2 },
     // T3·T4 — **위성 결정 넷**이 본체를 둘러싼다
     shard(0.16, 0, 3), shard(-0.16, 0, 3),
     shard(0, 0.16, 4), shard(0, -0.16, 4),
@@ -114,7 +148,7 @@ function dartProj(): PartSpec[] {
     { kind: 'cone', pos: [0.1, 0, 0], rot: [0, 0, -Math.PI / 2], scale: [0.08, 0.34, 0.08], color: C.poison, seg: 4 },
     { kind: 'sphere', pos: [-0.12, 0, 0], scale: 0.1, color: C.poisonDark },
     // T2 — 독액 방울이 맺힌다
-    { kind: 'ico', pos: [0.2, -0.06, 0], scale: 0.07, color: 0xc6f56a, variant: 2 },
+    { kind: 'ico', pos: [0.24, -0.11, 0.05], scale: 0.12, color: 0xc6f56a, variant: 2 },
     // T3·T4 — **산탄**: 침이 셋으로
     barb(0.11, 0.06, 3),
     barb(-0.09, -0.09, 4),
@@ -131,11 +165,18 @@ function boltProj(): PartSpec[] {
     { kind: 'cone', pos: [0.36, 0, 0], rot: [0, 0, -Math.PI / 2], scale: [0.11, 0.22, 0.11], color: C.bone, seg: 5 },
     { kind: 'box', pos: [-0.26, 0, 0.04], rot: [0.4, 0, 0], scale: [0.12, 0.1, 0.02], color: C.hide },
     { kind: 'box', pos: [-0.26, 0, -0.04], rot: [-0.4, 0, 0], scale: [0.12, 0.1, 0.02], color: C.hide },
-    // T2 — 촉 뒤에 가죽 감은 금속 띠
-    { kind: 'cyl', pos: [0.2, 0, 0], rot: [0, 0, Math.PI / 2], scale: [0.1, 0.08, 0.1], color: 0x6f6a5c, seg: 6, variant: 2 },
+    /*
+     * T2 — **균형추 볼트.** 옛 T2 는 대에 감은 얇은 띠 하나였는데, 반지름이 대보다
+     * 겨우 0.015 커서 **실루엣이 한 톨도 안 바뀌었다**(실측 경계상자 부피비 **1.00**).
+     * 창·투석기와 정확히 같은 결함이다(사용자: "1 lv 2 lv 차이가 없어") — 자동 계측이
+     * 나머지 여섯을 훑다가 이것까지 잡았다. 처방도 같다: **윤곽을 바꾼다.**
+     *   ① 띠를 두껍게 (대보다 확실히 굵다) ② 꼬리에 **균형추**를 달아 길이를 늘린다
+     */
+    { kind: 'cyl', pos: [0.2, 0, 0], rot: [0, 0, Math.PI / 2], scale: [0.17, 0.1, 0.17], color: 0x6f6a5c, seg: 6, variant: 2 },
+    { kind: 'ico', pos: [-0.38, 0, 0], scale: 0.14, color: 0x6f6a5c, variant: 2 },
     // T3 — **미늘 둘** (뒤로 향한 갈고리)
-    { kind: 'cone', pos: [0.22, 0.09, 0], rot: [0, 0, 2.2], scale: [0.06, 0.2, 0.06], color: C.bone, seg: 4, variant: 3 },
-    { kind: 'cone', pos: [0.22, -0.09, 0], rot: [0, 0, -2.2], scale: [0.06, 0.2, 0.06], color: C.bone, seg: 4, variant: 3 },
+    { kind: 'cone', pos: [0.24, 0.15, 0], rot: [0, 0, 2.2], scale: [0.08, 0.3, 0.08], color: C.bone, seg: 4, variant: 3 },
+    { kind: 'cone', pos: [0.24, -0.15, 0], rot: [0, 0, -2.2], scale: [0.08, 0.3, 0.08], color: C.bone, seg: 4, variant: 3 },
     // T4 — 촉이 **작살**로 커진다
     { kind: 'cone', pos: [0.54, 0, 0], rot: [0, 0, -Math.PI / 2], scale: [0.15, 0.3, 0.15], color: 0xf6efdc, seg: 5, variant: 4 },
     // T5 — 대에 **불이 붙는다**
@@ -153,8 +194,10 @@ function toothProj(): PartSpec[] {
   return [
     { kind: 'cone', pos: [0.08, 0, 0], rot: [0, 0, -Math.PI / 2], scale: [0.09, 0.26, 0.09], color: C.wood, seg: 4 },
     { kind: 'box', pos: [-0.1, 0, 0], scale: [0.12, 0.07, 0.07], color: C.woodDark },
-    // T2 — 끝을 불에 그을려 단단하게 (검은 촉)
-    { kind: 'cone', pos: [0.21, 0, 0], rot: [0, 0, -Math.PI / 2], scale: [0.06, 0.12, 0.06], color: 0x3a2a1c, seg: 4, variant: 2 },
+    // T2 — 그을린 촉 + **역가시 둘**. 촉만 검게 하면 실루엣이 안 바뀐다(계기가 잡았다)
+    { kind: 'cone', pos: [0.23, 0, 0], rot: [0, 0, -Math.PI / 2], scale: [0.07, 0.16, 0.07], color: 0x3a2a1c, seg: 4, variant: 2 },
+    { kind: 'cone', pos: [0.04, 0.1, 0], rot: [0, 0, 2.5], scale: [0.05, 0.16, 0.05], color: C.woodDark, seg: 4, variant: 2 },
+    { kind: 'cone', pos: [0.04, -0.1, 0], rot: [0, 0, -2.5], scale: [0.05, 0.16, 0.05], color: C.woodDark, seg: 4, variant: 2 },
     // T3·T4 — **이빨이 는다** (부채꼴 산탄)
     tooth(0.1, 0.05, 3),
     tooth(-0.1, -0.05, 4),
@@ -166,18 +209,22 @@ function toothProj(): PartSpec[] {
 
 function sparkProj(): PartSpec[] {
   // 충격 말뚝의 방전 덩이 (glowMat 전제 — 밝은 색). 꼬리를 달아 진행 방향이 읽힌다
+  // 아크는 T2 스파크보다 **더 멀리** 뻗어야 한다 — 안 그러면 T3 가 T2 윤곽 안에 묻힌다
+  // (실측이 잡았다: 처음엔 부피비 1.00 이었다)
   const arc = (y: number, z: number, v: number): PartSpec => ({
-    kind: 'box', pos: [0.02, y, z], rot: [0.6, 0, 0.5], scale: [0.22, 0.03, 0.03],
+    kind: 'box', pos: [0.02, y, z], rot: [0.6, 0, 0.5], scale: [0.38, 0.04, 0.04],
     color: 0xeafaff, variant: v,
   });
   return [
     { kind: 'ico', pos: [0, 0, 0], scale: 0.15, color: 0xd9f6ff },
     { kind: 'cone', pos: [-0.16, 0, 0], rot: [0, 0, Math.PI / 2], scale: [0.1, 0.26, 0.1], color: C.ice, seg: 4 },
-    // T2 — 코어가 커진다
-    { kind: 'ico', pos: [0.08, 0.02, 0], scale: 0.1, color: 0xffffff, variant: 2 },
+    // T2 — 코어가 커지고 **스파크 둘이 튄다** (코어만 키우면 본체에 묻힌다 — 계기가 잡았다)
+    { kind: 'ico', pos: [0.1, 0.02, 0], scale: 0.12, color: 0xffffff, variant: 2 },
+    { kind: 'box', pos: [0.02, 0.13, 0.07], rot: [0.4, 0, 0.8], scale: [0.14, 0.03, 0.03], color: 0xeafaff, variant: 2 },
+    { kind: 'box', pos: [0.02, -0.12, -0.08], rot: [-0.5, 0, -0.7], scale: [0.13, 0.03, 0.03], color: 0xeafaff, variant: 2 },
     // T3·T4 — **아크가 뻗는다**
-    arc(0.13, 0.05, 3),
-    arc(-0.13, -0.05, 4),
+    arc(0.22, 0.1, 3),
+    arc(-0.22, -0.1, 4),
     // T5 — **방전 고리**: 진행 방향을 감싸는 납작한 원반 + 바깥 스파크
     { kind: 'cyl', pos: [0.1, 0, 0], rot: [0, 0, Math.PI / 2], scale: [0.42, 0.03, 0.42], color: 0x9fe8ff, seg: 8, variant: 5 },
     { kind: 'ico', pos: [-0.3, 0, 0], scale: 0.09, color: 0xffffff, variant: 5 },
