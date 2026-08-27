@@ -54,6 +54,7 @@
  * ⚠ 이 파일이 초록이 되기 전에는 봉투를 돌리지 마라 (설계 §8 착수 순서 3).
  */
 import { describe, expect, it } from 'vitest';
+import { TICK_DT } from '@/data/types';
 import type { BattleSim, EnemyId, SimEvent, StatusInstance } from '@/data/types';
 import {
   GATE_BITE_AMOUNT,
@@ -148,12 +149,23 @@ function settleGate(
   const ev: SimEvent[] = [];
   let ticks = 0;
   let e = findEnemy(sim, id);
+  /*
+   * ⚠⚠ **한 틱 이동량의 상한 = 걸음 속도 그 자체.** `updateGate` 는 `speed × TICK_DT`
+   *   만큼만 옮긴다 — 곧 "걸어 들어간다"의 실행 가능한 정의가 이 한 줄이다.
+   *   ⚠ 이 검사가 없으면 **한 틱에 자리로 순간이동**하는 구현이 조용히 통과한다:
+   *     실측으로 확인했다 — 걷기 블록을 죽이면 `else` 가지가 좌표를 그 자리에서 박아
+   *     "도착 틱 좌표와 다르다"만 보는 잣대는 **전부 초록**이었다.
+   */
+  const steps: number[] = [];
   while (ticks < SETTLE_TICKS && e !== undefined && !isSettled(e)) {
+    const wasX = e.x;
+    const wasZ = e.z;
     beforeTick?.();
     sim.tick();
     ev.push(...sim.drainEvents());
     ticks++;
     e = findEnemy(sim, id);
+    if (e !== undefined) steps.push(Math.hypot(e.x - wasX, e.z - wasZ));
   }
   // 정착 전에 죽었다 — **잴 것이 없다**. 호출자가 공허성 가드로 이 경우 수를 센다.
   if (e === undefined) return null;
@@ -161,6 +173,19 @@ function settleGate(
   expect(isSettled(e), `${note} ${ticks}틱 안에 자리에 못 들어갔다`).toBe(true);
   expect(e.x, `${note} x 가 목표와 비트 단위로 같지 않다`).toBe(e.gateTgtX);
   expect(e.z, `${note} z 가 목표와 비트 단위로 같지 않다`).toBe(e.gateTgtZ);
+  /*
+   * ⚠ **마지막 한 걸음은 뺀다.** `updateGate` 는 남은 거리가 `GATE_SETTLE_EPS2` 안이면
+   *   좌표를 **정확히 박는다**(부동소수 꼬리를 안 남기려고 — 해시가 그 꼬리에 걸린다).
+   *   그 스냅 폭이 느린 종의 한 틱 걸음보다 클 수 있다 — 실측 s2 spino 0.0182 대 걸음
+   *   0.0167. 그건 순간이동이 아니라 **정착의 마지막 한 틱**이므로 잣대에서 뺀다.
+   *   ⚠ 대신 "한 틱 만에 자리를 잡았다"는 호출자가 `ticks > 1` 로 따로 잠근다 —
+   *     여기서만 보면 스냅 한 번으로 끝내는 구현이 통과한다(실측으로 확인했다).
+   */
+  const stride = e.def.speed * TICK_DT;
+  const walkSteps = steps.slice(0, -1);
+  const maxStep = walkSteps.length > 0 ? Math.max(...walkSteps) : 0;
+  expect(maxStep, `${note} 한 틱에 ${maxStep.toFixed(4)}타일 — 걸음 ${stride.toFixed(4)} 을 넘었다 = 순간이동이다`)
+    .toBeLessThanOrEqual(stride + 1e-9);
   return { e, ticks, walked: Math.hypot(e.x - fromX, e.z - fromZ), ev };
 }
 
@@ -611,6 +636,8 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
       let killedEarly = 0;
       /** 실제로 걸어 들어간 마릿수 — 0 이면 좌표 박기가 되돌아온 것이다 */
       let walkedIn = 0;
+      /** 자리 잡는 데 **두 틱 이상** 걸린 마릿수 — 0 이면 한 틱 순간이동이다 */
+      let multiTick = 0;
       const done = new Set<number>();
       for (let w = 0; w < 12; w++) {
         if (sim.state.phase === 'prep') sim.applyCommand({ type: 'callWave' });
@@ -637,6 +664,7 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
             // ⚠ 도착 틱의 좌표는 **이벤트에서** 읽는다 — `settleGate` 를 언제 불렀는지에
             //   안 걸린다(다른 개체를 정착시키는 동안 이 개체가 먼저 자리를 잡을 수 있다).
             if (Math.hypot(s.e.x - x.x, s.e.z - x.z) > 1e-9) walkedIn++;
+            if (s.ticks > 1) multiTick++;
             // ⚠ 잣대는 `radius`(충돌 반지름)가 아니라 `restReach`(메시 앞끝 도달)다.
             //   그 둘의 비가 0.96~2.51배로 흩어져 있어 서로를 대신하지 못한다 —
             //   `tests/render/gatepose.test.ts` §1 이 이 값 16개를 메시와 대조한다.
@@ -663,6 +691,10 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
       // ⚠⚠ **이 한 줄이 "걸어 들어간다"를 잠근다.** 좌표 박기로 되돌리면 도착 틱에
       //   이미 자리에 있어 `walked === 0` 이 되고 여기가 빨개진다.
       expect(walkedIn, `s${stage.id}: 아무도 걸어 들어가지 않았다 — 순간이동이 되돌아왔다`)
+        .toBeGreaterThan(0);
+      // ⚠ 그리고 **한 틱에 끝나지 않는다.** 위 줄만으로는 "한 틱 늦게 순간이동"이 통과한다
+      //   (실측으로 확인했다 — 걷기 블록을 죽여도 위 줄은 초록이었다).
+      expect(multiTick, `s${stage.id}: 전부 한 틱 만에 자리를 잡았다 — 걸어 들어가기가 죽었다`)
         .toBeGreaterThan(0);
     }, 120_000);
   }
@@ -736,6 +768,9 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
       .toBe(N - 1);
     expect(Math.max(...moved), '옮겨 간 거리가 부채 한 칸보다도 짧다 — 자리 잡기가 반쯤 죽었다')
       .toBeGreaterThan(GATE_FAN_SPACING);
+    // ⚠ 한 틱 만에 자리를 잡으면 그것도 순간이동이다 — 틱 수로 따로 잠근다
+    expect(settled.filter((s) => s.ticks > 1).length, `자리 잡는 데 걸린 틱 ${settled.map((s) => s.ticks).join(' ')}`)
+      .toBeGreaterThan(0);
     const spots = settled.map((s) => `${s.e.x.toFixed(6)},${s.e.z.toFixed(6)}`);
     expect(new Set(spots).size, `같은 종이 같은 자리에 겹쳤다 — ${spots.join(' | ')}`).toBe(N);
     // 그리고 부채는 **원 위**다 — 자리가 갈려도 중심거리는 한 톨도 안 흔들린다
