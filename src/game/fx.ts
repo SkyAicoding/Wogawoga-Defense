@@ -967,6 +967,36 @@ export class FxRouter {
           audio.play('towerPlace');
           break;
         }
+        case 'allyHealed': {
+          /*
+           * **마법사가 고쳤다 🔷** — 회복은 화면에 안 보이는 능력이라, 이 연출이 없으면
+           * 플레이어는 마법사가 일을 하는지 알 수가 없다(카드 값을 못 배운다).
+           *
+           * 색은 **하늘빛**(0x8fd8ef)이다 — 체력바의 '내 편' 청록 · 회복 배지 · 3D 지팡이
+           * 결정 · 카드 아이콘과 같은 축이라 낱말 없이 "우리 편 회복"으로 읽힌다.
+           * ⚠ 민트 계열은 **적 주술사의 힐 오라** 색과 겹쳐서 일부러 피한다 — 같은
+           *   "회복"인데 편이 갈리므로 색이 갈려야 한다.
+           *
+           * ⚠ **숫자는 `ev.amount`(실제로 되돌아간 양)이다.** 만피 근처거나 마을 상한에
+           *   걸리면 요청보다 작다 — 화면에 뜨는 "+N" 이 실제와 어긋나면 화면이 거짓말을
+           *   하는 것이다(enemyDied 의 goldNow 가 bounty 가 아닌 것과 같은 논거).
+           *
+           * ⚠ 소리는 **안 붙인다.** 회복은 쿨다운마다 계속 나가는 잦은 사건이라 소리를
+           *   주면 배경음이 된다(이 파일의 규약 — gatherStarted 각주와 같다).
+           *   그리고 셰이크도 안 준다: 잦은 사건은 판을 안 흔든다(shakebus.ts).
+           */
+          const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
+          const big = ev.targetKind === 'base';
+          s3.particles.burst(w.x, big ? 1.25 : 0.85, w.z, 0x8fd8ef, big ? 8 : 5, 0.9, 0.05, 0.55, {
+            gravity: -2.2, // 위로 떠오른다 — 낙하하는 파편과 반대 방향이라 뜻이 갈린다
+            drag: 2.2,
+            upBias: 1,
+            sizeVar: 0.45,
+          });
+          const p = this.worldToScreen(ev.cellX, big ? 1.9 : 1.3, ev.cellZ);
+          if (p) spawnDamageNumber(p.sx, p.sy, `+${Math.round(ev.amount)}`, 'heal', big ? 1.15 : 0.95);
+          break;
+        }
         case 'allyAttacked': {
           // 원거리(돌팔매)만 궤적을 그린다 — 근접은 enemyDamaged의 피격 연출로 충분하고,
           // 여기서 또 터뜨리면 난전에서 파티클 예산이 적 피격 연출을 밀어낸다
