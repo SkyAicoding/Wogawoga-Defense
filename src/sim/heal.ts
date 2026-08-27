@@ -39,6 +39,15 @@ const healOrder: AllySim[] = [];
 export const HEAL_KEY_BASE = -2;
 /** 대상 없음 */
 const HEAL_KEY_NONE = -1;
+/**
+ * **회복하러 갈 때 대상 앞에서 멈추는 거리** (타일).
+ *
+ * 사용자 요구: "건물과 붙어서 하게 하지 말고, 한칸 떨어져서 힐 하도록 해줘,
+ * 건물과 겹쳐서 보이지 않아." 곧 이것은 밸런스가 아니라 **가독성** 상수다.
+ * ⚠ 반드시 `AllyDef.heal.radius` 보다 작아야 한다 — 크면 걸어가서 멈춘 자리가
+ *   사거리 밖이라 영영 못 고친다. validate.test.ts 가 그 부등식을 잠근다.
+ */
+export const HEAL_STANDOFF = 1;
 
 /** 이 판에서 마을에 되돌릴 수 있는 총 HP (상한 근거는 balance.ALLY_HEAL_BASE_CAP_FRAC) */
 export function baseHealBudget(ctx: SimCtx): number {
@@ -160,8 +169,28 @@ export function updateAllyHeal(ctx: SimCtx): void {
     const dz = target.z - a.z;
     const d2 = dx * dx + dz * dz;
     if (d2 > spec.radius * spec.radius) {
-      // 사거리 밖 — 걸어간다. **교전 중이거나 `autoHold` 면 자리를 안 뜬다.**
-      if (!fighting && !a.autoHold) { a.tgtX = target.x; a.tgtZ = target.z; }
+      /*
+       * 사거리 밖 — 걸어간다. **교전 중이거나 `autoHold` 면 자리를 안 뜬다.**
+       *
+       * ⚠ **대상 칸이 아니라 그 앞 `HEAL_STANDOFF` 만큼 떨어진 자리로 간다.**
+       *   사용자 지적: "힐러가 힐링 할때 건물과 붙어서 하게 하지 말고, 한칸 떨어져서
+       *   힐 하도록 해줘, 건물과 겹쳐서 보이지 않아." 타워·마을 메시가 사람보다 커서
+       *   같은 칸에 서면 **몸이 통째로 가려진다** — 회복 연출도 건물 안에서 터진다.
+       *   한 칸 물러서면 마법사가 보이고, 하늘빛 불티가 둘 **사이**에서 오르므로
+       *   "저 사람이 저것을 고치고 있다"가 그림으로 읽힌다.
+       *
+       *   ⚠ 물러선 자리는 `spec.radius`(1.2) 안이어야 한다 — 밖이면 걸어가서 멈춘 뒤
+       *     영영 못 고친다. 그래서 STANDOFF(1.0) < radius(1.2) 이고,
+       *     `tests/data/validate.test.ts` 가 그 부등식을 잠근다.
+       */
+      if (!fighting && !a.autoHold) {
+        const d = Math.sqrt(d2);
+        // 대상에서 **마법사 쪽으로** STANDOFF 만큼 되돌아온 점. d 가 0 에 가까우면
+        // (겹쳐 서 있으면) 방향이 없으므로 그냥 그 자리에 둔다.
+        const back = d > 1e-4 ? Math.min(HEAL_STANDOFF, d) / d : 0;
+        a.tgtX = target.x - dx * back;
+        a.tgtZ = target.z - dz * back;
+      }
       continue;
     }
     if (a.healCdLeft > 0) continue;

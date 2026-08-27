@@ -26,32 +26,12 @@ describe('i18n 문자열', () => {
     }
   });
 
-  /**
-   * 문간 띠의 낱말. **`owed` 와 `incoming` 은 한 배지의 두 얼굴이라 짝으로 있어야 한다**
-   * (gateband.ts 규칙 2-b) — 하나만 있으면 문 앞이 다 갚은 프레임에서 배지가 통째로
-   * 비고, 그러면 띠가 "위협 없음"을 그린다. 12단계에 실측으로 잡힌 결함이다.
+  /*
+   * ⚠ **문간 띠 문자열 계약은 없앴다** — 띠 자체가 사라졌기 때문이다(사용자 요구:
+   *   "보스전 할때 여기 보이는 정보는 필요 없어" → "지워 집결버튼").
+   *   `battle.gate.*` 아홉 키와 `screens/gateband.ts` · `tests/ui/gateband.test.ts` 가
+   *   같이 지워졌다. 되살리려면 그 커밋을 되돌리면 이 계약도 함께 돌아온다.
    */
-  it('문간 띠 문자열이 양쪽에 있다 (빚 배지는 두 얼굴이 짝이다)', () => {
-    for (const k of [
-      'battle.gate.rally',
-      'battle.gate.title',
-      'battle.gate.owed',
-      'battle.gate.incoming',
-      'battle.gate.more',
-      'battle.gate.breach',
-      'battle.gate.heldBreach',
-      'battle.gate.stunnedBreach',
-    ]) {
-      expect(ko[k], `ko.${k}`).toBeTruthy();
-      expect(en[k], `en.${k}`).toBeTruthy();
-    }
-    // 두 얼굴은 **같은 단위(마을 HP)**를 판다 — 자리표시자가 갈리면 눈이 다시 배워야 한다
-    for (const d of [ko, en]) {
-      expect(d['battle.gate.owed']).toContain('{n}');
-      expect(d['battle.gate.incoming']).toContain('{n}');
-      expect(d['battle.gate.incoming']).toContain('−'); // U+2212, '문 앞 −{n}' 과 같은 부호
-    }
-  });
 
   it('홈타운 레벨업 문자열이 양쪽에 있다', () => {
     for (const k of [

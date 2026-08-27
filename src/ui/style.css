@@ -522,25 +522,12 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
  *   대가가 크고, 무엇보다 문 앞의 그림이 판의 기본 상태가 되면 줌인이 상시가 된다).
  *   대신 판에서 일어나는 일을 **화면 아래 큰 글씨**로 한 번 더 말한다.
  */
-.gate-hud {
-  width: 100%; display: flex; align-items: stretch; gap: 8px;
-  padding: 7px 9px; border: var(--bd); border-color: var(--red-d); border-radius: var(--r-md);
-  background: linear-gradient(180deg, rgba(80, 30, 24, 0.94), rgba(45, 24, 18, 0.94));
-  box-shadow: var(--pop);
-  animation: gate-in 0.22s ease both;
-}
 /*
  * **집결 버튼만 남은 띠** (사용자 요구로 정보 줄을 걷어냈다 — battlehud.ts 그 자리 주석).
  * 본문이 없어졌으므로 상자를 버튼 크기로 오므린다: 안 그러면 화면 폭을 가로지르는
  * **빈 붉은 막대**가 남아서, 정보를 지운 목적(화면을 비우는 것)과 정반대가 된다.
  * 왼쪽 정렬은 종전 자리를 그대로 지킨다 — 이 버튼을 찾던 손이 다른 데를 짚지 않게.
  */
-.gate-hud--rally-only {
-  width: auto;
-  align-self: flex-start;
-  padding: 5px;
-  gap: 0;
-}
 /*
  * 집결 버튼 — **44×44 이상이 계약이다.**
  * 이 저장소에서 히트 영역을 `::after { inset: -N }` 으로 넓혔다가 padding box 기준이라
@@ -550,89 +537,33 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
  * 아래 어느 미디어 쿼리에서도 56px 밑으로 안 내려간다 — 320px 폭에서도 오른쪽 본문이
  * 줄지 버튼이 줄지 않는다.
  */
-.gate-rally {
-  flex: 0 0 auto; width: 56px; min-width: 56px; height: 56px; min-height: 56px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
-  border: var(--bd); border-radius: var(--r-sm);
-  background: linear-gradient(180deg, #b98a58, #8a5a33);
-  color: var(--cream); box-shadow: var(--pop); pointer-events: auto;
-  transition: transform 0.08s ease;
-}
-.gate-rally:active { transform: scale(0.93); }
-.gate-rally-ico { width: 24px; height: 24px; display: block; margin-bottom: 1px; }
-.gate-rally-ico svg { width: 100%; height: 100%; display: block; }
-.gate-rally-txt { font-size: 0.66rem; font-weight: 900; line-height: 1; letter-spacing: -0.02em; }
 /* 돌파가 임박한 동안에만 맥동한다 — 상시로 뛰면 배경이 되고, 이 버튼이 파는 것은 '지금'이다 */
-.gate-rally.is-urgent { animation: gate-pulse 1.1s ease-in-out infinite; }
 /* 되부를 부족원이 하나도 없을 때. 숨기지 않는 이유는 battlehud.ts 주석에 있다 */
-.gate-rally.is-disabled { filter: grayscale(0.8) brightness(0.62); animation: none; }
 
-.gate-body { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
-.gate-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.gate-row-spacer { flex: 1; }
-.gate-ico { width: 22px; height: 22px; flex: 0 0 auto; display: block; }
-.gate-ico svg { width: 100%; height: 100%; display: block; }
 /* 이름은 접히기 전에 잘린다 — 접히면 띠가 한 줄 높아져 손패를 밀어낸다 */
-.gate-who { font-size: 0.84rem; font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gate-more { font-size: 0.76rem; font-weight: 900; color: var(--gold); flex: 0 0 auto; }
 /* 문 앞의 빚 합계 — 마을이 감당하지 못하면 붉은 경보가 된다 */
-.gate-owed {
-  flex: 0 0 auto; font-size: 0.72rem; font-weight: 900; white-space: nowrap;
-  padding: 1px 7px; border-radius: 999px; background: rgba(0, 0, 0, 0.35); color: #ffd7ca;
-}
-.gate-owed.is-crit { background: var(--red); color: #fff; animation: hp-blink 0.8s ease-in-out infinite; }
 /*
  * '오는 중 −n' — 같은 슬롯·같은 단위지만 **아직 안 맞았다**. 한 톤 낮춰(호박색 글씨)
  * "지금 물리는 중"인 앞 얼굴과 눈으로 갈린다. 배지를 감추지 않는 것이 핵심이라
  * 색만 다르고 자리·크기는 같다(gateband.ts 규칙 2-b).
  */
-.gate-owed.is-soon { color: var(--gold); background: rgba(0, 0, 0, 0.3); }
-.gate-owed.is-soon.is-crit { color: #fff; background: var(--red); }
 
 /* 마을 HP — 상시 HUD 에서는 3D 바로 갔지만 문간에서는 빚과 같은 눈높이여야 한다 */
-.gate-hp {
-  position: relative; flex: 1; min-width: 0; height: 16px;
-  border: 2px solid var(--ink); border-radius: 999px; background: rgba(0, 0, 0, 0.45); overflow: hidden;
-  display: flex; align-items: center; justify-content: center;
-}
-.gate-hp-fill {
-  position: absolute; inset: 0 auto 0 0; width: 100%;
-  background: linear-gradient(180deg, #7ee06a, #3f9c35); transition: width 0.12s linear;
-}
-.gate-hp-fill.is-low { background: linear-gradient(180deg, #ff8a6a, #c22f22); animation: hp-blink 0.8s ease-in-out infinite; }
-.gate-hp-num { position: relative; font-size: 0.68rem; font-weight: 900; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8); }
 
 /*
  * 돌파 게이지 — 차오르다 터진다. 붙잡음/기절이면 초록으로 쉬지만 **계속 찬다**:
  * 봉쇄는 유예이지 면제가 아니라서(sim/gate.ts 규칙 8) 시계를 멈춰 그리면 거짓말이다.
  */
-.gate-breach {
-  position: relative; flex: 0 0 auto; min-width: 116px; height: 16px;
-  border: 2px solid var(--ink); border-radius: 999px; background: rgba(0, 0, 0, 0.45); overflow: hidden;
-  display: flex; align-items: center; justify-content: center;
-}
-.gate-breach-fill { position: absolute; inset: 0 auto 0 0; width: 0; background: linear-gradient(180deg, #ffb45a, #c9601c); transition: width 0.1s linear; }
-.gate-breach.is-held .gate-breach-fill { background: linear-gradient(180deg, #7ee06a, #3f9c35); }
 /* 2초 남았다 — 붙잡혀 있어도 여기서부터는 붉다. 밀린 빚이 곧 한 방에 떨어진다 */
-.gate-breach.is-imminent .gate-breach-fill { background: linear-gradient(180deg, #ff8a6a, #c22f22); }
-.gate-breach.is-imminent { animation: hp-blink 0.6s ease-in-out infinite; }
-.gate-breach-txt { position: relative; font-size: 0.66rem; font-weight: 900; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85); white-space: nowrap; }
 
 /*
  * 좁은 폭 — **버튼과 두 막대는 안 줄인다**(계약 44px · 판독성). 줄이는 것은 글자뿐이고,
  * 390px 실측에서 이 값으로 두 줄이 정확히 들어간다.
  */
 @media (max-width: 420px) {
-  .gate-hud { padding: 6px 7px; gap: 7px; }
-  .gate-who { font-size: 0.78rem; }
-  .gate-owed { font-size: 0.68rem; padding: 1px 6px; }
-  .gate-breach { min-width: 104px; }
-  .gate-breach-txt { font-size: 0.62rem; }
 }
 @media (max-width: 360px) {
   /* 320px — 이름을 접지 않고 잘라 낸다. 아이콘이 종을 이미 말한다 */
-  .gate-who { max-width: 5.2em; }
-  .gate-breach { min-width: 92px; }
 }
 .callwave { min-height: 58px; flex-direction: column; gap: 0; padding: 6px 26px; animation: battle-glow 1.6s ease-in-out infinite; }
 .callwave-main { font-size: 1.2rem; }
@@ -1101,7 +1032,6 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
  *  실측: transform 판에서 tap 이 "element is not stable" 로 재시도하다 실패했다.
  *  그건 테스트 사정이 아니라 **손가락 사정이 계측기에 잡힌 것**이다.)
  */
-@keyframes gate-in { from { opacity: 0; } to { opacity: 1; } }
 /* 아래끝을 1단계(0.6)보다 위에 둔다 — 치명이 위험보다 옅어지는 프레임이 없어야 한다 */
 @keyframes danger-pulse { 0%, 100% { opacity: 0.74; } 50% { opacity: 1; } }
 /*
@@ -1109,10 +1039,6 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
  * scale(1.06)이던 것을 걷어낸 근거는 위와 같다: 56px 버튼이 6%씩 커졌다 작아지면
  * 가장자리가 ±1.7px 로 흔들리고, 급할 때 가장자리를 찍는 엄지는 그만큼 흘린다.
  */
-@keyframes gate-pulse {
-  0%, 100% { box-shadow: var(--pop), 0 0 0 0 rgba(255, 208, 74, 0.55); filter: brightness(1); }
-  50% { box-shadow: var(--pop), 0 0 20px 6px rgba(255, 208, 74, 0.45); filter: brightness(1.2); }
-}
 @keyframes banner-in {
   0% { transform: scale(1.7); opacity: 0; }
   12% { transform: scale(1); opacity: 1; }
@@ -1267,7 +1193,6 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
    * .gate-owed.is-crit · .gate-breach.is-imminent)은 장식이 아니라 "마을이 곧 죽는다"는
    * 경보라 남긴다 — 밝기만 변하고 움직임이 없어 저모션이 막으려는 종류의 자극도 아니다.
    */
-  .gate-hud, .gate-rally.is-urgent { animation: none; }
   /*
    * 위급 테두리는 **맥동만** 끄고 빛 자체는 남긴다 — 움직임이 없는 색이고,
    * 이것이 "마을이 곧 죽는다"를 주변시로 전하는 유일한 통로다.

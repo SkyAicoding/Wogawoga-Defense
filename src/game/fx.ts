@@ -22,7 +22,7 @@ import { ShakeBus } from './shakebus';
 import { ATK_LAUNCH } from '@/render/meshlib/gait';
 import type { RaidShotOpts } from '@/render/views/projectileview';
 import type { DioramaCamera } from '@/render/camera';
-import { noteGateHold, showBossBanner, showWaveBanner } from '@/ui/screens/battlehud';
+import { showBossBanner, showWaveBanner } from '@/ui/screens/battlehud';
 import { damageText, spawnDamageNumber } from '@/ui/widgets/damagenumbers';
 import type { DamageKind } from '@/ui/widgets/damagenumbers';
 
@@ -531,7 +531,7 @@ export class FxRouter {
            * `holdMinTicks` 를 덮어쓸 수 있는데 UI 는 어느 스테이지인지 모른다).
            * 놓쳐도 돌파 게이지 한 칸이 접힐 뿐, 나머지는 전부 폴링이 정한다.
            */
-          noteGateHold(ev.enemyId, ev.holdTicks);
+          // ⚠ 문간 체류 상한 통지는 없앴다 — 그 값을 그리던 돌파 게이지가 사라졌다
           const def = ENEMY_DEFS[ev.defId];
           if (this.gateArrivals < GATE_ARRIVE_FX_MAX && s3.particles.load < 0.8) {
             this.gateArrivals++;
@@ -987,11 +987,31 @@ export class FxRouter {
            */
           const w = s3.cellToWorld(ev.cellX, ev.cellZ, this.v);
           const big = ev.targetKind === 'base';
-          s3.particles.burst(w.x, big ? 1.25 : 0.85, w.z, 0x8fd8ef, big ? 8 : 5, 0.9, 0.05, 0.55, {
-            gravity: -2.2, // 위로 떠오른다 — 낙하하는 파편과 반대 방향이라 뜻이 갈린다
-            drag: 2.2,
+          /*
+           * 세 겹으로 쌓는다 (사용자 요구: "힐링 할때 효과 이펙트를 좀더 화려하게").
+           * 각 겹이 **다른 사실**을 말하게 나눴다 — 같은 그림을 세 번 그리면 화려한
+           * 것이 아니라 지저분한 것이다:
+           *  ① 바닥 고리 — **어디가** 고쳐지는가. 건물 발치에 깔려 대상을 특정한다.
+           *  ② 솟는 불티 — **무엇이** 오르는가. 중력을 음수로 줘서 위로 떠오른다.
+           *    낙하하는 파편(피격·파괴)과 방향이 반대라 "좋은 일"로 읽힌다.
+           *  ③ 반짝임 한 겹 — 흰빛에 가까운 하늘빛을 작고 빠르게. 하이라이트다.
+           *
+           * ⚠ 파티클 풀은 512 이고 회복은 쿨다운마다 나가는 **잦은 사건**이다.
+           *   그래서 마을(big)에만 후하게 주고 타워는 절반 이하로 둔다 — 마을 회복은
+           *   판당 상한이 있어 드물지만, 타워 회복은 계속 난다.
+           */
+          s3.particles.ring(w.x, w.z, 0x8fd8ef, big ? 0.9 : 0.62, big ? 12 : 8);
+          s3.particles.burst(w.x, big ? 1.25 : 0.85, w.z, 0x8fd8ef, big ? 16 : 9, 1.15, 0.055, 0.75, {
+            gravity: -2.6, // 위로 떠오른다 — 낙하하는 파편과 반대 방향이라 뜻이 갈린다
+            drag: 2.0,
             upBias: 1,
-            sizeVar: 0.45,
+            sizeVar: 0.5,
+          });
+          s3.particles.burst(w.x, big ? 1.5 : 1.05, w.z, 0xe8fbff, big ? 7 : 4, 1.5, 0.03, 0.4, {
+            gravity: -1.2,
+            drag: 3.2,
+            upBias: 1,
+            sizeVar: 0.7,
           });
           const p = this.worldToScreen(ev.cellX, big ? 1.9 : 1.3, ev.cellZ);
           if (p) spawnDamageNumber(p.sx, p.sy, `+${Math.round(ev.amount)}`, 'heal', big ? 1.15 : 0.95);

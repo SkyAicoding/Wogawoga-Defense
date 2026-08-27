@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AllyId, BaseLevelDef, EnemyId, TowerId, TowerTier } from '@/data/types';
 import { STATUS_TICK_INTERVAL } from '@/data/types';
+import { HEAL_STANDOFF } from '@/sim/heal';
 import * as balance from '@/data/balance';
 import {
   GATE_BITE_TICKS,
@@ -214,6 +215,15 @@ describe('enemies', () => {
     expect(heal.cooldownTicks % STATUS_TICK_INTERVAL, '회복 주기가 상태 틱의 정수배가 아니다').toBe(0);
     expect(heal.seekRadius, '찾는 거리가 고치는 거리보다 좁다 — 영영 못 걸어간다')
       .toBeGreaterThan(heal.radius);
+    /*
+     * ⚠ **멈추는 거리 < 고치는 거리.** 마법사는 대상 칸이 아니라 그 앞
+     * `HEAL_STANDOFF` 만큼 물러선 자리로 걸어간다(사용자 요구: "건물과 붙어서 하게
+     * 하지 말고, 한칸 떨어져서 힐 하도록 해줘, 건물과 겹쳐서 보이지 않아").
+     * 그 자리가 사거리 **밖**이면 걸어가서 멈춘 뒤 **영영 못 고친다** — 조용한 결함이라
+     * (타입도 안 걸리고 짧은 판에서는 안 드러난다) 여기서 부등식으로 잠근다.
+     */
+    expect(HEAL_STANDOFF, '멈추는 거리가 사거리 밖이다 — 걸어가서 멈춘 뒤 영영 못 고친다')
+      .toBeLessThan(heal.radius);
   });
 
   /**

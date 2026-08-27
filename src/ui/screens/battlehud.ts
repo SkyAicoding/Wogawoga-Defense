@@ -48,8 +48,6 @@ import { showModal } from '../widgets/modal';
 import type { ModalHandle } from '../widgets/modal';
 import { createWavePreview } from '../widgets/wavepreview';
 import type { WavePreviewBand } from '../widgets/wavepreview';
-import { gateBandModel } from './gateband';
-import type { GateFoe } from './gateband';
 
 /**
  * selectedTower/requestSetTargeting은 계약(BattleUiApi)에 편입됐고, **채집 둘만** 아직
@@ -103,38 +101,11 @@ const RES_EMOJI: Readonly<Record<ResourceId, string>> = {
 // --- 배너 (모듈 스코프 — HUD 장착 중에만 동작) -------------------------------
 let bannerHost: HTMLElement | null = null;
 
-/** @returns 실제로 띄웠는가 (HUD가 아직 안 붙었으면 false) */
 /*
- * ── 문간 체류 상한 표 (모듈 스코프) ─────────────────────────────────────────
- * 이 HUD 의 규칙은 "state 폴링, 이벤트 의존 금지"다. **이 한 값만** 예외를 둔다.
- *
- * 왜 폴링으로 못 구하는가: 상한은
- * `clamp(holdMin, GATE_HOLD_MAX_TICKS, baseDamage × biteTicks)` 인데 `holdMin`·`biteTicks`
- * 를 **스테이지가 덮어쓸 수 있고**(types.ts `GateSpec`), UI 는 지금 어느 스테이지인지
- * 모른다(`BattleStateView` 에 stageId 가 없다). balance.ts 기본값을 박아 넣으면 배포
- * 데이터에서는 맞지만, 누가 한 스테이지에 `holdMinTicks` 를 적는 순간 **띠가 조용히
- * 거짓말을 시작한다.** 그건 안 그리느니만 못하다.
- *
- * 그래서 정확한 값을 아는 쪽(sim)이 이미 실어 보내는 `enemyAtGate.holdTicks` 를 받는다 —
- * 배너(showWaveBanner/showBossBanner)와 **똑같은 경로**이고, 이 파일 헤더가 이미 인정한
- * 예외다. game/fx 가 부른다.
- *
- * ⚠ 이 값은 **장식이다.** 문 앞에 몇이 섰는가 · 빚이 얼마인가 · 마을 HP · 붙잡음/기절은
- *   전부 폴링이 정한다. 표가 비어 있어도(목 UI, 이벤트를 놓친 프레임, 세이브 복원)
- *   HUD 는 돌파 게이지 한 칸만 접고 나머지를 정확히 그린다.
- *   절대 여기에 판정을 걸지 말 것.
+ * ⚠ 문간 체류 상한 표(`gateHoldTicks`)와 `noteGateHold` 는 **문간 띠와 함께 없앴다.**
+ *   그 표가 파는 값(돌파까지 남은 틱)을 그리던 게이지가 사라졌기 때문이다.
+ *   `game/fx.ts` 의 `enemyAtGate` 핸들러에서 호출도 같이 지웠다.
  */
-const gateHoldTicks = new Map<number, number>();
-
-/** game/fx 의 enemyAtGate 핸들러가 부른다 — 그 개체의 문간 체류 상한(틱) */
-export function noteGateHold(enemyId: number, holdTicks: number): void {
-  gateHoldTicks.set(enemyId, holdTicks);
-}
-
-/** 대표 고르기·게이지가 함께 쓰는 조회 — 모르면 0 (= 돌파 게이지를 접는다) */
-function holdTicksOf(foe: GateFoe): number {
-  return gateHoldTicks.get(foe.id) ?? 0;
-}
 
 function pushBanner(className: string, text: string): boolean {
   if (!bannerHost || !bannerHost.isConnected) return false;
@@ -309,10 +280,7 @@ export function createBattleHud(): Screen<GameFacade> {
    * (3) 이 파일의 선례와 같다 — 웨이브 시작 버튼·미리보기 띠도 prep 이 아니면
    *     display:none 이지 비활성으로 남지 않는다.
    */
-  let gateHud!: HTMLElement;
-  let gateRallyBtn!: HTMLButtonElement;
   /** 띠가 지금 보이는가 — 켜짐/꺼짐 전환에만 DOM 을 만진다 */
-  let gateShown = false;
   /*
    * ── 마을 위급 테두리 ────────────────────────────────────────────────────────
    * 화면 가장자리에 붉은 빛이 어린다. **마을 HP 가 낮은 동안 계속** 떠 있고,
@@ -814,56 +782,6 @@ export function createBattleHud(): Screen<GameFacade> {
         onClick: () => api(facade)?.requestRefresh(),
       }, h('span', { class: 'refresh-ico', text: '🔄' }), refreshLabel);
 
-      // --- 문간 띠 (적이 문 앞에 선 동안에만) --------------------------------
-      /*
-       * 집결 버튼 — **44×44 이상**이 계약이라 폭·높이를 CSS 에 못 박고 e2e 가
-       * getBoundingClientRect 로 실측한다. 이 저장소에서 `::after { inset: -N }` 으로
-       * 히트 영역을 넓혔다가 padding box 기준이라 41px 로 샌 전례가 두 번 있어
-       * 여기서는 ::after 를 **아예 안 쓴다** — 버튼 상자 자체를 크게 잡으면
-       * border-box 치수가 곧 히트 영역이라 재는 값과 눌리는 값이 같아진다.
-       *
-       * ⚠ 이 버튼의 **뜻이 바뀌었다**. gate-wip 에서는 "부족원을 앞으로 보내 보스를
-       *   붙잡는다"였는데, 그 가지의 실측이 실전 활성 0%였다(부족원이 스폰 즉시 걸어
-       *   나가 보스 도착 전에 죽는다). 이번 설계는 집결점(마을 앞 1.4/2.0, 가로 ±0.6)과
-       *   문간선(1.85~2.99)이 **기하로 겹쳐** 있어 태어난 자리에서 그대로 붙잡는다 —
-       *   곧 "붙잡으러 보내는" 버튼은 필요가 없다. 지금 이 버튼이 파는 것은
-       *   **채집 나간 일꾼을 되부르는 것**이다(자원 칸은 마을에서 멀다).
-       */
-      gateRallyBtn = h('button', {
-        class: 'gate-rally hud-item',
-        attrs: {
-          type: 'button',
-          'aria-label': t('battle.gate.rallyHint'),
-          title: t('battle.gate.rallyHint'),
-        },
-        onClick: () => api(facade)?.requestRallyAllies?.(),
-      },
-        h('span', { class: 'gate-rally-ico', html: rallySvg }),
-        h('span', { class: 'gate-rally-txt', text: t('battle.gate.rally') })) as HTMLButtonElement;
-      // 컨테이너에는 hud-item 을 안 준다 — 띠의 빈 자리를 탭하면 판으로 통과해야 한다
-      // (소품/마을 패널 배경과 같은 규약).
-      /*
-       * ⚠⚠ **정보 줄을 걷어냈다 (사용자 요구).**
-       *   > "보스전 할때 여기 보이는 정보는 필요 없어 이거 지워줘.
-       *   >  어짜피 보스 머리 위에 hp 게이지 보이니까, 이건 필요 없어."
-       *
-       *   걷어낸 것: 적 아이콘·이름·마릿수 · 빚 배지(`문 앞 −n`) · **마을 HP 바** ·
-       *   돌파 게이지(`돌파까지 N초`).
-       *   ⚠ 사용자는 저 막대를 보스 HP 로 읽었지만 실제로는 **마을 HP**(21/25)였다.
-       *     그래도 지운다: 마을 HP 는 3D 마을 위 바(healthbars kind 4)가 상시로 그리고,
-       *     보스 HP 는 보스 머리 위 바가 그린다 — 화면에서 사라지는 사실은 없고,
-       *     빚·돌파 시계만 없어진다. 되살리려면 이 커밋을 되돌리면 된다.
-       *
-       *   ⚠ **집결 버튼은 남긴다.** 저건 정보가 아니라 **조작**이다(채집 나간 일꾼을
-       *     되부른다). 같은 상자 안에 있었을 뿐이라 같이 지우면 기능이 사라진다.
-       *   ⚠ `gateBandModel` 은 계속 쓴다 — 이 상자를 **언제 띄울지**(문 앞에 누가
-       *     섰는가)와 집결 가능 여부를 그 모델이 정하기 때문이다. 곧 죽은 코드가
-       *     아니고 `tests/ui/gateband.test.ts` 의 계약도 그대로 유효하다.
-       */
-      gateHud = h('div', { class: 'gate-hud gate-hud--rally-only', attrs: { style: 'display:none' } },
-        gateRallyBtn,
-      );
-
       // --- 웨이브 미리보기 띠 ------------------------------------------------
       // 웨이브 호출 버튼 **바로 위** — 둘 다 prep에만 존재하므로 세로 예산을 나눠 쓴다.
       // (상단은 390px에서 이미 포화라 HUD_TOP_PX를 한 자리도 안 건드린다)
@@ -877,7 +795,6 @@ export function createBattleHud(): Screen<GameFacade> {
        *    상단(반대쪽 끝)에 두면 한 손으로는 그 시간을 못 지킨다.
        */
       const bottom = h('div', { class: 'hud-bottom' },
-        gateHud,
         panelHost,
         scPanel,
         htPanel,
@@ -931,8 +848,6 @@ export function createBattleHud(): Screen<GameFacade> {
        * 상한을 물려받는다 — sim 의 풀 재사용 누출(entities.ts `bountyPaid`)과 정확히
        * 같은 종류의 사고이고, 여기서는 "돌파까지 3초"가 틀린 종의 값으로 뜬다.
        */
-      gateHoldTicks.clear();
-      gateShown = false;
       lastDanger = -1;
     },
 
@@ -1047,7 +962,6 @@ export function createBattleHud(): Screen<GameFacade> {
       }
 
       // --- 문간 띠 ---------------------------------------------------------
-      updateGateHud(b);
 
       // 웨이브 시작 버튼 (prep 중에만)
       const prep = s.phase === 'prep';
@@ -1379,55 +1293,24 @@ export function createBattleHud(): Screen<GameFacade> {
     return best;
   }
 
-  /**
-   * 문간 띠 갱신 — **판단은 전부 `gateband.ts` 가 한다.** 이 함수가 하는 일은
-   * 모델 필드를 textContent 와 style.width 로 옮기는 것뿐이다.
+  /*
+   * ⚠⚠ **문간 띠는 통째로 없앴다 (사용자 요구).**
+   *   > "보스전 할때 여기 보이는 정보는 필요 없어 이거 지워줘." → 정보 줄 제거
+   *   > "지워 집결버튼"                                        → 남은 버튼도 제거
    *
-   * 왜 그렇게 갈랐는가: 이 저장소에는 jsdom 이 없어(vitest environment: 'node')
-   * 이 파일은 자동 검증이 원리적으로 불가능하다. 문간 띠의 판단(대표 고르기 ·
-   * 경보 문턱 · 돌파 남은 시간)이 틀리면 화면이 조용히 거짓말을 하는데, gate-wip 이
-   * 정확히 그 사고를 냈다(막대는 초록인데 배지는 "4입 남음"). 그래서 판단만 순수
-   * 모듈로 떼어 `tests/ui/gateband.test.ts` 가 전부 밟는다.
+   *   없어진 것: 적 아이콘·이름·마릿수 · 빚 배지 · 마을 HP 바 · 돌파 게이지 ·
+   *   집결 버튼. 그리고 그것들만 쓰던 `screens/gateband.ts`(순수 뷰모델)와
+   *   `tests/ui/gateband.test.ts`, `battle.gate.*` 문자열, `.gate-*` CSS 도 함께.
+   *
+   *   ⚠ **되부르기 능력 자체는 안 지웠다** — `battlecontroller` 의
+   *     `requestRallyAllies` 는 그대로 있고 디버그 API(`window.__wgd.rallyAllies`)가
+   *     쓴다. 사라진 것은 **화면의 버튼**이지 기능이 아니다. 버튼을 되살리려면
+   *     이 커밋을 되돌리면 된다.
+   *
+   *   ⚠ 화면에서 실제로 사라진 **사실**은 둘뿐이다: 문 앞 빚(`문 앞 −n`)과
+   *     돌파까지 남은 시간. 마을 HP 는 3D 마을 위 바(healthbars kind 4)가, 보스 HP 는
+   *     보스 머리 위 바가 상시로 그린다.
    */
-  function updateGateHud(b: BattleUiApiExt): void {
-    const s = b.sim.state;
-    const m = gateBandModel({
-      // `EnemyState` 가 `GateFoe` 를 구조적으로 만족한다 — 캐스팅도 복사도 없다
-      enemies: s.enemies,
-      baseHp: s.baseHp,
-      baseHpMax: s.baseHpMax,
-      phase: s.phase,
-      allyCount: s.allies.length,
-      holdTicksOf,
-    });
-
-    if (!m.visible) {
-      if (gateShown) {
-        gateShown = false;
-        // 문간이 비면 표도 비운다 — 개체 id 는 풀에서 재사용된다(위 모듈 주석)
-        gateHoldTicks.clear();
-        gateHud.style.display = 'none';
-      }
-      return;
-    }
-    if (!gateShown) {
-      gateShown = true;
-      gateHud.style.display = '';
-    }
-
-    /*
-     * 집결 버튼 — 나가 있는 부족원이 하나도 없으면 되부를 것이 없다. 그때도
-     * **숨기지 않고 비활성**으로 둔다: 여기서 사라지면 "왜 안 나오지"가 되고,
-     * 비활성 사유(아무도 안 나가 있다)는 바로 위 부족 칩이 n/6 으로 이미 말한다.
-     * 맥동은 **돌파가 임박했을 때만** — 상시로 뛰면 배경이 되고, 이 버튼이 파는 것은
-     * "지금"이다.
-     */
-    const canRally = m.canRally && b.requestRallyAllies !== undefined;
-    cls(gateRallyBtn, 'is-disabled', !canRally);
-    cls(gateRallyBtn, 'is-urgent', canRally && m.imminent);
-    gateRallyBtn.disabled = !canRally;
-
-  }
 
   /** 선택 타워 상태 조회 */
   function selectedTowerState(b: BattleUiApiExt | null): TowerState | null {

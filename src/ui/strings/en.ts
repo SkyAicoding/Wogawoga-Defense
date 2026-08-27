@@ -116,16 +116,7 @@ export const en: Record<string, string> = {
   'battle.home.confirmDesc': 'Tap again to spend {n} gold (no refund)',
   'battle.home.maxed': 'Fully grown (max level)',
   // ── The Gate — only on screen while enemies stand at the village door
-  'battle.gate.rally': 'Recall',
-  'battle.gate.rallyHint': 'Call every tribesman home — gatherers in the field included',
-  'battle.gate.title': 'The Gate',
-  'battle.gate.owed': 'At the gate −{n}',
   // 같은 배지의 둘째 얼굴 — 문 앞이 다 갚았을 때 걸어오는 것들의 빚을 적는다 (ko 주석 참조)
-  'battle.gate.incoming': 'Marching in −{n}',
-  'battle.gate.more': '×{n}',
-  'battle.gate.breach': 'Breaks in {s}s',
-  'battle.gate.heldBreach': 'Pinned · breaks in {s}s',
-  'battle.gate.stunnedBreach': 'Stunned · breaks in {s}s',
   'battle.ally.title': 'Rally',
   'battle.ally.pillHint': 'Tribesmen out — tap to open the village (rally & upgrade)',
   // ⚠ 조작이 기기마다 갈리므로 줄도 둘이다 (ko 주석 참조)
