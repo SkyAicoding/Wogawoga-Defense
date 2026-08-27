@@ -39,8 +39,43 @@ const S_MAX = 3.2;
 const REF_HP = 90;
 const HP_EXP = 0.3;
 
-/** 한 프레임(=한 handle 배치)에서 허용하는 총 셰이크 — 4배속 다중 착탄 멀미 방지 */
-const SHAKE_BUDGET = 0.5;
+/**
+ * **셰이크는 두 채널이다** — 큰 사건만 판을 흔든다.
+ *
+ * 종전에는 채널이 하나였고, 착탄·처치·문간 한 입까지 전부 같은 예산(0.5)에서
+ * 피해량에 비례한 값을 뽑아 썼다. 그 결과 투석기 한 대만 세워도 **공격할 때마다**
+ * 판 전체가 흔들렸다 — 사용자 보고: "적을 공격할때 마다 판 전체가 지진이 나는 효과…
+ * 판 전체를 너무 흔들면 게임 중에 어지러워".
+ *
+ * 문제는 상한이 아니라 **빈도**였다. SHAKE_BUDGET 은 한 프레임의 총량만 막는데,
+ * 착탄은 매 프레임 들어오므로 상한이 곧 정상 상태가 된다. 그래서 상한을 더 조이는
+ * 대신 **사건을 두 종류로 갈랐다**:
+ *
+ *  · **quake(큰 사건)** — 보스 등장/처치, 타워 파괴, 타워가 1/3 밑으로, 마을이
+ *    크게 뚫림. 판에서 몇 번 안 일어나고, 일어나면 플레이어가 판단을 바꿔야 하는
+ *    사건들이다. 세기는 **종전 그대로 둔다** — 줄여야 하는 건 큰 사건이 아니다.
+ *  · **tap(잦은 사건)** — 착탄. **피해량과 무관한 고정값**이다(사용자 요구:
+ *    "작게 하거나, 고정 시켜서"). 피해에 비례시키면 후반 타워가 곧 지진이 된다.
+ *
+ * 그리고 잔챙이 처치·단일 착탄·체인 경유점은 **아예 안 흔든다.** 그 셋은 이미
+ * 파티클과 소리를 갖고 있어서 셰이크가 없어도 사건이 안 사라진다 — 화면 전체를
+ * 움직이는 것은 그 정보를 **한 번 더** 말하는 값비싼 방법일 뿐이었다.
+ */
+/** 큰 사건 채널의 한 배치 총량 (구 SHAKE_BUDGET 0.5 — 채널이 갈려 더 조였다) */
+const SHAKE_BUDGET = 0.34;
+/** 잦은 사건 1회당 **고정** 세기 — 피해·티어·타워 종류를 안 본다 */
+const TAP_SHAKE = 0.018;
+/**
+ * 마을 피격이 **판을 흔드는** 문턱 — 한 배치에 잃은 HP 비율.
+ * 0.15 = 25 HP 기준 3.75. 한 입(0.04)·두 입(0.08) 은 못 넘고, 문을 뚫고 들어간
+ * 큰 놈의 잔액 한 방은 넘는다 (flushBaseHits 주석).
+ */
+const BASE_QUAKE_FRAC = 0.15;
+/**
+ * 잦은 사건 채널의 한 배치 총량. 착탄이 한 프레임에 열 발 들어와도 여기서 잘려
+ * 최대 진폭이 종전 최악(0.5 → 0.175 오프셋)의 **1/11** 로 떨어진다.
+ */
+const TAP_BUDGET = 0.05;
 
 /** 한 배치에서 허용하는 타워 피격 연출(파편+숫자) 수 — 부족 무리의 난타 스팸 방지 */
 const TOWER_HIT_FX_MAX = 4;
@@ -228,8 +263,6 @@ interface ImpactStyle {
   smokeLifeMul: number;
   /** 쇼크웨이브 기준 반경 (스플래시면 실제 반경으로 덮어씀) */
   shockRadius: number;
-  /** 셰이크 배수 */
-  shakeMul: number;
 }
 
 const BASE_STYLE: ImpactStyle = {
@@ -246,7 +279,6 @@ const BASE_STYLE: ImpactStyle = {
   spreadMul: 1,
   smokeLifeMul: 1,
   shockRadius: 0.5,
-  shakeMul: 1,
 };
 
 const IMPACT_STYLE: Record<TowerId, ImpactStyle> = {
@@ -265,7 +297,6 @@ const IMPACT_STYLE: Record<TowerId, ImpactStyle> = {
     sizeMul: 1.15,
     smokeLifeMul: 1.3,
     shockRadius: 0.75,
-    shakeMul: 1.35,
   },
   // 주황 불티 + 연기, 파편은 가볍게 떠오른다
   brazier: {
@@ -281,7 +312,6 @@ const IMPACT_STYLE: Record<TowerId, ImpactStyle> = {
     flashMul: 1.15,
     smokeLifeMul: 1.5,
     shockRadius: 0.6,
-    shakeMul: 0.75,
   },
   // 창백한 파랑 얼음조각 + 서리 링 (넓고 낮게)
   frost: {
@@ -297,7 +327,6 @@ const IMPACT_STYLE: Record<TowerId, ImpactStyle> = {
     sizeMul: 0.95,
     smokeLifeMul: 1.15,
     shockRadius: 0.66,
-    shakeMul: 0.6,
   },
   // 흰-하늘색 스파크, 짧고 날카로운 플래시
   lightning: {
@@ -315,7 +344,6 @@ const IMPACT_STYLE: Record<TowerId, ImpactStyle> = {
     spreadMul: 1.35,
     smokeLifeMul: 0.6,
     shockRadius: 0.45,
-    shakeMul: 0.7,
   },
   // 녹색 방울 + 지속 연무
   poison: {
@@ -331,7 +359,6 @@ const IMPACT_STYLE: Record<TowerId, ImpactStyle> = {
     sizeMul: 0.95,
     smokeLifeMul: 2.1,
     shockRadius: 0.55,
-    shakeMul: 0.55,
   },
   // 날카로운 임팩트 스파크 — 작지만 강렬 (플래시 강조, 파편 소량)
   spear: {
@@ -349,7 +376,6 @@ const IMPACT_STYLE: Record<TowerId, ImpactStyle> = {
     spreadMul: 1.2,
     smokeLifeMul: 0.8,
     shockRadius: 0.4,
-    shakeMul: 0.8,
   },
   ballista: {
     ...BASE_STYLE,
@@ -366,13 +392,12 @@ const IMPACT_STYLE: Record<TowerId, ImpactStyle> = {
     spreadMul: 1.3,
     smokeLifeMul: 0.85,
     shockRadius: 0.48,
-    shakeMul: 1.1,
   },
   drum: BASE_STYLE,
   // 지원형이라 착탄 연출이 없다 (drum 과 같다)
   hushtotem: BASE_STYLE,
   // 작은 타격이 아주 잦다 — 기본보다 조금 더 작고 조용하게
-  rattletrap: { ...BASE_STYLE, core: 0xe8d9b4, sizeMul: 0.7, shakeMul: 0.5, flashMul: 0.7 },
+  rattletrap: { ...BASE_STYLE, core: 0xe8d9b4, sizeMul: 0.7, flashMul: 0.7 },
   // 방전 — 밝은 섬광에 파편은 거의 없다
   shockstake: { ...BASE_STYLE, core: 0xdff4ff, flashMul: 1.4, sizeMul: 0.85, shockRadius: 0.7 },
 };
@@ -396,8 +421,10 @@ export class FxRouter {
 
   private v = new THREE.Vector3();
   private vibrationOn: boolean;
-  /** 한 배치 내 셰이크 누적 (SHAKE_BUDGET 상한) */
+  /** 한 배치 내 **큰 사건** 셰이크 누적 (SHAKE_BUDGET 상한) */
   private shakeSpent = 0;
+  /** 한 배치 내 **잦은 사건** 셰이크 누적 (TAP_BUDGET 상한 — 예산을 따로 둔다) */
+  private tapSpent = 0;
   /** 오라 불티 스팸 방지 — 배치당 상한 */
   private auraFlecks = 0;
   /** 타워 피격 파편/숫자 스팸 방지 — 무리가 동시에 두들기면 금방 찬다 */
@@ -475,8 +502,12 @@ export class FxRouter {
     if (this.vibrationOn) vibrate(ms);
   }
 
-  /** 셰이크 — 배치당 총량을 제한해 다중 착탄에서 화면이 요동치지 않게 한다 */
-  private shake(amount: number): void {
+  /**
+   * **큰 사건** 셰이크 — 보스·타워 파괴·마을 돌파처럼 판에서 몇 번 안 나는 사건 전용.
+   * 배치당 총량을 제한해 같은 프레임에 여럿이 겹쳐도 화면이 튀지 않게 한다.
+   * 잦은 사건은 여기 오면 안 된다 — `tap()` 을 쓴다(위 채널 주석).
+   */
+  private quake(amount: number): void {
     if (amount <= 0.002) return;
     const left = SHAKE_BUDGET - this.shakeSpent;
     if (left <= 0) return;
@@ -485,9 +516,23 @@ export class FxRouter {
     this.camera.shake(a);
   }
 
+  /**
+   * **잦은 사건** 셰이크 — 고정 세기 `TAP_SHAKE × mul`, 별도 예산(TAP_BUDGET).
+   * 인자로 피해량을 받지 않는 것이 요점이다: 받는 순간 후반 타워가 지진이 된다.
+   * `mul` 은 사건 종류의 무게만 준다(착탄 1, 지형 정리 2 — 잦기가 다르다).
+   */
+  private tap(mul = 1): void {
+    const left = TAP_BUDGET - this.tapSpent;
+    if (left <= 0) return;
+    const a = Math.min(TAP_SHAKE * mul, left);
+    this.tapSpent += a;
+    this.camera.shake(a);
+  }
+
   handle(events: readonly SimEvent[]): void {
     const s3 = this.stage3d;
     this.shakeSpent = 0;
+    this.tapSpent = 0;
     this.auraFlecks = 0;
     this.towerHits = 0;
     this.allyShots = 0;
@@ -556,7 +601,7 @@ export class FxRouter {
           if (def.boss) {
             audio.play('bossRoar');
             audio.music.setIntensity(3);
-            this.shake(0.28);
+            this.quake(0.28);
             this.buzz(45);
           }
           break;
@@ -578,7 +623,7 @@ export class FxRouter {
           showBossBanner();
           audio.play('bossRoar');
           audio.music.setIntensity(3);
-          this.shake(0.4);
+          this.quake(0.4);
           this.buzz(60);
           break;
         case 'enemySpawned':
@@ -645,7 +690,7 @@ export class FxRouter {
           });
           if (def.boss) {
             this.bossKills++;
-            this.shake(clamp(0.12 * s, 0.12, 0.42));
+            this.quake(clamp(0.12 * s, 0.12, 0.42));
             /*
              * **문 앞에서 잡았다** — 햅틱을 한 겹 길게 준다.
              * `enemyDied.gateTicks` 는 문간에서 죽은 개체에만 실린다(types.ts:
@@ -662,9 +707,14 @@ export class FxRouter {
              *   그래서 이 분기는 `def.boss` 안에만 있다.
              */
             this.buzz(ev.gateTicks !== undefined ? [40, 60, 90] : 40);
-          } else if (s > 1.6) {
-            this.shake(0.03 * s);
           }
+          /*
+           * ⚠ **잡졸 처치는 이제 안 흔든다** (종전: s > 1.6 이면 0.03·s).
+           * 처치는 판에서 가장 잦은 사건이고 — 홍수 웨이브는 초당 수십 건이다 —
+           * 큰 놈일수록 s 가 커져 후반에는 처치할 때마다 화면이 흔들렸다.
+           * 사망 폭발(위 explosion)과 enemyDie 소리가 이미 같은 사실을 말하므로
+           * 셰이크를 빼도 사라지는 정보가 없다. 보스는 위 분기가 그대로 흔든다.
+           */
           const p = this.worldToScreen(ev.x, 1.3, ev.z);
           // **bounty가 아니라 goldNow다.** 살점 값이라 큰 적은 죽기 전에 일부를 이미 냈다
           // (K=24 trex는 여기 **174**, 나머지 **306**이 bountyChunk로 먼저 떴다 —
@@ -756,7 +806,7 @@ export class FxRouter {
           }
           // 체력이 1/3 밑으로 떨어지는 순간에만 한 번 흔든다 (매 타격 셰이크는 멀미)
           if (ev.hpLeft > 0 && ev.hpLeft < ev.maxHp / 3 && ev.hpLeft + ev.amount >= ev.maxHp / 3) {
-            this.shake(0.14);
+            this.quake(0.14);
             this.buzz(25);
           }
           break;
@@ -840,7 +890,7 @@ export class FxRouter {
           // 파괴 전용 소리 — boulderImpact는 창잡이의 평타와 투석기 착탄에도 쓰여
           // "타워를 잃었다"에 고유한 청각 신호가 없었다
           audio.play('towerFall');
-          this.shake(clamp(0.1 * s, 0.12, 0.3));
+          this.quake(clamp(0.1 * s, 0.12, 0.3));
           this.buzz([30, 40, 60]);
           break;
         }
@@ -866,7 +916,8 @@ export class FxRouter {
           });
           s3.particles.ring(w.x, w.z, 0xd9c8a0, 0.62);
           audio.play('boulderImpact');
-          this.shake(0.08);
+          // 지형 정리는 플레이어가 돈 내고 누른 사건이라 손맛을 남기되, 고정 세기다
+          this.tap(2);
           this.buzz(18);
           break;
         }
@@ -898,9 +949,19 @@ export class FxRouter {
           });
           if (ev.splash) {
             audio.play('boulderImpact');
-            this.shake(clamp(0.055 * Math.pow(s, 1.45) * st.shakeMul, 0.03, 0.3));
-          } else if (s > 1.5) {
-            this.shake(clamp(0.014 * s * st.shakeMul, 0, 0.09));
+            /*
+             * **착탄은 고정값 한 톡이다** — 이 한 줄이 "공격할 때마다 지진"의 진원이었다.
+             * 종전 `clamp(0.055·s^1.45·shakeMul, 0.03, 0.3)` 은 피해량과 타워 종류를
+             * 둘 다 곱해서, 투석기(shakeMul 1.35) 한 대가 후반 피해로 때리면 한 발에
+             * 0.3(=예산의 60%)까지 갔다. 착탄은 매 프레임 들어오므로 그 값이 곧
+             * 정상 상태가 되고, 화면은 쉬지 않고 흔들렸다.
+             * 이제 세기는 피해·티어·타워를 안 본다. 흔들림은 "저기서 뭔가 터졌다"만
+             * 말하면 되고, 얼마나 아팠는지는 파티클 크기·데미지 숫자·소리가 말한다.
+             *
+             * ⚠ 단일 착탄(비스플래시)은 **아예 안 흔든다.** 창잡이·발리스타는 초당
+             *   여러 발이라 아무리 작아도 합치면 상시 떨림이 된다.
+             */
+            this.tap();
           }
           break;
         }
@@ -932,7 +993,7 @@ export class FxRouter {
               shockRadius: st.shockRadius,
             });
           }
-          if (s > 1.6) this.shake(clamp(0.02 * s, 0, 0.09));
+          // 체인 경유점은 안 흔든다 — 한 발이 여러 점을 만들어 잔떨림이 겹친다
           break;
         }
         // --- 아군 부족원 -----------------------------------------------------
@@ -1271,9 +1332,20 @@ export class FxRouter {
     }
     if (this.baseHits === 0 || this.baseHitAmount <= 0) return;
     const frac = this.baseHitAmount / Math.max(1, this.baseHpMax);
-    // 0.10 ~ 0.35. 상한 0.35 는 **종전의 한 방과 같은 값**이다 — 큰 사건의 감각을
-    // 낮추지 않고, 작은 사건만 아래로 뺀다.
-    this.shake(clamp(0.1 + 0.9 * frac, 0.1, 0.35));
+    /*
+     * 0.10 ~ 0.35. 상한 0.35 는 **종전의 한 방과 같은 값**이다 — 큰 사건의 감각을
+     * 낮추지 않고, 작은 사건만 아래로 뺀다.
+     *
+     * ⚠ 여기에 문턱이 하나 더 붙었다(BASE_QUAKE_FRAC). 위 배치 합산은 "한 초에
+     *   얼마를 잃었나"를 하나로 만들어 주지만, **포위전에서는 그 하나가 매 프레임
+     *   나온다** — 문 앞에 여섯 마리가 서면 한 입(-1/25 = 0.04)이 끊임없이 들어오고,
+     *   0.1 짜리 셰이크가 상시 떨림이 된다. 그건 큰 사건이 아니라 잦은 사건이다.
+     *   그래서 한 프레임 손실이 마을 HP 의 15% 를 넘을 때만 판을 흔들고
+     *   (= 티라노가 잔액을 밀어 넣고 들어가는 순간), 그 밑은 고정 톡으로 낸다.
+     *   소리와 "−N" 숫자는 문턱과 무관하게 그대로 나가므로 정보는 안 잃는다.
+     */
+    if (frac >= BASE_QUAKE_FRAC) this.quake(clamp(0.1 + 0.9 * frac, 0.1, 0.35));
+    else this.tap(1.5);
     // 소리는 한 목소리다 — 마을은 하나다(BASE_HIT_SFX_MS 주석)
     const now = performance.now();
     if (now - this.baseHitSfxAt >= BASE_HIT_SFX_MS) {

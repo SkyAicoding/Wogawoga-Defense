@@ -43,7 +43,16 @@ const DEFAULT_SPACING = 4;
 
 function arenaStage(): StageDef {
   return {
-    id: 91,
+    /*
+     * ⚠ **1 이어야 한다.** `id` 는 이제 배치 기본가를 정한다
+     * (balance.PLACEMENT_STAGE_STEP — 스테이지가 오르면 고정가가 오른다).
+     * 실험장은 "같은 골드로 무엇을 살 수 있나"를 재는 곳이라 가격 선반이 바뀌면
+     * 여기 문턱(처치 수·파괴 수)이 전부 다른 판을 재게 된다. 스테이지1 선반
+     * (= `tiers[0].cost` 그대로)이 이 파일의 모든 수치가 유도된 기준이다.
+     * 종전 값은 91 이었다 — '진짜 스테이지가 아니다'는 표시였는데, id 가 밸런스
+     * 입력이 된 뒤로는 그 표시가 **타워를 한 기도 못 사는 판**을 뜻하게 됐다.
+     */
+    id: 1,
     nameKey: 'arena',
     biome: 'grassland',
     gridW: GRID_W,

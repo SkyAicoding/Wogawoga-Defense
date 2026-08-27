@@ -746,18 +746,13 @@ export interface GatherSpec {
 }
 
 export interface StageDef {
-  id: number;
   /**
-   * **배치 지가 상승률 덮어쓰기** — 생략하면 전역 `PLACEMENT_GROWTH`(1.11).
-   * `1` 이면 **동결**: 몇 기를 세워도 배치 비용이 `tiers[0].cost` 그대로다.
-   *
-   * 왜 스테이지별 손잡이인가: 사용자가 "1스테이지에서는 탑 설치 비용을 동결해 달라,
-   * 업그레이드가 오르는 것은 이해한다"고 요청했다. 지가 상승은 후반 판의 '돈이
-   * 수가 아니라 티어로 가게 하는' 장치인데(balance.PLACEMENT_GROWTH 주석의 실측),
-   * 도입부에서는 그것이 **"한 기 세웠더니 다음이 너무 비싸다"** 로만 읽힌다.
-   * ⚠ 이 값은 난이도 봉투를 직접 움직인다 — 봉투의 거의 모든 항목이 스테이지1이다.
+   * 스테이지 번호(1-base). **배치 기본가가 여기서 유도된다** —
+   * `tiers[0].cost × PLACEMENT_STAGE_STEP^(id−1)` (sim/economy.ts `placementStageMul`).
+   * 곧 "다음 스테이지가 더 비싸다"는 데이터 오타로 깨질 수 없는 구조적 사실이고,
+   * 스테이지별 덮어쓰기 필드는 **일부러 두지 않았다**.
    */
-  placementGrowth?: number;
+  id: number;
   nameKey: string;
   biome: BiomeId;
   gridW: number;
