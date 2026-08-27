@@ -690,6 +690,8 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
  * 이모지를 넣으면 잘린다.
  */
 .ally-btn-sunder--gather { background: rgba(20, 46, 12, 0.55); color: #cdf09a; }
+/* 회복 배지 — 체력바의 '내 편' 청록(0.36,0.86,0.95)과 같은 축이라 같은 뜻으로 읽힌다 */
+.ally-btn-sunder--heal { background: rgba(12, 40, 46, 0.55); color: #9fe6f2; }
 .ally-btn-sunder-ico--glyph { width: auto; height: auto; font-size: 0.58rem; line-height: 1.6; }
 /* 아군은 한랭색 — 3D 인스턴스 색조(ALLY_TINT)·아군 체력바와 같은 축이다 */
 .ally-btn-ico { width: 26px; height: 26px; flex: 0 0 auto; }

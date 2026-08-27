@@ -42,6 +42,7 @@ import {
   enemyBrawlDmgFor,
 } from '@/data/balance';
 import { createBattle } from '@/sim/battle';
+import { ALLY_HEAL_BASE_CAP_FRAC } from '@/data/balance';
 import {
   allyDefs,
   baseLevels,
@@ -1213,5 +1214,118 @@ describe('자동 행동 스위치 (규칙 8-b)', () => {
     expect(next.autoHold, '앞사람의 대기 상태가 새면 안 된다').toBe(false);
     runTicks(sim, 2);
     expect(next.gatherKey, '명령 없이도 스스로 일감을 잡는다').toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+/**
+ * **마법사 회복 🔷** (`AllyDef.heal`, src/sim/heal.ts).
+ *
+ * 사용자 요구 두 건이 한 짝이다: "타워나 주민의 hp가 시간이 지나면 자동으로 회복하지
+ * 않도록" + "마법사가 가서 회복해주는 기능". 곧 회복의 **출처를 시간에서 사람으로**
+ * 옮기는 것이고, 이 묶음이 그 옮김을 잠근다.
+ *
+ * ⚠ **대상에 아군은 없다.** 넣으면 두 불변식이 깨진다(`types.ts AllyDef.heal` 주석):
+ *   종료 증명(봉쇄가 안 풀린다)과 채집 중단 벌금(hp 단조 감소 전제). 아래 마지막 it 이
+ *   "아군은 안 고친다"를 **계약으로** 못 박아, 나중에 누가 무심코 넣으면 빨개지게 한다.
+ */
+describe('마법사 회복 — 타워와 마을을 고친다 (AllyDef.heal)', () => {
+  /**
+   * ⚠ **회복 스펙을 여기서 주입한다.** `fixtures.allyDef` 는 목 정의를 처음부터 짓기
+   *   때문에 `heal` 이 없다 — 그게 옳다. 이 묶음이 재려는 것은 **규칙**이지 배포 수치가
+   *   아니고, 배포 수치(`ALLY_DEFS.guardian.heal`)는 `tests/data/validate.test.ts` 가
+   *   따로 잠근다. seekRadius 를 넉넉히 주는 것도 같은 이유다(목 판이 10×5 로 좁다).
+   */
+  const SPEC = { amount: 10, radius: 1.2, cooldownTicks: 15, seekRadius: 8 };
+  function healSim(o: Opts = {}): BattleSim {
+    return allySim({
+      delay: NO_ENEMIES,
+      ...o,
+      ally: { guardian: { heal: SPEC }, ...(o.ally ?? {}) },
+    });
+  }
+  const mage = (sim: BattleSim): AllyState => sim.state.allies[0] as AllyState;
+  /**
+   * ⚠ **준비 단계를 먼저 흘려보낸다.** prep 에는 `repairTowers` 가 도는데(웨이브당 6%),
+   *   그걸 안 걷어내면 이 묶음이 **마법사가 아니라 자동 수리를 잰다** — 실제로 첫 판에서
+   *   대조군(몽둥이꾼)이 130 → 160 으로 "고쳐져" 빨개졌다. 이 저장소가 반복해서 당한
+   *   "잣대가 재려는 것과 다른 것을 잰다"의 재발이라, 손상을 **prep 이 끝난 뒤에** 준다.
+   */
+  function pastPrep(sim: BattleSim): void {
+    for (let i = 0; i < 200; i++) sim.tick();
+    expect(sim.state.phase, 'prep 이 안 끝났다 — 자동 수리가 섞인다').toBe('wave');
+  }
+
+  it('다친 타워에 **걸어가서** 고친다', () => {
+    const sim = healSim();
+    place(sim, 3, 3);
+    expect(train(sim, 'guardian')).toBe(true);
+    pastPrep(sim);
+    const t = sim.state.towers[0] as { hp: number; maxHp: number };
+    t.hp = Math.floor(t.maxHp / 2);
+    const before = t.hp;
+    const startX = mage(sim).x;
+    const startZ = mage(sim).z;
+    for (let i = 0; i < 600; i++) sim.tick();
+    expect(t.hp, `${before} → ${t.hp}`).toBeGreaterThan(before);
+    const moved = Math.hypot(mage(sim).x - startX, mage(sim).z - startZ);
+    expect(moved, '제자리에서 고쳤다 — 걸어가야 한다').toBeGreaterThan(0.5);
+  });
+
+  it('만피면 아무것도 안 한다 (공허 방지)', () => {
+    const sim = healSim();
+    place(sim, 3, 3);
+    expect(train(sim, 'guardian')).toBe(true);
+    pastPrep(sim);
+    const t = sim.state.towers[0] as { hp: number; maxHp: number };
+    const startX = mage(sim).x;
+    for (let i = 0; i < 300; i++) sim.tick();
+    expect(t.hp).toBe(t.maxHp);
+    expect(sim.state.baseHp).toBe(sim.state.baseHpMax);
+    expect(Math.abs(mage(sim).x - startX), '고칠 것이 없는데 움직였다').toBeLessThan(0.01);
+  });
+
+  it('마을도 고치되 **판당 상한**이 있다 — 없으면 패배 조건이 사라진다', () => {
+    const sim = healSim();
+    expect(train(sim, 'guardian')).toBe(true);
+    pastPrep(sim);
+    const max = sim.state.baseHpMax;
+    (sim.state as { baseHp: number }).baseHp = 1;
+    const cap = Math.floor(max * ALLY_HEAL_BASE_CAP_FRAC);
+    // 포화까지 충분히 돌린다 — amount 10 / 15틱이라 cap 5999 를 채우는 데 9,000틱쯤 든다.
+    // ⚠ 모자라게 돌리면 "아직 덜 찬 값"을 상한으로 착각한다(첫 판이 그렇게 빨개졌다).
+    for (let i = 0; i < 20_000; i++) sim.tick();
+    const healed = sim.state.baseHp - 1;
+    expect(healed, `되돌린 ${healed} · 상한 ${cap}`).toBe(cap);
+    // 상한에 닿은 뒤에는 마을이 아직 만피가 아니어도(1 + 5999 << 9999) 더 안 고친다
+    expect(sim.state.baseHp, '상한에 닿았는데 마을이 만피다 — 표본이 성립하지 않는다')
+      .toBeLessThan(max);
+    const settled = sim.state.baseHp;
+    for (let i = 0; i < 5_000; i++) sim.tick();
+    expect(sim.state.baseHp, '상한을 넘겨 계속 고쳤다').toBe(settled);
+  });
+
+  it('회복 능력이 없는 종은 아무것도 안 고친다 (대조군)', () => {
+    const sim = healSim();
+    place(sim, 3, 3);
+    expect(train(sim, 'clubber')).toBe(true);
+    pastPrep(sim);
+    const t = sim.state.towers[0] as { hp: number; maxHp: number };
+    t.hp = Math.floor(t.maxHp / 2);
+    const before = t.hp;
+    for (let i = 0; i < 600; i++) sim.tick();
+    expect(t.hp, '몽둥이꾼이 타워를 고쳤다').toBe(before);
+  });
+
+  it('⚠ **아군은 안 고친다** — 종료 증명과 채집 중단 벌금이 여기 걸려 있다', () => {
+    const sim = healSim();
+    expect(train(sim, 'guardian')).toBe(true);
+    expect(train(sim, 'clubber')).toBe(true);
+    pastPrep(sim);
+    const hurt = sim.state.allies.find((a) => a.defId === 'clubber') as AllyState;
+    hurt.hp = 10;
+    for (let i = 0; i < 900; i++) sim.tick();
+    const now = sim.state.allies.find((a) => a.defId === 'clubber');
+    expect(now?.hp, '아군이 회복됐다 — allies.ts 머리말의 스톨 가드 전제가 깨진다').toBe(10);
   });
 });

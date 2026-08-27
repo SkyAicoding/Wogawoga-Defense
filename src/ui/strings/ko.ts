@@ -176,13 +176,21 @@ export const ko: Record<string, string> = {
   // 짧아야 하는 자리라 "무엇을"만 적고 "왜"는 아래 안내 줄이 받는다.
   'battle.ally.sunder': '가죽을 열어요',
   'battle.ally.sunderHint': '이 부족원이 붙잡은 적은 가죽 상한이 사라져요 (큰 한 방이 그대로 들어가요)',
+  // 마법사 전용 배지 — sunder 와 같은 자리, 같은 규약(짧게 "무엇을"만).
+  'battle.ally.heal': '고쳐요',
+  'battle.ally.healHint': '다친 타워와 마을에 걸어가서 체력을 되돌려요 (마을은 판마다 되돌릴 수 있는 양이 정해져 있어요)',
   'ally.clubber.name': '몽둥이꾼',
   // 마릿수는 balance.ALLY_BLOCK_CAPACITY 에서 넘어온다 (규칙이 바뀌면 문구도 따라 바뀐다)
   'ally.clubber.desc': '싸고 발 빠른 근접. 최대 {n}마리의 발을 묶어요',
   'ally.slinger.name': '돌팔매꾼',
   'ally.slinger.desc': '뒤에서 던져요. 공중도 맞히지만 아무도 막지 못해요',
-  'ally.guardian.name': '파수꾼',
-  'ally.guardian.desc': '방패와 갑옷. {n}마리에게 둘러싸여도 오래 버텨요',
+  // ⚠ 키는 `guardian` 그대로다 — 바뀐 것은 **역할과 이름**이지 식별자가 아니다.
+  //   개명하면 보호 파일(autoplay.probes.ts)의 전수 매핑과 botharness 의 allyOrder,
+  //   그리고 타입이 못 잡는 e2e 문자열 다섯 자리가 한꺼번에 무너진다.
+  'ally.guardian.name': '마법사',
+  // {n} = ALLY_BLOCK_CAPACITY. **버티는 성질을 문구에서 빼면 안 된다** — 이 카드는
+  // 여전히 hp 560 짜리 탱커이고(봉투 [14]의 필요조건), 회복은 그 위에 얹힌 것이다.
+  'ally.guardian.desc': '주술 지팡이. {n}마리에게 둘러싸여도 버티면서 타워와 마을을 고쳐요',
 
   // --- 채집꾼 (넷째 부족) -----------------------------------------------------
   // 싸우지 않는 카드다 — 파는 것이 화력이 아니라 **가격과 손**이라는 것을 문구가 먼저 말한다.

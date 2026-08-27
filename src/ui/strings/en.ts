@@ -134,12 +134,14 @@ export const en: Record<string, string> = {
   'battle.ally.rulesAuto': 'Gatherers work the nearest resource unasked · point at an empty tile and they hold it · point at the village and they go back to working on their own',
   'battle.ally.sunder': 'Opens hide',
   'battle.ally.sunderHint': 'Enemies this one pins lose their hide cap — a big hit lands in full',
+  'battle.ally.heal': 'Mends',
+  'battle.ally.healHint': 'Walks to hurt towers and the village and restores health (the village can only be mended so much per run)',
   'ally.clubber.name': 'Clubber',
   'ally.clubber.desc': 'Cheap, quick melee. Pins up to {n} enemies where they stand',
   'ally.slinger.name': 'Slinger',
   'ally.slinger.desc': 'Throws from behind. Hits fliers, but pins nobody',
-  'ally.guardian.name': 'Guardian',
-  'ally.guardian.desc': 'Shield and armor. Holds out even when swarmed by {n}',
+  'ally.guardian.name': 'Mage',
+  'ally.guardian.desc': 'Spirit staff. Holds out when swarmed by {n} — and mends towers and the village',
 
   // --- Gatherer (the fourth tribe) ------------------------------------------
   // {g} = harvest multiplier (gatherPct/100), {c} = carryCap — battlehud's allyDesc fills them in.

@@ -747,28 +747,45 @@ describe('업그레이드 / 수리 정책', () => {
     expect(t.maxHp - t.hp).toBe(lost); // 상처는 그대로
   });
 
-  it('준비 단계에는 자동 수리된다', () => {
+  /*
+   * ⚠⚠ **이 두 항목은 부호가 뒤집혔다 — 무엇이 왜 바뀌었는지 적는다.**
+   *   옛 계약: "준비 단계에는 자동 수리된다 · prep 페이즈에서 실제로 체력이 돌아온다."
+   *   지금(사용자 지시): **"우리 탑의 hp 가 왜 자동으로 회복되? 자동 회복 없애."**
+   *   `TOWER_REPAIR_PER_STATUS_TICK` 이 0 이 됐고, 회복 수단은 **마법사뿐**이다
+   *   (`AllyDef.heal`, sim/heal.ts). 재는 대상은 같다("가만히 두면 타워 hp 가 어떻게
+   *   되는가"), 참인 답이 반대가 되었을 뿐이라 **어서션을 지우지 않고 뒤집었다.**
+   *
+   *   ⚠ 대가는 감추지 않는다: 자동 수리를 없애면 기준선 봇 승수가 80% → 21% 로 떨어진다
+   *     (마법사가 없던 세계의 실측. balance.ts 그 상수 주석의 표). 사용자에게 그 표를
+   *     올렸고 재확인받았다.
+   *
+   *   ⚠ 그리고 옛 항목 하나는 **이름과 다른 것을 재고 있었다** — '준비 단계에는 자동
+   *     수리된다'가 실제로 잠그던 것은 `damaged < maxHp` 와 `hp <= damaged` 뿐이라
+   *     **수리를 한 자리도 안 쟀다**(수리가 0이어도 통과한다). 이 저장소가 세 번 당한
+   *     "잣대가 재려는 것과 다른 것을 잰다"의 재발이라, 뒤집는 김에 실제로 재게 고쳤다.
+   */
+  it('가만히 둬도 안 낫는다 — prep 에서도 회복이 0 이다', () => {
+    const sim = siegeSim(undefined);
+    place(sim, 0, 1);
+    const t = sim.towerAt(0, 1)!;
+    t.hp = 10;
+    expect(sim.state.phase, 'prep 이 아니면 이 항목이 공허하다').toBe('prep');
+    runTicks(sim, 30); // 옛 세계라면 회복 2회가 들어오던 구간
+    expect(t.hp, '자동 수리가 살아 있다 — 회복 수단은 마법사뿐이어야 한다').toBe(10);
+  });
+
+  it('웨이브 중에도 안 낫는다 (맞은 만큼 그대로 남는다)', () => {
     const sim = siegeSim(MELEE);
     place(sim, 0, 1);
     sim.applyCommand({ type: 'callWave' });
     runTicks(sim, 120);
     const t = sim.towerAt(0, 1)!;
     const damaged = t.hp;
-    expect(damaged).toBeLessThan(t.maxHp);
-    // 웨이브 중에는 회복하지 않는다
-    runTicks(sim, 1);
-    expect(t.hp).toBeLessThanOrEqual(damaged);
-  });
-
-  it('prep 페이즈에서 실제로 체력이 돌아온다', () => {
-    // 적 없이 prep 상태를 유지하며 타워만 인위적으로 깎는다
-    const sim = siegeSim(undefined);
-    place(sim, 0, 1);
-    const t = sim.towerAt(0, 1)!;
-    t.hp = 10;
-    runTicks(sim, 30); // prep 1초 = 회복 2회
-    expect(t.hp).toBeGreaterThan(10);
-    expect(t.hp).toBeLessThanOrEqual(t.maxHp);
+    expect(damaged, '맞지도 않았다 — 표본이 성립하지 않는다').toBeLessThan(t.maxHp);
+    // prep 으로 넘어가도록 넉넉히 돌린다 — 옛 세계는 여기서 되돌아왔다
+    runTicks(sim, 300);
+    const after = sim.towerAt(0, 1);
+    if (after) expect(after.hp, '어딘가에서 회복됐다').toBeLessThanOrEqual(damaged);
   });
 });
 

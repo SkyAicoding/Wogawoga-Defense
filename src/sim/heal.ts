@@ -71,7 +71,13 @@ function pickTarget(ctx: SimCtx, a: AllySim, spec: AllyHealSpec, prefer: number)
     if (best === null || t.lack > best.lack || (t.lack === best.lack && t.key < best.key)) best = t;
   };
 
-  // 마을 — 상한이 남아 있을 때만 후보다
+  /*
+   * 마을 — 상한이 남아 있을 때만 후보다.
+   * ⚠ **이 조건은 상한의 집행부가 아니라 최적화다.** 진짜 집행은 `applyHeal` 의
+   *   `Math.max(0, left)` 한 줄이고, 실측으로 확인했다: 여기 `baseHealed < budget` 만
+   *   빼도 계약이 **하나도 안 빨개진다**(applyHeal 이 잡는다). `applyHeal` 쪽을 빼면
+   *   그때 "되돌린 6000 · 상한 5999" 로 빨개진다. 상한을 손볼 사람은 **거기**를 봐라.
+   */
   const v = ctx.view;
   if (v.baseHp < v.baseHpMax && ctx.hometown.baseHealed < baseHealBudget(ctx)) {
     const cell = ctx.opts.stage.baseCell;

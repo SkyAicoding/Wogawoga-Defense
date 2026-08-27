@@ -680,20 +680,30 @@ export function createBattleHud(): Screen<GameFacade> {
         // 가죽을 여는 카드(파수꾼)만 배지를 단다 — 데이터가 정하므로 종 이름을
         // 여기 박지 않는다. `sunder`를 끄면 배지도 같이 사라진다.
         /*
-         * 배지는 **데이터가 정한다** — 종 이름을 여기 박지 않는다.
-         * 지금 배지가 붙는 축은 둘이고 서로 배타다(한 종이 둘 다는 아니다):
-         *   sunder(파수꾼) = 타워 화력의 곱셈 인자 · gather(채집꾼) = 유일한 벌이 수단.
-         * `sunder`를 끄거나 `gatherPct`를 100으로 내리면 배지도 같이 사라진다.
+         * 배지는 **데이터가 정한다** — 종 이름을 여기 박지 않는다. 붙는 축은 셋이다:
+         *   heal(마법사) = 유일한 회복 수단 · sunder = 타워 화력의 곱셈 인자 ·
+         *   gather(채집꾼) = 유일한 벌이 수단.
+         *
+         * ⚠ **더 이상 배타가 아니다.** 종전 주석은 "한 종이 둘 다는 아니다"라고 적었는데,
+         *   마법사가 `heal` 과 `sunder` 를 **둘 다** 갖는다(파수꾼의 탱커 성질을 그대로
+         *   물려받았기 때문이다 — hp 560 은 봉투 [14]의 필요조건이라 뺄 수 없다).
+         *   배지 자리는 한 벌뿐이므로 **회복을 우선**한다: 그것이 이 카드의 새 정체이고,
+         *   가죽 열기는 아래 `label`(호버·스크린리더)이 계속 말한다. 곧 정보는 안 잃고
+         *   가장 눈에 띄는 자리만 새 능력에 준다.
          */
+        const heals = ALLY_DEFS[defId].heal !== undefined;
         const opensHide = ALLY_DEFS[defId].sunder === true;
         const gathers = (ALLY_DEFS[defId].gatherPct ?? 100) > 100;
-        const badge: 'sunder' | 'gather' | null = opensHide
-          ? 'sunder'
-          : gathers
-            ? 'gather'
-            : null;
+        const badge: 'heal' | 'sunder' | 'gather' | null = heals
+          ? 'heal'
+          : opensHide
+            ? 'sunder'
+            : gathers
+              ? 'gather'
+              : null;
         const label =
           `${t(`ally.${defId}.name`)} — ${allyDesc(defId)} · ${allyRules()}` +
+          (heals ? ` · ${t('battle.ally.healHint')}` : '') +
           (opensHide ? ` · ${t('battle.ally.sunderHint')}` : '') +
           (gathers
             ? ` · ${t('battle.ally.gatherHint', {
@@ -722,10 +732,13 @@ export function createBattleHud(): Screen<GameFacade> {
             h('span', { class: `ally-btn-sunder ally-btn-sunder--${badge}` },
               badge === 'sunder'
                 ? h('span', { class: 'ally-btn-sunder-ico', html: traitIconSvg('hide') })
-                : h('span', { class: 'ally-btn-sunder-ico ally-btn-sunder-ico--glyph', text: '⛏' }),
+                : h('span', {
+                    class: 'ally-btn-sunder-ico ally-btn-sunder-ico--glyph',
+                    text: badge === 'heal' ? '✚' : '⛏',
+                  }),
               h('span', {
                 class: 'ally-btn-sunder-txt',
-                text: badge === 'sunder' ? t('battle.ally.sunder') : t('battle.ally.gather'),
+                text: t(`battle.ally.${badge}`),
               }),
             ),
           );

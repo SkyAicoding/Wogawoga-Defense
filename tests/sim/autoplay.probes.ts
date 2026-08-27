@@ -97,6 +97,17 @@ const ALLY_OPTS: BotOptions = { towerReserve: 600, allies: { minNear: 1 } };
  * docs/gather-spec.md §12 T1). 위약의 정의가 "같은 골드를 같은 시점에 태우되 **능력만**
  * 0"인데, 채집꾼의 능력은 전투가 아니라 **캐는 손**이다 — `kill()`만 걸면 위약 채집꾼이
  * 진짜와 똑같이 캐서 위약 실험의 전제가 통째로 깨진다.
+ *
+ * ⚠⚠ **`guardian`(마법사)은 회복 능력까지 지운다** (`heal: undefined`). **바로 위
+ * `gatherer` 문단과 글자 그대로 같은 논거다** — 마법사의 능력은 전투가 아니라 **고치는
+ * 손**이라, `kill()`만 걸면 위약 마법사가 진짜와 똑같이 타워와 마을을 고친다. 그러면
+ * "같은 골드를 태우되 능력만 0" 이라는 위약의 정의가 깨지고 [8]·[14]가 **회복 능력을
+ * 양쪽에서 상쇄시킨 채** 나머지만 재게 된다.
+ *
+ * ⚠ 이 한 줄은 `gatherer` 때와 달리 **커밋된 팔의 숫자를 움직인다.** `allyOrder`가
+ *   `guardian`을 실제로 뽑기 때문이다(`gatherer`는 어떤 정책도 안 뽑아서 무해했다).
+ *   그것이 정확히 이 줄의 목적이다 — 위약을 **진짜 위약으로 되돌리는** 변경이라
+ *   계기를 약화가 아니라 **강화**한다. 재측정이 필요하고, 그 결과는 원장이 든다.
  * ⚠ 이 항목을 더해도 커밋된 팔의 숫자는 **한 자리도 안 움직인다**: 이 파일의 어떤 정책도
  * `gatherer`를 뽑지 않고(`allyOrder`는 셋으로 하드코딩돼 있다), `envelope.playKey`는
  * 표의 **내용이 아니라 id**(`'placeboAllies'`)를 접으므로 캐시 키도 그대로다.
@@ -106,7 +117,7 @@ export const PLACEBO_ALLIES: Record<AllyId, AllyDef> = (() => {
   return {
     clubber: kill(ALLY_DEFS.clubber),
     slinger: kill(ALLY_DEFS.slinger),
-    guardian: kill(ALLY_DEFS.guardian),
+    guardian: { ...kill(ALLY_DEFS.guardian), heal: undefined },
     gatherer: { ...kill(ALLY_DEFS.gatherer), gatherPct: 0, carryCap: 1 },
   };
 })();

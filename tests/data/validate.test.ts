@@ -1,6 +1,7 @@
 /** 타워/적/전역 상수 데이터 검증 — 밸런스 수치를 계약으로 잠근다. */
 import { describe, expect, it } from 'vitest';
-import type { BaseLevelDef, EnemyId, TowerId, TowerTier } from '@/data/types';
+import type { AllyId, BaseLevelDef, EnemyId, TowerId, TowerTier } from '@/data/types';
+import { STATUS_TICK_INTERVAL } from '@/data/types';
 import * as balance from '@/data/balance';
 import {
   GATE_BITE_TICKS,
@@ -183,6 +184,36 @@ describe('enemies', () => {
     for (const s of STAGES) {
       expect(ENEMY_DEFS.trex.baseDamage, `s${s.id} 기지 HP ${s.baseHp}`).toBeLessThan(s.baseHp);
     }
+  });
+
+  /**
+   * **마법사 회복 🔷 — 배포 수치** (`ALLY_DEFS.guardian.heal`).
+   *
+   * `tests/sim/allies.test.ts` 의 회복 묶음은 **규칙**을 재고 목 스펙을 주입한다.
+   * 이 항목은 그 반대편 — **실제로 배포되는 값**이 뜻에 맞는지를 잠근다.
+   *
+   * 잠그는 것:
+   *  ① 회복 능력을 가진 종이 **정확히 하나**다. 둘 이상이면 "마법사가 유일한 회복 수단"
+   *     이라는 이 라운드의 설계 전제가 조용히 깨진다(자동 수리를 웨이브당 24% → 6% 로
+   *     줄인 근거가 그것이다).
+   *  ② 그 종이 **여전히 탱커**다(hp ≥ 520 · blocks). 520 은 봉투 [14]의 필요조건이고
+   *     640시드 실측으로 480 이하는 전부 위약에 진다 — 유리몸 힐러로 바꾸면 즉시 빨강인데
+   *     문턱은 못 내린다(allies.ts guardian hp 주석).
+   *  ③ 주기가 `STATUS_TICK_INTERVAL` 의 정수배다 — 상태 틱과 위상이 어긋나면 회복이
+   *     프레임마다 들쭉날쭉해 보인다.
+   *  ④ `seekRadius > radius` — 아니면 사거리 밖 대상을 영영 못 찾아 **걸어가지 않는다**.
+   */
+  it('마법사 — 회복 수치가 뜻에 맞는다 (유일한 회복 수단 · 여전히 탱커)', () => {
+    const healers = ALL_ALLY_IDS.filter((id) => ALLY_DEFS[id].heal !== undefined);
+    expect(healers, `회복 능력을 가진 종: ${healers.join('/')}`).toHaveLength(1);
+    const m = ALLY_DEFS[healers[0] as AllyId];
+    const heal = m.heal as NonNullable<typeof m.heal>;
+    expect(m.hp, '마법사가 더 이상 탱커가 아니다 — 봉투 [14]의 필요조건').toBeGreaterThanOrEqual(520);
+    expect(m.blocks, '마법사가 적을 안 묶는다 — 시간을 사는 카드가 사라진다').toBe(true);
+    expect(heal.amount).toBeGreaterThan(0);
+    expect(heal.cooldownTicks % STATUS_TICK_INTERVAL, '회복 주기가 상태 틱의 정수배가 아니다').toBe(0);
+    expect(heal.seekRadius, '찾는 거리가 고치는 거리보다 좁다 — 영영 못 걸어간다')
+      .toBeGreaterThan(heal.radius);
   });
 
   /**

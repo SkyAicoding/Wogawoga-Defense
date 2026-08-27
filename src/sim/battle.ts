@@ -86,6 +86,7 @@ import {
   sweepDestroyedTowers,
   updateSiege,
 } from './siege';
+import { updateAllyHeal } from './heal';
 import {
   effectiveSpeed,
   processHealAuras,
@@ -239,6 +240,11 @@ class Battle implements BattleSim {
     updateGate(ctx);
     // 4) 적 이동/누수 → 아군 이동 (같은 스냅샷으로 양쪽을 움직인다)
     this.moveEnemies();
+    /*
+     * 8-d) **마법사 회복** — 전투 뒤, 이동 앞. 그 자리인 이유 셋은 `heal.ts` 헤더에 있다
+     * (요약: 이 틱의 피해를 이 틱에 고치고, 여기서 정한 tgt 가 같은 틱에 걸음이 된다).
+     */
+    updateAllyHeal(ctx);
     moveAllies(ctx);
     // 5) 상태이상 틱 + 힐 오라
     const enemies = ctx.world.enemies.items;
@@ -667,6 +673,14 @@ class Battle implements BattleSim {
       // 자동 행동 — **유도되지 않는다.** 같은 자리에 같은 짐으로 서 있어도 이 비트가
       // 다르면 다음 틱에 일하러 가느냐 서 있느냐가 갈린다. resetAlly 누락도 여기서 드러난다.
       h = mix(h, a.autoHold ? 1 : 0);
+      // 회복 (sim/heal.ts) — 둘 다 **유도되지 않는다.**
+      //  · healKey     : 다음 틱에 이 사람이 어디로 걸어가 무엇을 고치는가 자체다.
+      //                  tgtX/tgtZ 로도 복원 안 된다 — 사거리 안에 들어와 멈춘 뒤에는
+      //                  tgt 가 그대로인데 대상이 바뀔 수 있다(만피가 되면 다음으로 옮긴다).
+      //  · healCdLeft  : 순수 카운터. 앞으로의 HP 궤적 전부가 여기 걸린다.
+      // resetAlly 누락(풀 재사용)이 드러나는 자리도 여기다 — 위 gatherTicks 와 같은 논거.
+      h = mix(h, a.healKey);
+      h = mix(h, a.healCdLeft);
     }
     for (const t of ctx.world.towers.items) {
       h = mix(h, t.id);
