@@ -736,6 +736,20 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
       let recedeNote = '';
       let settleWalk = 0;
       let settleNote = '';
+      /*
+       * ⚠⚠ **몸이 가는 쪽을 보는가** (2026-08-28 추가 — 사용자 재신고로 생긴 자리):
+       *   > "더 이상해, s1 에서 이렇게 아예 이 그림 처럼 한참 전 부터 몸을 돌려서 움직여"
+       *   `gateApproach` 가 방향을 **이번 틱의 굽힌 양**으로 쟀다. 그 차이는 전진 성분이
+       *   빠진 **순수 옆방향**이라 몸이 경로와 거의 직각으로 섰다. 화면에서는 "한참 전부터
+       *   옆으로 돌아 걷는" 그림이 된다. 그때 이 파일의 어떤 다리도 안 잡았다 —
+       *   좌표는 다 맞고 **각만 틀렸기** 때문이다. 그래서 각을 직접 잰다.
+       *   ⚠ 문 앞에 선 뒤(`gateTicks > 0`)는 제외한다 — 그때는 이동 방향이 아니라
+       *     **마을을 보는** 것이 맞다(enterGate 가 그렇게 돌린다).
+       */
+      let facingBad = 0;
+      let facingChecked = 0;
+      let worstFacing = 0;
+      let facingNote = '';
       const gateAt = new Map<number, { x: number; z: number }>();
       const distTo = (e: EnemySim): number =>
         Math.hypot(e.x - stage.baseCell.x, e.z - stage.baseCell.z);
@@ -768,6 +782,33 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
           }
         }
       };
+      const checkFacing = (): void => {
+        for (const e of sim.state.enemies as EnemySim[]) {
+          if (e.gateTicks > 0) continue; // 문 앞에 선 적은 마을을 본다
+          const was = prevPos.get(e.id);
+          if (!was) continue;
+          const mx = e.x - was.x;
+          const mz = e.z - was.z;
+          const m = Math.hypot(mx, mz);
+          if (m < 1e-4) continue; // 안 움직인 틱은 각이 뜻이 없다
+          facingChecked++;
+          const d = Math.abs(((Math.atan2(mz, mx) - e.heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+          if (d > worstFacing) {
+            worstFacing = d;
+            facingNote = `${e.defId} ${((d * 180) / Math.PI).toFixed(1)}°`;
+          }
+          /*
+           * 문턱 60° 는 **두 실측 사이**에 놓았다(임의 값이 아니다):
+           *  · 경로 위 일반 구간의 정상 오차 **최대 27.5°** — `path.sample` 이 주는 각은
+           *    세그먼트 방향이고, 코너 라운딩 구간에서는 한 틱 변위와 그만큼 어긋난다.
+           *    이건 이 개정 이전부터 그랬고 화면에서 문제가 된 적이 없다.
+           *  · 신고된 고장은 **≈90°** — 방향을 "이번 틱에 굽힌 양"으로 재면 전진 성분이
+           *    빠져 순수 옆방향이 된다. 몸이 경로와 직각으로 선다.
+           * 곧 이 줄이 가르는 것은 "코너에서 조금 어긋난다"와 "옆으로 돌아 걷는다"이다.
+           */
+          if (d > (60 * Math.PI) / 180) facingBad++;
+        }
+      };
       const checkSettle = (): void => {
         for (const e of sim.state.enemies as EnemySim[]) {
           const at = gateAt.get(e.id);
@@ -788,6 +829,7 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
           sim.tick();
           checkJumps();
           recordHist();
+          checkFacing();
           checkSettle();
           // ⚠ 정착을 기다리는 동안에도 새 개체가 문 앞에 설 수 있다. `settleGate` 가
           //   그동안의 이벤트를 돌려주므로 **작업 목록**으로 이어 처리한다 —
@@ -845,6 +887,10 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
         .toBe(0);
       // ⓑ 도착 뒤에 걸을 것이 **남아 있지 않다** (사용자 신고의 "미끄러지듯이 옮기면서")
       expect(settleWalk, `s${stage.id}: 도착 뒤에 더 걸었다 — ${settleNote}`).toBeLessThan(1e-9);
+      // ⓒ 걷는 몸은 **가는 쪽**을 본다 (사용자 신고의 "한참 전 부터 몸을 돌려서 움직여")
+      expect(facingChecked, `s${stage.id}: 방향을 잰 틱이 0 — 공허하다`).toBeGreaterThan(500);
+      expect(facingBad, `s${stage.id}: 몸이 가는 쪽을 안 본 틱 ${facingBad}건 (최악 ${facingNote})`)
+        .toBe(0);
     }, 120_000);
   }
 

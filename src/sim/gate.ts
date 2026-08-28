@@ -485,13 +485,20 @@ export function gateApproach(ctx: SimCtx, e: EnemySim, path: BattlePath, stopDis
   // ⚠ `tc >= 1` 에서 반지름을 **못박는다** — `max` 로 두면 부동소수 꼬리가 남아 옛 좌표와
   //   비트 단위로 안 같아지고, 해시가 그 꼬리에 걸린다(battle.hash 는 x·z 를 접는다).
   const r = rNow;
-  const px = e.x;
-  const pz = e.z;
   e.x = base.x + Math.cos(th) * r;
   e.z = base.z + Math.sin(th) * r;
-  // 가는 쪽을 본다. 이 틱에 실제로 안 움직였으면(반지름·각 둘 다 정지) 옛 방향을 유지한다
-  const mx = e.x - px;
-  const mz = e.z - pz;
+  /*
+   * 가는 쪽을 본다 — **직전 틱의 자리**(`prevX/prevZ`)에서 잰다.
+   *
+   * ⚠⚠ 여기서 한 번 틀렸다(사용자 신고: "한참 전 부터 몸을 돌려서 움직여").
+   *   옛 판본은 **이 함수가 굽히기 직전의 좌표**에서 쟀는데, 그 값은 이미 이번 틱의
+   *   경로 샘플이라 차이에 **전진 성분이 빠져 있다** — 곧 순수 옆방향이고, 몸이 경로와
+   *   거의 직각으로 돌아간다. `moveEnemies` 가 루프 첫머리에서 `prevX/prevZ` 를
+   *   찍어 두므로 그것이 이번 틱의 **참 이동 방향**의 시작점이다.
+   * ⚠ 이 틱에 실제로 안 움직였으면 옛 방향을 유지한다(0 벡터의 각은 뜻이 없다).
+   */
+  const mx = e.x - e.prevX;
+  const mz = e.z - e.prevZ;
   if (mx * mx + mz * mz > DIR_EPS * DIR_EPS) e.heading = Math.atan2(mz, mx);
 }
 
