@@ -117,13 +117,95 @@ describe('EnemyView', () => {
     for (let i = 0; i < 20; i++) view.update([e], 1, cellToWorld, 0.05);
     const mesh = bossMesh(view, 'trex');
     expect(mesh.scale.x).toBeCloseTo(1.15, 6);
-    const gait = (
+    /*
+     * 보스는 개별 Mesh 라 인스턴스 어트리뷰트가 없다 — 위상이 **유니폼**으로 들어간다
+     * (meshlib/gait.ts `setGait`). 그래서 그 setter 를 한 프레임 가로채 **뷰가 실제로
+     * 보낸 값**을 읽는다. 식을 다시 계산하지 않는 이유는 아래 ⚠⚠ 문단에 있다.
+     */
+    const gm = (
       view as unknown as { bossGait: Map<THREE.Mesh, { setGait(g: number): void }> }
     ).bossGait.get(mesh);
-    expect(gait).toBeTruthy();
-    // 셰이더가 내리는 최저점은 모델 단위 lift 만큼 — 월드에서는 scale 배가 되어야 한다
-    const t = Math.abs(Math.sin(gaitOfBoss(e, rig.gaitPerDist)));
+    expect(gm).toBeTruthy();
+    let sent = NaN;
+    const real = gm!.setGait.bind(gm);
+    gm!.setGait = (g: number): void => {
+      sent = g;
+      real(g);
+    };
+    view.update([e], 1, cellToWorld, 0.05);
+    gm!.setGait = real;
+    expect(Number.isNaN(sent), '뷰가 보스 위상을 한 번도 안 보냈다').toBe(false);
+    /*
+     * 셰이더가 내리는 최저점은 모델 단위 lift 만큼 — 월드에서는 scale 배가 되어야 한다.
+     *
+     * ⚠⚠ **위상을 다시 계산하지 않고 뷰에서 되읽는다.** 옛 판본은 `gaitOfBoss` 로 식을
+     *   베껴 `travel = e.dist` 를 가정했는데, 보행 위상의 분자가 경로 호장에서 **실제
+     *   이동거리**(`Anim.walked`)로 바뀌면서 그 가정이 거짓이 됐다. 이 항목이 재려는
+     *   것은 위상이 아니라 **접지 보정에 스케일이 곱해지는가**이므로, 위상은 원본에서
+     *   읽어 오는 것이 맞다(식을 베끼면 뷰만 고치는 회귀가 조용히 통과한다 — CLAUDE.md).
+     */
+    const t = Math.abs(Math.sin(sent));
     expect(mesh.position.y).toBeCloseTo(groundLiftAt(rig, t) * 1.15, 5);
+  });
+
+  /**
+   * ⚠⚠ **보행 위상의 분자는 `e.dist`(경로 호장)가 아니라 실제 이동거리다.**
+   *
+   * 사용자 신고("미끄러지듯이 … 자리를 잡는다")의 세 번째 성분이 여기였다. sim 이
+   * 문 앞 도착 시 `e.dist` 를 정지선에 **박으므로**(gate.ts `enterGate`), 호장을 분자로
+   * 쓰면 **몸이 움직이는데 다리가 선다**. 뷰가 프레임 간 보간 위치 차를 누적하면
+   * (`Anim.walked`) 경로 위든 밖이든 다리가 언제나 몸을 따라간다.
+   *
+   * 재는 방법: `dist` 를 **고정한 채** 좌표만 옮긴다. 옛 구현이면 위상이 한 톨도 안
+   * 움직이고, 지금 구현이면 이동거리 × gaitPerDist 만큼 나아간다.
+   */
+  it('경로 호장이 멈춰도 몸이 움직이면 다리가 걷는다', () => {
+    const rig = enemyRig('raptor');
+    const D = 0.08; // 한 프레임 이동거리(타일)
+    // dist 는 12 로 **고정** — 옛 판본의 분자가 이 값이라 위상이 얼어붙는다
+    let e = enemy({ id: 77, defId: 'raptor', dist: 12, x: 4, prevX: 4, z: 2, prevZ: 2 });
+    view.update([e], 1, cellToWorld, 0.02);
+    const g0 = gaitOf(view, 'raptor');
+    e = { ...e, prevX: 4, x: 4 + D };
+    view.update([e], 1, cellToWorld, 0.02);
+    const g1 = gaitOf(view, 'raptor');
+    expect(phaseDelta(g0, g1), `이동 ${D}타일에 대한 위상 진행`).toBeCloseTo(D * rig.gaitPerDist, 4);
+  });
+
+  /**
+   * ⚠⚠ **화면 방향은 sim 의 각을 한 프레임에 따라잡지 않는다.**
+   *
+   * 사용자 신고의 두 번째 성분. 뷰에는 위치의 `prevX/prevZ` 에 대응하는 **prevHeading 이
+   * 없어서**, sim 이 각을 크게 꺾는 자리(문 앞 도착 — `gate.ts enterGate` 가 마을 쪽으로
+   * 돌린다)에서 한 프레임에 홱 돌았다. 실측 스냅 raptor 85.1° · trex 63.7° · compy 88.6°.
+   *
+   * 잣대는 **인스턴스 행렬에서 되읽는다**(식을 베끼면 뷰만 고치는 회귀가 통과한다 —
+   * CLAUDE.md 처방). 두 방향으로 잠근다: 한 프레임에 다 안 돌고, 그래도 결국 도착한다.
+   */
+  it('큰 방향 전환이 한 프레임에 끝나지 않고, 몇 프레임 뒤에는 도착한다', () => {
+    const yawOf = (): number => {
+      const m = new THREE.Matrix4();
+      meshOf(view, 'raptor').getMatrixAt(0, m);
+      const v = new THREE.Vector3(1, 0, 0).transformDirection(m);
+      return Math.atan2(v.z, v.x);
+    };
+    // heading 0 으로 충분히 정착시킨다
+    let e = enemy({ id: 91, defId: 'raptor', x: 4, prevX: 4, z: 2, prevZ: 2, heading: 0 });
+    for (let i = 0; i < 30; i++) view.update([e], 1, cellToWorld, 0.02);
+    const before = yawOf();
+    // sim 이 90° 꺾었다 (문 앞 도착이 하는 일)
+    const TURN = Math.PI / 2;
+    e = { ...e, heading: TURN };
+    view.update([e], 1, cellToWorld, 0.02);
+    const oneFrame = Math.abs(((yawOf() - before + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+    expect(oneFrame, `한 프레임에 ${((oneFrame * 180) / Math.PI).toFixed(1)}° 돌았다 — 스냅이다`)
+      .toBeLessThan(TURN * 0.5);
+    expect(oneFrame, '한 프레임에 전혀 안 돌았다 — 방향이 멈췄다').toBeGreaterThan(1e-6);
+    // 그래도 몇 프레임이면 도착한다 (느려터져서 영영 안 도는 것도 회귀다)
+    for (let i = 0; i < 30; i++) view.update([e], 1, cellToWorld, 0.02);
+    const total = Math.abs(((yawOf() - before + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+    expect(total, `30프레임 뒤에도 ${((total * 180) / Math.PI).toFixed(1)}° 밖에 못 돌았다`)
+      .toBeCloseTo(TURN, 3);
   });
 
   it('개체 위상 오프셋이 연속 id 에서 등차수열이 아니다', () => {
@@ -342,11 +424,4 @@ describe('EnemyView', () => {
 });
 
 /** 보스 위상 = 인스턴스와 같은 식 (테스트용 재현) */
-function gaitOfBoss(e: EnemyState, gaitPerDist: number): number {
-  let h = Math.imul(e.id ^ 0x9e3779b9, 0x85ebca6b);
-  h ^= h >>> 13;
-  h = Math.imul(h, 0xc2b2ae35);
-  h ^= h >>> 16;
-  const off = ((h >>> 0) / 4294967296) * Math.PI * 2;
-  return e.dist * gaitPerDist + off; // alpha=1 이면 travel = dist
-}
+

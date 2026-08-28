@@ -559,7 +559,17 @@ describe('정지 사격 (규칙 4)', () => {
           waves: [wave([{ enemyId: id, count: 2, intervalTicks: 5 }])],
         }),
       );
-      for (const x of [3, 6]) {
+      /*
+       * ⚠ 타워 x 는 **문간 접근 구간(GATE_FAN_LEAD) 밖**이어야 한다. 이 판의 마을은
+       *   (9,2) 이므로 x=6 은 마을에서 3타일 — `gateApproach`(gate.ts 규칙 2-c)가 적을
+       *   경로에서 옆으로 휘게 하는 구간 안이다. 거기서는 적이 최대 부채 폭만큼 옆으로
+       *   와서 **두 칸 떨어뜨린 타워에도 닿는다**(실측: far.planted 가 0 대신 4).
+       *   이 계약이 재려는 것은 `SIEGE_ENGAGE_RANGE` 의 1칸/2칸 구분이지 문간 기하가
+       *   아니므로, 잣대를 문간 밖으로 옮긴다 — 문턱은 한 톨도 안 건드렸다.
+       *   ⚠ 문간 안쪽의 노출은 **실제로 달라진 게임 동작**이다. 그쪽은 gate.test.ts 의
+       *     기하 절과 난이도 보고가 잰다(여기서 조용히 덮으면 안 된다).
+       */
+      for (const x of [2, 4]) {
         if (sim.hasScenery(x, cellZ)) sim.applyCommand({ type: 'clearScenery', cellX: x, cellZ });
         sim.applyCommand({ type: 'placeTower', handIndex: 0, cellX: x, cellZ });
       }

@@ -182,7 +182,34 @@ interface Anim {
    * **관측 최댓값이 곧 그 판의 주기**다 — 원본에서 오는 값이라 절대 안 낡는다.
    */
   biteCd: number;
+  /**
+   * **화면에 그리는 방향** (rad). `e.heading` 을 최단호로 따라가되 각속도를 제한한다.
+   *
+   * 왜 필요한가: 뷰는 위치는 `prevX→x` 로 보간하는데 **방향에는 대응하는 prev 가 없어**
+   * `e.heading` 을 그대로 쿼터니언에 넣었다. 그래서 sim 이 각을 한 틱에 크게 꺾는 자리
+   * (문 앞 도착 — `gate.ts enterGate` 가 마을 쪽으로 돌린다)에서 **한 프레임에 홱** 돌았다.
+   * 실측 스냅: raptor 85.1° · trex 63.7° · compy 최대 88.6°. 사용자가 신고한
+   * "미끄러지듯이 … 방향을 잡는다" 의 두 번째 성분이 이것이다.
+   * ⚠ 연출 전용이다 — sim 의 `e.heading` 은 그대로 두므로 결정론·해시와 무관하다.
+   */
+  face: number;
+  /**
+   * **실제로 이동한 누적 거리** (타일) — 보행 위상의 분자다.
+   *
+   * 옛 판본은 `e.dist`(경로 호장)를 썼다. 그것은 개체가 **경로 위에 있을 때만** 이동량과
+   * 같다. `gate.ts` 의 문간 접근(규칙 2-c)은 마지막 구간에서 개체를 경로에서 떼어 내고,
+   * 도착하면 `e.dist` 를 정지선에 **박는다**. 그래서 옛 잣대로는 몸이 움직이는데 다리가
+   * 서 있었다(= 미끄러짐). 프레임 간 **보간 위치 차**를 그대로 더하면 틱 경계와 무관하게
+   * 참 이동거리가 되고(구간마다 직선이라 정확하다), 다리는 언제나 몸을 따라간다.
+   */
+  walked: number;
+  /** `walked` 를 재기 위한 직전 프레임의 보간 위치 */
+  px: number;
+  pz: number;
 }
+
+/** 화면 방향의 최대 각속도 (rad/s). 88° 를 0.22초에 돈다 — 창던지기 팔 스윙보다 빠르다 */
+const TURN_RATE = 7.0;
 
 /**
  * 개체별 보행 위상 오프셋 (0..1).
@@ -450,7 +477,7 @@ export class EnemyView {
       seen.add(e.id);
       let anim = this.anims.get(e.id);
       if (!anim) {
-        anim = { age: 0, flash: 0, aim: 0, biteCd: 0 };
+        anim = { age: 0, flash: 0, aim: 0, biteCd: 0, face: e.heading, walked: 0, px: e.x, pz: e.z };
         this.anims.set(e.id, anim);
       }
       // 일시정지 프레임은 dt 로 0 대신 0.0001 이 들어온다(battlecontroller).
@@ -469,6 +496,16 @@ export class EnemyView {
       // 보간 위치 (셀 연속 좌표 → 월드)
       const sx = lerp(e.prevX, e.x, alpha);
       const sz = lerp(e.prevZ, e.z, alpha);
+      // 실제 이동거리 누적 — 프레임마다 보간 위치 차를 더한다(틱 경계와 무관하게 정확).
+      anim.walked += Math.hypot(sx - anim.px, sz - anim.pz);
+      anim.px = sx;
+      anim.pz = sz;
+      // 화면 방향은 sim 의 각을 **최단호로 쫓아간다** — 각속도 상한이 스냅을 없앤다
+      if (dt > 1e-3) {
+        const d = ((e.heading - anim.face + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+        const max = TURN_RATE * dt;
+        anim.face += d > max ? max : d < -max ? -max : d;
+      }
       cellToWorld(sx, sz, _pos);
 
       const rig = enemyRig(e.defId);
@@ -477,7 +514,11 @@ export class EnemyView {
       // e.dist 는 틱 경계값이라 그대로 쓰면 틱이 없는 렌더 프레임에서 몸통만 나아가고
       // 다리는 멈춰 있어, 디딤발이 한 틱 이동거리만큼 밀렸다 되돌아온다(30Hz 톱니).
       const step = Math.hypot(e.x - e.prevX, e.z - e.prevZ);
-      const travel = e.dist - step * (1 - alpha);
+      // ⚠ `e.dist`(경로 호장)가 아니라 **실제 이동거리**다 — 위 `anim.walked` 주석 참조.
+      //   문간 접근에서 개체가 경로를 떠나고 도착 시 `e.dist` 가 박히므로, 옛 잣대로는
+      //   다리가 몸을 못 따라간다. `anim.walked` 는 이미 alpha 로 보간된 위치의 누적이라
+      //   여기서 다시 빼지 않는다(옛 식의 `− step × (1 − alpha)` 가 하던 일을 이미 했다).
+      const travel = anim.walked;
       // 개체마다 위상을 어긋내 무리가 한 몸처럼 걷지 않게 한다
       const off = phaseOffset01(e.id) * TAU;
       /**
@@ -619,7 +660,7 @@ export class EnemyView {
         pitch -= biteEnvelope(attackProgress(e.attackAnimLeft, e.attackAnimTicks, alpha));
       }
 
-      _quat.setFromAxisAngle(AXIS_Y, -e.heading);
+      _quat.setFromAxisAngle(AXIS_Y, -anim.face);
       _quat2.setFromAxisAngle(AXIS_Z, pitch);
       _quat.multiply(_quat2);
       if (roll !== 0) {
@@ -715,7 +756,8 @@ export class EnemyView {
       seen.add(a.id);
       let anim = this.anims.get(a.id);
       if (!anim) {
-        anim = { age: 0, flash: 0, aim: 0, biteCd: 0 };
+        // 아군은 경로가 없어 `walked` 를 sim 이 이미 준다(a.walked) — 여기서는 안 쓴다.
+        anim = { age: 0, flash: 0, aim: 0, biteCd: 0, face: a.heading, walked: 0, px: a.x, pz: a.z };
         this.anims.set(a.id, anim);
       }
       const step = Math.hypot(a.x - a.prevX, a.z - a.prevZ);

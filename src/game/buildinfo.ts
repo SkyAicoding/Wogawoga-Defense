@@ -21,7 +21,7 @@
  *  · 새 기능·밸런스 구조 변경 → 마이너 자리 (1.**1**.0)
  * 올리는 것을 잊지 않게 `docs/HANDOFF.md` 의 배포 절차에 적어 뒀다.
  */
-export const APP_VERSION = '2.3.0';
+export const APP_VERSION = '2.4.0';
 
 /** 어느 기기에서 만든 배포인가 — 사용자가 쓰는 세 자리 */
 export type BuildOrigin = '회사노트북' | '집노트북' | '아이폰';
