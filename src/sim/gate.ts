@@ -228,6 +228,7 @@ import {
   GATE_BITE_AMOUNT,
   GATE_BITE_TICKS,
   GATE_FAN_COLS,
+  GATE_FAN_LEAD,
   GATE_FAN_SPACING,
   GATE_HOLD_MAX_TICKS,
   GATE_HOLD_MIN_TICKS,
@@ -322,28 +323,35 @@ export function atGate(e: EnemySim): boolean {
 }
 
 /**
- * 규칙 2·2-b) 문 앞 좌표를 확정한다. **진입 틱에 한 번만** 부르고 그 뒤로 영구 고정이다.
+ * 규칙 2·2-b) 문 앞 **목표 좌표**를 계산해 `gateTgtX/gateTgtZ` 에 적는다.
  *
  * ① 정지선 호장에서 경로를 한 번 샘플해 **접근 방향**만 얻는다(경로만이 "적이 어느 쪽에서
  *    왔는가"를 안다). ② 그 방향을 마을 중심 기준 단위벡터로 정규화한다. ③ 마을 중심에서
- *    반지름 `stand` 인 원 위에 부채를 벌려 놓는다. ④ 맵 밖으로 나가지 않게 클램프한다.
+ *    반지름 `stand` 인 원 위에 부채를 벌려 놓는다. ④ 맵 밖으로 나가지 않게 접는다.
  *
  * ③이 원 위인 이유는 헤더 규칙 2-b 에 있다 — 접선으로 밀면 trex 가 Lv1 사거리 밖이 된다.
+ *
+ * ⚠⚠ **순수 함수다 — 개체의 좌표를 한 글자도 안 건드린다.** 옛 판본은 `path.sample(…, e)`
+ *   로 `e.x/e.z/e.heading` 을 덮어썼고, 그래서 진입 틱에만 부를 수 있었다. `gateApproach`
+ *   가 **도착 전 매 틱** 이 값을 필요로 하므로(멱등해야 한다) 스크래치로 샘플한다.
+ *   같은 (경로, 정지선, id) 면 언제 불러도 같은 값이라 결정론이 호출 시점에 안 걸린다.
  */
-function standAt(ctx: SimCtx, e: EnemySim, path: BattlePath, stopDist: number): void {
+const SCRATCH = { x: 0, z: 0, heading: 0 };
+
+function planStand(ctx: SimCtx, e: EnemySim, path: BattlePath, stopDist: number): void {
   const stage = ctx.opts.stage;
   const base = stage.baseCell;
   const stand = standoffFor(e);
-  // ① 접근 방향의 근거 — e.x/e.z/e.heading 에 쓰고 곧바로 다시 읽는다(할당 없음)
-  path.sample(stopDist, e);
-  let dx = e.x - base.x;
-  let dz = e.z - base.z;
+  // ① 접근 방향의 근거 — **스크래치**에 샘플한다(개체 좌표는 호출자의 것이다)
+  path.sample(stopDist, SCRATCH);
+  let dx = SCRATCH.x - base.x;
+  let dz = SCRATCH.z - base.z;
   let len = Math.hypot(dx, dz);
   if (len < DIR_EPS) {
     // 퇴화 — 경로가 마을 위에서 끝나 방향을 못 얻었다. 진행 방향의 **반대**를 쓴다
     // (뒤로 물러서는 것이 곧 "왔던 쪽"이다). 현 데이터에서는 도달 불가능한 가지다.
-    dx = -Math.cos(e.heading);
-    dz = -Math.sin(e.heading);
+    dx = -Math.cos(SCRATCH.heading);
+    dz = -Math.sin(SCRATCH.heading);
     len = Math.hypot(dx, dz) || 1;
   }
   dx /= len;
@@ -394,9 +402,97 @@ function standAt(ctx: SimCtx, e: EnemySim, path: BattlePath, stopDist: number): 
    */
   e.gateTgtX = clamp(x, 0.5, stage.gridW - 0.5);
   e.gateTgtZ = clamp(z, 0.5, stage.gridH - 0.5);
-  // 마을을 **바라본다** — 걷던 방향이 아니라 무는 방향이다(연출이 이 값으로 몸을 돌린다)
-  e.heading = Math.atan2(base.z - e.z, base.x - e.x);
-  e.dist = stopDist;
+}
+
+/**
+ * 규칙 2-c) **도착 전에 자기 자리로 접어 든다.** `moveEnemies` 가 경로를 샘플한 **직후**
+ * 매 틱 부른다. 정지선까지 `GATE_FAN_LEAD` 이내이면 좌표를 경로에서 떼어 부채 자리 쪽으로
+ * 굽힌다.
+ *
+ * ── 왜 (사용자 요구 원문) ────────────────────────────────────────────────────
+ *   > "마지막까지 블럭까지 걸어온 뒤에 … 한 블럭 뒤로 물러나면서 자리를 잡는데 … 애초에
+ *   >  마지막 블록 전에 바로 자리를 잡던지, 아니면 마지막블럭에서 방향을 돌리던지"
+ * 옛 흐름은 정지선에 **닿은 뒤에** 자리로 걸어갔고, 그 걸음이 뒤로(s1·s2 trex 0.694타일)
+ * ·옆으로(전 스테이지 slot±4 1.81타일) 갔다. 유도와 실측은 balance.GATE_FAN_LEAD 주석에 있다.
+ *
+ * ── 왜 극좌표인가 ────────────────────────────────────────────────────────────
+ * 마을 중심 극좌표로 나누면 **두 축이 서로 간섭하지 않는다**:
+ *  · 반지름 `max(stand, 경로반지름)` — 경로반지름이 단조 비증가라(전 레인 실측) 이 값도
+ *    **단조 비증가**다. 곧 "마을에서 멀어지는 틱"이 **원리적으로 없다** = 뒤로 못 간다.
+ *    직교좌표 보간으로는 이 성질을 못 얻는다(두 점을 잇는 현이 원 안으로 파고든다).
+ *  · 각 `경로각 + 진행도 × 부채각` — 옆걸음을 접근 구간에 **펴 바른다**.
+ *
+ * ⚠⚠ **진행도 1 에서 옛 구현과 비트 단위로 같은 좌표가 나온다.** 반지름을 `stand` 로
+ *   못박고 각이 정확히 `목표각` 이 되기 때문이다(아래 `tc >= 1` 가지). 도착 틱도 안 바뀐다
+ *   (`stopDistFor` 를 한 글자도 안 건드렸다). 그래서 **밸런스가 안 움직인다** — 바뀌는 것은
+ *   마지막 `GATE_FAN_LEAD` 동안의 경로 이탈뿐이고, 그것이 이 개정의 전부다.
+ *
+ * ⚠ `e.heading` 을 **실제 이동 방향**으로 준다. 옛 판본은 도착 틱에 한 번 마을 쪽으로
+ *   꺾고 끝이라, 자리 잡는 동안 정면을 본 채 옆으로 흘렀다(렌더에 prevHeading 이 없어
+ *   그 꺾임이 한 프레임에 60~88° 스냅으로도 보였다). 여기서는 걷는 내내 가는 쪽을 본다.
+ */
+/**
+ * 접근 구간에서 **한 틱 이동량의 상한 배율** — `걸음 × 이 값` 을 넘으면 순간이동이다.
+ *
+ * 곡선을 도는 이상 총 이동량은 한 걸음을 **반드시** 넘는다(전진과 옆이동이 직교한다).
+ * 두 항을 더해 유도한다. 진행도 `tc` 가 `걸음/LEAD` 씩 자라므로 옆이동 각속도는
+ *   ① `(걸음/LEAD) × 부채호장 / r`   — 부채를 쓸어 가는 항
+ *   ② `tc × 부채호장 × (dr/dt) / r²` — 반지름이 줄어 같은 호장이 더 큰 각이 되는 항
+ * 이고, 둘 다 `r` 을 곱해 호장으로 바꾼 뒤 전진(걸음)과 직교 합성한다. `r ≥ stand` 이고
+ * `dr/dt ≤ 걸음` 이므로 가장 빡빡한 종은 **중심거리가 가장 작은 종**(warrior 1.850)이다.
+ *
+ * ⚠ 이 값은 **문턱이 아니라 유도값**이다. 낮추는 것으로 빨강을 고치지 마라 — 여기가
+ *   빨개지면 `gateApproach` 의 기하가 설계를 벗어난 것이다. 실측 최악은 2.1배(LEAD 2.0)
+ *   · **1.8배(LEAD 3.0, 현재)** 이고, 진짜 순간이동(좌표 박기)은 30배 규모라 여유가 넉넉하다.
+ */
+export function gateStepBound(): number {
+  const minStand = GATE_STANDOFF_EDGE; // restReach ≥ 0 이므로 이것이 하한이다
+  const maxArc = ((GATE_FAN_COLS - 1) / 2) * GATE_FAN_SPACING;
+  const lat = maxArc / GATE_FAN_LEAD + maxArc / minStand;
+  return Math.sqrt(1 + lat * lat);
+}
+
+export function gateApproach(ctx: SimCtx, e: EnemySim, path: BattlePath, stopDist: number): void {
+  if (!gateEnabled(ctx)) return;
+  const lead = GATE_FAN_LEAD;
+  const t = lead > 0 ? (e.dist - (stopDist - lead)) / lead : 1;
+  if (t <= 0) return; // 아직 접근 구간 밖 — 경로 위 그대로다
+  const tc = t >= 1 ? 1 : t;
+  planStand(ctx, e, path, stopDist);
+  const base = ctx.opts.stage.baseCell;
+  const stand = standoffFor(e);
+  const rPath = Math.hypot(e.x - base.x, e.z - base.z);
+  if (rPath < DIR_EPS) return; // 퇴화 — 경로가 마을 위를 지난다. 굽힐 방향이 없다
+  // 목표각 − 정지선 경로점의 각 = 이 개체가 마지막에 쓸어야 할 **부채각**(접힘 반영).
+  // 각도 차는 최단호로 정규화한다 — 안 하면 ±π 경계에서 반대쪽으로 크게 돈다.
+  path.sample(stopDist, SCRATCH);
+  const thStop = Math.atan2(SCRATCH.z - base.z, SCRATCH.x - base.x);
+  const thTgt = Math.atan2(e.gateTgtZ - base.z, e.gateTgtX - base.x);
+  const sweep = ((thTgt - thStop + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+  /*
+   * ⚠⚠ **각이 아니라 호장으로 쓴다.** 부채각 `sweep` 은 정지 반지름 `stand` 에서 유도된
+   *   값이라, 그것을 **더 먼 반지름에 그대로 쓰면 옆이동 거리가 반지름에 비례해 커진다**.
+   *   접근 구간 초입의 반지름이 `stand + GATE_FAN_LEAD` 라 최대 배율이 (stand+2)/stand —
+   *   compy(1.853)에서 2.08배다. 실측으로 그만큼 한 걸음을 넘겨 뛰었다(s3 compy 2.1배,
+   *   `gate.test.ts` ③ 의 순간이동 탐지기가 1,110건을 잡았다). 곧 몸이 다리보다 빨라져
+   *   **고치려던 미끄러짐이 작은 크기로 되살아난다.**
+   *   호장(`sweep × stand`)을 고정하고 각을 `호장 / 반지름` 으로 되풀면 옆이동 **속도**가
+   *   반지름과 무관해진다 — 그리고 `tc = 1` 에서 반지름이 `stand` 라 각이 정확히 `sweep`
+   *   으로 되돌아오므로 **최종 좌표는 그대로**다.
+   */
+  const rNow = tc >= 1 ? stand : Math.max(stand, rPath);
+  const th = Math.atan2(e.z - base.z, e.x - base.x) + (tc * sweep * stand) / rNow;
+  // ⚠ `tc >= 1` 에서 반지름을 **못박는다** — `max` 로 두면 부동소수 꼬리가 남아 옛 좌표와
+  //   비트 단위로 안 같아지고, 해시가 그 꼬리에 걸린다(battle.hash 는 x·z 를 접는다).
+  const r = rNow;
+  const px = e.x;
+  const pz = e.z;
+  e.x = base.x + Math.cos(th) * r;
+  e.z = base.z + Math.sin(th) * r;
+  // 가는 쪽을 본다. 이 틱에 실제로 안 움직였으면(반지름·각 둘 다 정지) 옛 방향을 유지한다
+  const mx = e.x - px;
+  const mz = e.z - pz;
+  if (mx * mx + mz * mz > DIR_EPS * DIR_EPS) e.heading = Math.atan2(mz, mx);
 }
 
 /**
@@ -440,7 +536,20 @@ function bite(ctx: SimCtx, e: EnemySim): void {
  */
 export function enterGate(ctx: SimCtx, e: EnemySim, path: BattlePath, stopDist: number): void {
   if (e.gateTicks > 0) return;
-  standAt(ctx, e, path, stopDist);
+  /*
+   * ⚠ **여기서 좌표를 옮기지 않는다.** `gateApproach` 가 도착 전 `GATE_FAN_LEAD` 동안
+   *   이미 부채 자리로 굽혀 왔으므로, 이 틱의 `e.x/e.z` 가 곧 제 자리다(진행도 1).
+   *   옛 판본은 이 자리에서 목표만 적어 두고 `updateGate` 가 **도착 뒤에** 걸어갔고,
+   *   그 걸음이 사용자가 신고한 "뒤로 물러나며 미끄러지는" 동작이었다.
+   *   `planStand` 은 그래도 부른다 — 문간이 꺼진 대조군과 `GATE_FAN_LEAD = 0` 에서도
+   *   `gateTgtX/Z` 가 채워져야 `updateGate` 의 걷기가 자기 자리를 안다(멱등이라 공짜다).
+   */
+  planStand(ctx, e, path, stopDist);
+  // 마을을 **바라본다** — 걷던 방향이 아니라 무는 방향이다(연출이 이 값으로 몸을 돌린다).
+  // 사용자가 허락한 유일한 회전이다: "아니면 마지막블럭에서 방향을 돌리던지"
+  const b = ctx.opts.stage.baseCell;
+  e.heading = Math.atan2(b.z - e.z, b.x - e.x);
+  e.dist = stopDist;
   // 도착한 이 틱부터 센다 — 0 은 "문간이 아니다"라 쓸 수 없다
   e.gateTicks = 1;
   e.gateBiteCdLeft = 0;

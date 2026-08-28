@@ -55,7 +55,7 @@ import {
 } from './allies';
 import { recomputeBuffs, updateProjectiles, updateTowers } from './attack';
 import { addGold, leakEnemy } from './combat';
-import { atGate, enterGate, stopDistFor, updateGate } from './gate';
+import { atGate, enterGate, gateApproach, stopDistFor, updateGate } from './gate';
 import { Economy, sceneryClearCostFor, sellRefundFor } from './economy';
 import { pathFor, World, type EnemySim, type SimCtx } from './entities';
 import {
@@ -366,11 +366,20 @@ class Battle implements BattleSim {
         e.dist = stop;
         // 문간이 꺼진 판(`gate.enabled = false` 대조군)에서는 stop === totalLength 이고
         // 아래가 종전과 **비트 단위로 같은 경로**다. 그것이 A/B 를 코드 0줄로 만든다.
-        if (stop < path.totalLength) enterGate(ctx, e, path, stop);
-        else leakEnemy(ctx, e); // 회수는 사망 처리 단계에서
+        if (stop < path.totalLength) {
+          // ⚠ 순서가 뜻이다 — **자리에 도착시킨 뒤에** 진입 처리를 한다. `gateApproach`
+          //   의 진행도 1 이 곧 부채 자리이고, `enterGate` 는 그 좌표를 그대로 읽어
+          //   `enemyAtGate` 이벤트와 바라보는 각을 만든다. 뒤집으면 이벤트가 경로 위
+          //   좌표를 싣고, 옛 판본의 "도착 뒤에 걸어가기"가 되살아난다.
+          path.sample(e.dist, e);
+          gateApproach(ctx, e, path, stop);
+          enterGate(ctx, e, path, stop);
+        } else leakEnemy(ctx, e); // 회수는 사망 처리 단계에서
         continue;
       }
       path.sample(e.dist, e);
+      // 정지선까지 `GATE_FAN_LEAD` 이내면 경로를 떠나 자기 부채 자리로 굽는다 (gate.ts 규칙 2-c)
+      gateApproach(ctx, e, path, stop);
     }
     // 진행거리 오름차순 정렬 유지 (타게팅 규약)
     items.sort(byDistThenId);

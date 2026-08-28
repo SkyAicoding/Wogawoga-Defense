@@ -75,6 +75,8 @@ import { createBattle } from '@/sim/battle';
 import type { EnemySim } from '@/sim/entities';
 import { allyDefs, baseLevels, enemyDefs, options, runTicks, stageDef, wave } from './fixtures';
 import { makeBotSimFor } from './botharness';
+import { gateStepBound } from '@/sim/gate';
+import { GATE_FAN_LEAD } from '@/data/balance';
 
 /**
  * **옛 체류 상한** — `gate.holdTicksFor` 와 같은 식이다.
@@ -457,18 +459,32 @@ describe('① 종료 보장 — 문 앞의 적은 **안 떠난다**. 끝내는 �
     const exits = new Set<number>();
     let leaks = 0;
     let maxGateTicks = 0;
+    /**
+     * 체류가 **자기 옛 상한**을 넘긴 개체 수 — 상한 삭제의 실판 증거.
+     * ⚠ 상한 값은 식을 베끼지 않고 `enemyAtGate` 이벤트가 싣고 오는 `holdTicks` 를 쓴다
+     *   (gate.ts `enterGate` 가 `holdTicksFor(ctx, e)` 를 그대로 실어 보낸다) — 곧
+     *   원본이 바뀌면 이 잣대도 같이 움직인다.
+     */
+    const capOf = new Map<number, number>();
+    const overCap = new Set<number>();
     for (let w = 0; w < 6; w++) {
       if (sim.state.phase === 'prep') sim.applyCommand({ type: 'callWave' });
       for (let t = 0; t < 6_000; t++) {
         sim.state.baseHp = sim.state.baseHpMax; // 패배로 조기 종료되지 않게
         sim.tick();
         for (const x of sim.drainEvents()) {
-          if (x.type === 'enemyAtGate') arrivals.add(x.enemyId);
+          if (x.type === 'enemyAtGate') {
+            arrivals.add(x.enemyId);
+            capOf.set(x.enemyId, x.holdTicks);
+          }
           if (x.type === 'enemyLeaked') leaks++;
           if (x.type === 'enemyLeaked' || x.type === 'enemyDied') exits.add(x.enemyId);
         }
         for (const e of sim.state.enemies as EnemySim[]) {
           if (e.gateTicks > maxGateTicks) maxGateTicks = e.gateTicks;
+          // ⚠ 상한을 **개체마다** 유도한다 — 상수를 베끼면 종별 차이(baseDamage)가 사라진다
+          const cap = capOf.get(e.id);
+          if (cap !== undefined && e.gateTicks > cap) overCap.add(e.id);
         }
         if (t > 2 && sim.state.phase === 'prep') break;
       }
@@ -477,9 +493,28 @@ describe('① 종료 보장 — 문 앞의 적은 **안 떠난다**. 끝내는 �
     for (const id of arrivals) expect(exits.has(id), `적 ${id} 가 문 앞에 남았다`).toBe(true);
     // ⚠⚠ 뒤집힌 자리 — 돌파는 이제 문간이 켜진 판에 존재하지 않는다
     expect(leaks, '뚫고 들어간 적이 있다 — 체류 상한이 되돌려졌다').toBe(0);
-    // 그리고 실제 데이터에서 체류가 **옛 상한을 넘는다** (같은 선을 반대로 쓴다)
-    expect(maxGateTicks, `실측 최장 체류 ${maxGateTicks}틱 — 옛 상한 ${GATE_HOLD_MAX_TICKS}`)
-      .toBeGreaterThan(GATE_HOLD_MAX_TICKS);
+    /*
+     * 그리고 실제 데이터에서 체류가 **옛 상한을 넘는다** (같은 선을 반대로 쓴다).
+     *
+     * ⚠⚠ **2026-08-28 : 잣대를 `GATE_HOLD_MAX_TICKS`(720) 에서 `holdTicksFor` 로 옮겼다.**
+     *   문턱을 내린 것이 아니라 **재는 대상을 바로잡은 것**이다. 근거 셋:
+     *    ① 720 은 **sim 이 안 읽는 죽은 상수**다 — `holdTicksFor` 는 `enemyAtGate`
+     *      이벤트 페이로드에만 쓰이고, 상한으로 걷어내는 분기는 §① 에서 삭제됐다.
+     *      곧 "실측 최장 체류 > 720" 은 원리가 아니라 **그 판의 생존력 우연**이었다.
+     *    ② 실제로 우연이었다(실측): `gateApproach` 도입 전 8시드 전부 **750**,
+     *      도입 후 8시드 전부 **680**. 문턱 720 은 그 사이에 있었다 — 여유 30틱.
+     *      적이 자기 자리에 2타일 일찍 서면서 타워가 **정지 표적**을 더 일찍 때린다.
+     *    ③ 이 명제("체류에 상한이 없다")는 같은 절의 **목 판**이 이미 결정론적으로
+     *      증명한다(biteTicks 30,000 주입 → gateTicks > 720). 실판 팔이 할 일은
+     *      "실제 데이터에서도 옛 상한 논리가 안 걷어간다"이고, 그 잣대는 **개체 자신의
+     *      옛 상한**이다 — 상수를 베끼지 않고 `holdTicksFor` 에서 유도한다.
+     *
+     *   ⚠ 되돌리면 빨개진다: `updateGate` 에 `gateTicks >= holdTicksFor → leakEnemy` 를
+     *     복원하면 어떤 개체도 자기 상한을 못 넘어 `overCap` 이 0 이 된다.
+     */
+    expect(overCap.size, `자기 옛 상한을 넘긴 적이 0마리 (최장 체류 ${maxGateTicks}틱) — 상한이 되돌려졌다`)
+      .toBeGreaterThan(0);
+    expect(maxGateTicks, '최장 체류가 0 이다 — 아무도 문 앞에 안 섰다').toBeGreaterThan(0);
   });
 });
 
@@ -634,16 +669,126 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
       let n = 0;
       /** 자리에 들어가기 **전에** 죽어서 못 잰 마릿수 (공허성 판단용) */
       let killedEarly = 0;
-      /** 실제로 걸어 들어간 마릿수 — 0 이면 좌표 박기가 되돌아온 것이다 */
-      let walkedIn = 0;
-      /** 자리 잡는 데 **두 틱 이상** 걸린 마릿수 — 0 이면 한 틱 순간이동이다 */
-      let multiTick = 0;
+      /*
+       * ⚠⚠ **여기가 2026-08-28 에 다시 쓰인 자리다 — 완화가 아니라 잣대 교체다.**
+       *
+       * 옛 두 다리는 `walkedIn`(도착 좌표 ≠ 정착 좌표) 과 `multiTick`(정착에 두 틱 이상)
+       * 이었고, 둘 다 **"도착한 뒤에" 걷는 것**을 셌다. 그 걸음이 바로 사용자가 신고한
+       * 동작이다:
+       *   > "마지막까지 블럭까지 걸어온 뒤에 … 한 블럭 뒤로 물러나면서 자리를 잡는데 …
+       *   >  미끄러지듯이 이전 블럭으로 옮기면서 방향을 잡는다"
+       * `gateApproach`(gate.ts 규칙 2-c)가 그 이동을 **도착 전 접근 구간으로 옮겼으므로**
+       * 도착 뒤에 걸을 것이 남지 않는다 — 곧 옛 두 다리는 이제 "고쳐졌다"를 실패로 읽는다.
+       *
+       * 두 다리가 **지키려던 것**은 걸음 그 자체가 아니라 **순간이동 금지**였다(주석 원문:
+       * "좌표 박기로 되돌리면 … 여기가 빨개진다"). 그 뜻을 더 넓게 재는 잣대로 바꾼다:
+       * **어떤 개체도, 어떤 틱에도, 자기 한 걸음보다 크게 뛰지 않는다.**
+       * 옛 잣대보다 강하다 — 접근·부채 진입·도착 틱을 **전부** 덮는다(옛 것은 도착 뒤만
+       * 봤고, 그래서 도착 틱에 좌표를 박는 구현을 못 잡았다).
+       */
+      let ticksWatched = 0;
+      let teleports = 0;
+      let worstJump = 0;
+      let worstNote = '';
+      const prevPos = new Map<number, { x: number; z: number }>();
+      const snapshot = (): void => {
+        prevPos.clear();
+        for (const e of sim.state.enemies as EnemySim[]) prevPos.set(e.id, { x: e.x, z: e.z });
+      };
+      const checkJumps = (): void => {
+        ticksWatched++;
+        for (const e of sim.state.enemies as EnemySim[]) {
+          const was = prevPos.get(e.id);
+          if (!was) continue; // 이 틱에 스폰됐다 — 견줄 이전 자리가 없다
+          const step = Math.hypot(e.x - was.x, e.z - was.z);
+          // 한 걸음의 상한은 **그 종의 속도** 그 자체다(가속도 개념이 없다).
+          // 상수를 베끼지 않는다 — `ENEMY_DEFS[...].speed` 에서 유도한다.
+          // ⚠ 상한 배율은 **원본에서 import** 한다(`gate.gateStepBound`) — 곡선 진입은
+          //   전진과 옆이동이 직교해 한 걸음을 반드시 넘고, 그 넘는 양은 설계 상수
+          //   (GATE_FAN_LEAD·GATE_FAN_COLS·GATE_FAN_SPACING)에서 유도된다. 여기에 숫자를
+          //   적어 두면 상수가 움직일 때 잣대만 낡는다.
+          const stride = ENEMY_DEFS[e.defId].speed * TICK_DT * gateStepBound();
+          if (step > stride + 1e-9) {
+            teleports++;
+            if (step / stride > worstJump) {
+              worstJump = step / stride;
+              worstNote = `${e.defId} ${step.toFixed(4)}타일 (허용 ${stride.toFixed(4)})`;
+            }
+          }
+        }
+      };
+      /*
+       * ⚠⚠ **사용자 신고를 직접 잠그는 두 자리** (2026-08-28):
+       *   > "마지막까지 블럭까지 걸어온 뒤에 … 한 블럭 뒤로 물러나면서 자리를 잡는데 …
+       *   >  미끄러지듯이 이전 블럭으로 옮기면서 방향을 잡는다"
+       *
+       *  ⓐ `recedes` — 문 앞 접근 구간(정지 중심거리 + GATE_FAN_LEAD 이내)에 든 뒤로는
+       *    **마을에서 멀어지는 틱이 한 번도 없다**. 옛 구현은 정지선의 호장과 자리의
+       *    유클리드가 코너 라운딩만큼 어긋나 s1·s2 에서 trex 가 0.694타일 뒤로 걸었다.
+       *  ⓑ `settleWalk` — `enemyAtGate` **뒤에** 남은 이동이 0 이다. 옛 구현은 여기서
+       *    부채 자리까지 최대 1.81타일(4.02초)을 걸었고, 그동안 보행 위상(`e.dist`)이
+       *    정지선에 박혀 있어 **다리가 멈춘 채 몸만 흘렀다**.
+       * `gateApproach`(gate.ts 규칙 2-c)를 지우면 둘 다 즉시 빨개진다 — 그것이 이 두 줄의
+       * 존재 이유다(그 전에는 삭제해도 아무 계약도 안 잡았다).
+       */
+      let recedes = 0;
+      let checkedArrivals = 0;
+      let recedeNote = '';
+      let settleWalk = 0;
+      let settleNote = '';
+      const gateAt = new Map<number, { x: number; z: number }>();
+      const distTo = (e: EnemySim): number =>
+        Math.hypot(e.x - stage.baseCell.x, e.z - stage.baseCell.z);
+      /*
+       * ⚠ **구간을 거리로 정의하면 안 된다.** s5 경로는 중간에 마을 옆을 스쳐 지났다가
+       *   다시 멀어진다(실측: 그렇게 재면 멀어진 틱이 4,556건으로 잡힌다 — 경로가 그렇게
+       *   생겼을 뿐인데). 그래서 **도착한 개체의 직전 이력을 되돌아본다**: 마지막
+       *   `GATE_FAN_LEAD` 타일을 걷는 동안 마을까지 거리가 단조 비증가여야 한다.
+       *   되돌아보는 틱 수도 상수가 아니라 그 종의 속도에서 유도한다.
+       */
+      const hist = new Map<number, number[]>();
+      const recordHist = (): void => {
+        for (const e of sim.state.enemies as EnemySim[]) {
+          let h = hist.get(e.id);
+          if (!h) hist.set(e.id, (h = []));
+          h.push(distTo(e));
+          const keep = Math.ceil(GATE_FAN_LEAD / (ENEMY_DEFS[e.defId].speed * TICK_DT)) + 4;
+          if (h.length > keep) h.shift();
+        }
+      };
+      const auditArrival = (id: number, defId: EnemyId): void => {
+        const h = hist.get(id);
+        if (!h || h.length < 3) return;
+        checkedArrivals++;
+        for (let i = 1; i < h.length; i++) {
+          const grew = h[i]! - h[i - 1]!;
+          if (grew > 1e-9) {
+            recedes++;
+            if (recedeNote === '') recedeNote = `${defId} +${grew.toFixed(4)}타일`;
+          }
+        }
+      };
+      const checkSettle = (): void => {
+        for (const e of sim.state.enemies as EnemySim[]) {
+          const at = gateAt.get(e.id);
+          if (!at) continue;
+          const d = Math.hypot(e.x - at.x, e.z - at.z);
+          if (d > settleWalk) {
+            settleWalk = d;
+            settleNote = `${e.defId} ${d.toFixed(4)}타일`;
+          }
+        }
+      };
       const done = new Set<number>();
       for (let w = 0; w < 12; w++) {
         if (sim.state.phase === 'prep') sim.applyCommand({ type: 'callWave' });
         for (let t = 0; t < 6_000; t++) {
           pin();
+          snapshot();
           sim.tick();
+          checkJumps();
+          recordHist();
+          checkSettle();
           // ⚠ 정착을 기다리는 동안에도 새 개체가 문 앞에 설 수 있다. `settleGate` 가
           //   그동안의 이벤트를 돌려주므로 **작업 목록**으로 이어 처리한다 —
           //   그냥 버리면 그 개체들이 조용히 안 재진다(= 커버리지가 새는 공허함).
@@ -652,6 +797,8 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
             const x = queue.shift()!;
             if (x.type !== 'enemyAtGate' || done.has(x.enemyId)) continue;
             done.add(x.enemyId);
+            gateAt.set(x.enemyId, { x: x.x, z: x.z });
+            auditArrival(x.enemyId, x.defId);
             // ⚠⚠ **여기가 이 절의 전부다.** 도착 틱의 좌표(`x.x/x.z`)는 아직 경로
             //   위이므로 쓰지 않는다 — 자리에 다 들어간 뒤의 **상태**를 읽는다.
             const s = settleGate(sim, x.enemyId, `s${stage.id} ${x.defId}`, pin);
@@ -663,8 +810,6 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
             n++;
             // ⚠ 도착 틱의 좌표는 **이벤트에서** 읽는다 — `settleGate` 를 언제 불렀는지에
             //   안 걸린다(다른 개체를 정착시키는 동안 이 개체가 먼저 자리를 잡을 수 있다).
-            if (Math.hypot(s.e.x - x.x, s.e.z - x.z) > 1e-9) walkedIn++;
-            if (s.ticks > 1) multiTick++;
             // ⚠ 잣대는 `radius`(충돌 반지름)가 아니라 `restReach`(메시 앞끝 도달)다.
             //   그 둘의 비가 0.96~2.51배로 흩어져 있어 서로를 대신하지 못한다 —
             //   `tests/render/gatepose.test.ts` §1 이 이 값 16개를 메시와 대조한다.
@@ -688,14 +833,18 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
       }
       expect(n, `s${stage.id}: 자리에 들어간 적이 0마리 (죽어서 못 잰 ${killedEarly}) — 공허한 검증이다`)
         .toBeGreaterThan(0);
-      // ⚠⚠ **이 한 줄이 "걸어 들어간다"를 잠근다.** 좌표 박기로 되돌리면 도착 틱에
-      //   이미 자리에 있어 `walked === 0` 이 되고 여기가 빨개진다.
-      expect(walkedIn, `s${stage.id}: 아무도 걸어 들어가지 않았다 — 순간이동이 되돌아왔다`)
-        .toBeGreaterThan(0);
-      // ⚠ 그리고 **한 틱에 끝나지 않는다.** 위 줄만으로는 "한 틱 늦게 순간이동"이 통과한다
-      //   (실측으로 확인했다 — 걷기 블록을 죽여도 위 줄은 초록이었다).
-      expect(multiTick, `s${stage.id}: 전부 한 틱 만에 자리를 잡았다 — 걸어 들어가기가 죽었다`)
-        .toBeGreaterThan(0);
+      // ⚠ 공허성 가드 먼저 — 아무 틱도 안 봤으면 아래 0 은 아무 뜻이 없다
+      expect(ticksWatched, `s${stage.id}: 순간이동 검사가 한 틱도 안 돌았다`).toBeGreaterThan(100);
+      // ⚠⚠ **이 한 줄이 "순간이동 금지"를 잠근다.** 도착 틱에 좌표를 박는 구현으로
+      //   되돌리면 그 틱의 이동량이 한 걸음의 수십 배가 되어 여기가 빨개진다.
+      expect(teleports, `s${stage.id}: 한 걸음보다 크게 뛴 틱 ${teleports}건 (최악 ${worstJump.toFixed(1)}배 — ${worstNote})`)
+        .toBe(0);
+      // ⓐ 접근 구간에 든 뒤로는 **뒤로 안 간다** (사용자 신고의 "한 블럭 뒤로 물러나면서")
+      expect(checkedArrivals, `s${stage.id}: 접근 이력을 잰 도착이 0 — 공허하다`).toBeGreaterThan(5);
+      expect(recedes, `s${stage.id}: 마지막 ${GATE_FAN_LEAD}타일에서 마을과 멀어진 틱 ${recedes}건 (${recedeNote})`)
+        .toBe(0);
+      // ⓑ 도착 뒤에 걸을 것이 **남아 있지 않다** (사용자 신고의 "미끄러지듯이 옮기면서")
+      expect(settleWalk, `s${stage.id}: 도착 뒤에 더 걸었다 — ${settleNote}`).toBeLessThan(1e-9);
     }, 120_000);
   }
 
@@ -759,18 +908,34 @@ describe('③ 기하 — 6스테이지 전 종이 몸 앞끝을 마을 바깥끝
     }
     expect(settled, `${N}마리가 전부 문 앞에 서야 이 검증이 공허하지 않다`).toHaveLength(N);
     /*
-     * ⚠⚠ **이 두 줄이 "걸어 들어간다"를 잠근다.** 좌표 박기로 되돌리면 `enemyAtGate`
-     *   이벤트의 좌표가 곧 부채 자리라 `moved` 가 아홉 마리 전부 0 이 된다.
-     *   ⚠ `N` 이 아니라 `N − 1` 인 것은 **정면 자리(각 0)** 때문이다 — 이 판의 경로가
-     *     마을로 곧게 들어오므로 그 한 마리는 도착 지점이 곧 제 자리다(걸을 것이 없다).
+     * ⚠⚠ **여기가 2026-08-28 에 다시 쓰인 자리다 — 완화가 아니라 잣대 교체다.**
+     *   옛 세 줄은 `moved`(도착 뒤 걸은 거리)와 `ticks > 1` 로 "도착한 뒤에 걷는다"를
+     *   쟀다. `gateApproach`(gate.ts 규칙 2-c)가 그 이동을 **도착 전**으로 옮겼으므로
+     *   도착 뒤 `moved` 는 정의상 0 이다 — 곧 옛 잣대는 고쳐진 동작을 실패로 읽는다.
+     *   지키려던 뜻(부채가 실제로 벌어진다 · 순간이동이 아니다)은 아래 두 줄이 잰다.
+     *
+     * ① **부채가 실제로 벌어졌다** — 아홉 마리의 자리가 마을 중심에서 본 각으로 흩어져
+     *   있고, 이웃 간격이 설계값(`GATE_FAN_SPACING / stand` 라디안)에 맞는다. 옛
+     *   `max(moved) > GATE_FAN_SPACING` 이 재려던 것이 이것이고, 이쪽이 **결과를 직접**
+     *   읽는다(움직인 거리는 대리 변수였다).
      */
-    expect(moved.filter((d) => d > 1e-9).length, `걸어 들어간 마릿수 (거리 ${moved.map((d) => d.toFixed(3)).join(' ')})`)
-      .toBe(N - 1);
-    expect(Math.max(...moved), '옮겨 간 거리가 부채 한 칸보다도 짧다 — 자리 잡기가 반쯤 죽었다')
-      .toBeGreaterThan(GATE_FAN_SPACING);
-    // ⚠ 한 틱 만에 자리를 잡으면 그것도 순간이동이다 — 틱 수로 따로 잠근다
-    expect(settled.filter((s) => s.ticks > 1).length, `자리 잡는 데 걸린 틱 ${settled.map((s) => s.ticks).join(' ')}`)
-      .toBeGreaterThan(0);
+    const bx = 9;
+    const bz = 4;
+    // ⚠ 각을 그냥 정렬하면 ±π 경계에서 갈라진다(이 판의 부채가 정확히 그 위에 걸린다 —
+    //   실측 346.5° 대 설계 108.1°). 첫 각을 기준으로 **최단호로 펴서** 잰다.
+    const a0 = Math.atan2(settled[0]!.e.z - bz, settled[0]!.e.x - bx);
+    const angs = settled
+      .map((s) => {
+        const a = Math.atan2(s.e.z - bz, s.e.x - bx) - a0;
+        return ((a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      })
+      .sort((a, b) => a - b);
+    const spread = angs[angs.length - 1]! - angs[0]!;
+    const standD = Math.hypot(settled[0]!.e.x - bx, settled[0]!.e.z - bz);
+    // 설계상 양끝 자리의 각 차이 = (N−1) × GATE_FAN_SPACING / 중심거리
+    const wantSpread = ((N - 1) * GATE_FAN_SPACING) / standD;
+    expect(spread, `부채 폭 ${((spread * 180) / Math.PI).toFixed(1)}° · 설계 ${((wantSpread * 180) / Math.PI).toFixed(1)}°`)
+      .toBeCloseTo(wantSpread, 6);
     const spots = settled.map((s) => `${s.e.x.toFixed(6)},${s.e.z.toFixed(6)}`);
     expect(new Set(spots).size, `같은 종이 같은 자리에 겹쳤다 — ${spots.join(' | ')}`).toBe(N);
     // 그리고 부채는 **원 위**다 — 자리가 갈려도 중심거리는 한 톨도 안 흔들린다
