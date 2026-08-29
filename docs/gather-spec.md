@@ -2390,8 +2390,8 @@ export const ALL_ALLY_IDS: readonly AllyId[] = ['gatherer', 'clubber', 'slinger'
 근거: (a) 기존 주석이 "싼 것부터"라는 규약을 적어 뒀고 채집꾼이 가장 싸다(70), (b) 채집은
 준비 국면의 첫 행동이라 손이 먼저 닿는 자리가 맞다.
 **결정론 안전 확인(실측)**: `grep -rn "ALL_ALLY_IDS" src/sim/` → **0건**. 참조처는
-`data/allies.ts` · `data/index.ts` · `debug/labs/meshlab.ts` · `ui/screens/battlehud.ts` ·
-`ui/widgets/wavepreview.ts` 뿐이다.
+`data/allies.ts` · `data/index.ts` · `debug/labs/meshlab.ts` · `ui/screens/battlehud.ts`
+넷뿐이다. *(2026-08-29 갱신 — 옛 목록의 다섯째 `ui/widgets/wavepreview.ts` 는 삭제된 파일이다.)*
 
 **(c) 배지 일반화** — `battlehud.ts:465`의 하드코딩을 데이터 기반으로:
 ```ts

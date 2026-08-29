@@ -44,17 +44,31 @@ test('전투 준비 단계: 미리보기 띠는 없고, 손패 상성 경고는 
     const g = (window as unknown as { __wgd: Hooks }).__wgd;
     g.sim.state.prepTicksLeft = 1e9;
   });
-  await page.waitForTimeout(600);
+
+  /*
+   * ⚠⚠ **고정 대기(waitForTimeout)를 쓰면 안 된다.** HUD 는 rAF 루프가 미는 폴링이라
+   *   상태를 넣은 것과 DOM 이 그것을 그리는 것 사이에 정해진 시간이 없다. 전투 첫
+   *   프레임들은 셰이더 컴파일로 멈칫하고(headless swiftshader 에서 특히), 그 멈칫이
+   *   대기 시간을 넘긴 판에서는 **낡은 DOM 을 세게 된다.**
+   *   실측: 이 파일이 `waitForTimeout(500)` 을 쓰던 판본은 4회 중 2회 빨갰다
+   *   (게임 쪽은 멀쩡했다 — 순전히 계기가 흔들린 것이다).
+   *   그래서 아래는 전부 **조건으로** 기다린다(자동 재시도 expect / expect.poll).
+   */
 
   // ── 통제: 정말 준비 단계이고 손패가 그려져 있다 ─────────────────────────────
   // 이 줄이 없으면 아래 '띠가 없다'가 **전투에 못 들어가도** 초록이 된다.
+  await expect
+    .poll(
+      () => page.evaluate(() => (window as unknown as { __wgd: Hooks }).__wgd.sim.state.phase),
+      { message: '통제 실패: 준비 단계가 아니다' },
+    )
+    .toBe('prep');
+  await expect(page.locator('.callwave'), '웨이브 시작 버튼이 없다 = prep HUD 가 아니다').toBeVisible();
+  await expect(page.locator('.tcard'), '손패 카드가 안 그려졌다').toHaveCount(3);
   const st = await page.evaluate(() => {
     const g = (window as unknown as { __wgd: Hooks }).__wgd;
     return { phase: g.sim.state.phase, wave: g.sim.state.waveIndex };
   });
-  expect(st.phase, '통제 실패: 준비 단계가 아니다').toBe('prep');
-  await expect(page.locator('.callwave')).toBeVisible();
-  expect(await page.locator('.tcard').count(), '손패 카드가 안 그려졌다').toBeGreaterThan(0);
 
   // ── ① 미리보기 띠가 없다 ────────────────────────────────────────────────────
   expect(await page.locator('.wave-preview').count(), '미리보기 띠가 아직 있다').toBe(0);
@@ -73,17 +87,21 @@ test('전투 준비 단계: 미리보기 띠는 없고, 손패 상성 경고는 
       { towerId: 'spear', cost: 50 },
     ];
   });
-  await page.waitForTimeout(500);
+  // 손패 서명이 바뀌면 카드가 새로 그려지고, 그 프레임에 preview 를 다시 읽는다.
+  // 몇 프레임 뒤가 될지는 모르므로 **회색이 될 때까지** 기다린다.
+  await expect
+    .poll(() => page.locator('.tcard.is-countered').count(), {
+      message: '투석기가 웨이브1(흩어짐)에 회색으로 안 뜬다 — previewWave 배선이 끊겼다',
+      timeout: 10_000,
+    })
+    .toBeGreaterThan(0);
 
-  const marked = await page.locator('.tcard.is-countered').count();
   // ⚠ `.tcard-warn` 은 상성이 없어도 **DOM 에는 있다**(display:none 으로만 감춘다).
-  //   그래서 진단 문구에는 **보이는 것**만 센다 — 안 그러면 "경고 아이콘 3개"가
-  //   실패 메시지에 찍혀 원인을 정반대로 읽게 만든다.
-  const warns = await page.locator('.tcard-warn:visible').count();
-  expect(
-    marked,
-    `투석기가 웨이브1(흩어짐)에 회색으로 안 뜬다 — previewWave 배선이 끊겼다 (경고 아이콘 ${warns}개)`,
-  ).toBeGreaterThan(0);
+  //   그래서 여기서도 **보이는 것**만 센다 — 개수로 재면 항상 3이라 아무 말도 못 한다.
+  await expect(
+    page.locator('.tcard-warn:visible'),
+    '회색은 됐는데 특성 아이콘이 안 보인다 — 표시 절반만 살았다',
+  ).toHaveCount(1);
 
   expect(errors, '콘솔 에러').toEqual([]);
 });

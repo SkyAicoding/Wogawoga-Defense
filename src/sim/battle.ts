@@ -171,7 +171,9 @@ class Battle implements BattleSim {
       prepTicksLeft: PREP_TICKS_FIRST,
       earlyCallBonusGold: Math.floor(PREP_TICKS_FIRST * EARLY_CALL_RATE),
       hand,
-      // 읽기 전용 사본 — UI(미리보기 수요 막대)가 "내 덱"을 알아야 한다
+      // 읽기 전용 사본 — 판을 만들 때 한 번만 뜬다.
+      // ⚠ 읽던 유일한 화면(미리보기 띠의 수요 막대)은 2026-08-29 에 없앴다. 계약(뷰) 필드라
+      //   남겨 둔다 — 손패 서열 표시 같은 것이 생기면 곧바로 필요하고, 비용은 판당 배열 복사 한 번이다.
       deck: [...opts.deck],
       refreshCost: 0,
       enemies: world.enemies.items,

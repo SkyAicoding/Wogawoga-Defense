@@ -261,7 +261,10 @@ export const ko: Record<string, string> = {
   //   (widgets/card.ts — 회색 오버레이 옆 특성 아이콘의 툴팁 낱말).
   'battle.preview.weakVs': '{n} 상대로 약해요',
 
-  // 특성 — 이름은 배지에, 설명은 상세 한 줄에 쓴다
+  // 특성 — **이름만 쓰인다** (손패 카드의 상성 경고 툴팁, widgets/card.ts).
+  // ⚠ `.desc` 열 줄은 지금 아무도 안 부른다. 부르던 곳은 없앤 미리보기 띠의 상세 한 줄이다.
+  //   지우지 않은 이유: 이건 화면 부품 낱말이 아니라 **게임 규칙 설명**이라 도감이 그대로
+  //   쓸 수 있다. ko/en 짝은 i18n 계약이 지켜 주므로 한쪽만 지우는 사고는 안 난다.
   'trait.air.name': '하늘',
   'trait.air.desc': '날아서 지나가요 — 공중을 때리는 타워만 닿아요',
   'trait.shield.name': '방패',

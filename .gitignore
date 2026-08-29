@@ -12,3 +12,6 @@ tests/**/__*.test.ts
 
 # 서브에이전트 격리용 임시 worktree — 일회용 작업 공간이지 저장소 내용이 아니다.
 .claude/worktrees/
+
+# 임시 계측 파일 — CLAUDE.md 7번(“zz*”가 git add -A 로 쓸려 들어간 사고)의 자물쇠
+tests/**/zz*
