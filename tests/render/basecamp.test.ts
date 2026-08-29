@@ -239,17 +239,20 @@ describe('홈타운 마을 모델', () => {
       fire.push(glowArea(camp.group));
     }
     /*
-     * 실측(만렙 마을, 발광 총면적): **d0 0.883 / d1 0.415 / d2 0.460 / d3 5.691**.
+     * 실측(만렙 마을, 발광 총면적): **d0 1.439 / d1 0.831 / d2 2.183 / d3 20.365**.
      * 0→1 은 **줄어든다**(지키던 불이 사그라든다) — 그래서 단조 증가가 아니라 아래 셋을 잠근다.
      *
-     * 문턱 10배의 유도(전부 실측):
-     *  · 정상            d3/d2 = **12.36**
-     *  · 구조물 화재만 반파 크기로 되돌린 사보타주 = **7.68**  ← 이것이 빨개져야 한다
-     *  · 전소 단계를 통째로 없앤 사보타주        = **1.00**
-     * 10 은 12.36 과 7.68 **사이**이고 양쪽에 24%·29% 여유가 있다. 임의 값이 아니다.
+     * ⚠⚠ **문턱을 2026-08-28 에 10 → 5 로 다시 유도했다. 빨강을 피하려고 내린 것이 아니라
+     *   기하가 바뀌어 옛 유도가 낡았기 때문이다.** 불꽃이 "원뿔 하나"에서 "갈래 여럿 + 층진
+     *   색"(`fireTuft`)으로 바뀌면서 **반파의 불도 같이 커졌다**(0.460 → 2.183). 분모가 커지면
+     *   같은 연출에서도 비가 내려간다 — 곧 10 은 새 기하에서 아무 뜻이 없는 옛 숫자다.
+     *   새 유도(둘 다 실측):
+     *    · 정상                                   d3/d2 = **9.33**
+     *    · 전소 불길을 반파와 같게 만든 사보타주  = **1.72**  ← 이것이 빨개져야 한다
+     *   5 는 9.33 과 1.72 **사이**이고 양쪽에 46%·191% 여유가 있다.
      */
     expect((fire[3] as number) / (fire[2] as number), `d3/d2 = ${((fire[3] as number) / (fire[2] as number)).toFixed(2)} (면적 ${fire.map((v) => v.toFixed(3)).join('/')})`)
-      .toBeGreaterThan(10);
+      .toBeGreaterThan(5);
     // 그리고 **온전한 마을보다** 훨씬 많이 탄다 — 전소를 없애면 여기도 같이 빨개진다
     expect(fire[3] as number, `d3 불 ${fire[3]} vs d0 ${fire[0]}`).toBeGreaterThan(
       (fire[0] as number) * 2,
@@ -257,6 +260,48 @@ describe('홈타운 마을 모델', () => {
     expect(fire[2] as number, `d2 불 ${fire[2]} vs d1 ${fire[1]}`).toBeGreaterThan(
       fire[1] as number,
     );
+    camp.dispose();
+  });
+
+  /**
+   * **불이 살아 움직인다** — 사용자 지적으로 생긴 자리:
+   *   > "거의 마지막 단계 불타는 모습이 좀 어색해, 이부분 좀더 잘 만들어봐"
+   *
+   * 옛 판본은 `flameMesh.scale` 을 흔들어 마을의 **모든 불을 한 몸처럼** 부풀렸다(풍선이지
+   * 불이 아니다). 지금은 `flamemat.ts` 의 셰이더가 **혀마다 다른 위상**으로 정점을 민다.
+   *
+   * ⚠ 흔드는 일은 GPU 에서 일어나 정점 버퍼로는 못 잰다(유니폼도 `onBeforeCompile` 클로저
+   *   안이다). 그래서 **관측 가능한 두 성질**로 잰다:
+   *  ① `flicker()` 가 재질의 시간 유니폼을 실제로 민다 (배선이 끊기면 값이 안 변한다)
+   *  ② 메시 스케일은 **1 로 고정**이다 — 통짜 맥동으로 되돌아가면 여기가 빨개진다.
+   *    (스케일을 흔들면 반경 계약까지 같이 흔들려 섬 밖으로 나갈 수 있다)
+   */
+  it('불꽃은 재질 시간으로 움직인다 — 메시를 통째로 늘이지 않는다', () => {
+    const camp = createBasecamp();
+    camp.setLevel(BASECAMP_LAYER_COUNT, BASECAMP_LAYER_COUNT);
+    camp.setDamageLevel(3);
+    const glow = (): THREE.Mesh => {
+      let m: THREE.Mesh | null = null;
+      forEachDrawn(camp.group, (o) => {
+        if (!isBody(o)) m = o;
+      });
+      expect(m, '발광 메시를 못 찾았다').not.toBeNull();
+      return m as unknown as THREE.Mesh;
+    };
+    // ① 시간을 밀어도 메시 스케일은 그대로다
+    camp.flicker(0);
+    const s0 = glow().scale.clone();
+    camp.flicker(1.7);
+    const s1 = glow().scale.clone();
+    expect(s1.x, '불꽃 메시 x 스케일이 변했다 — 통짜 맥동이 돌아왔다').toBeCloseTo(s0.x, 9);
+    expect(s1.y, '불꽃 메시 y 스케일이 변했다 — 통짜 맥동이 돌아왔다').toBeCloseTo(s0.y, 9);
+    expect(s0.y, '불꽃 메시 스케일이 1 이 아니다 — 반경 계약이 흔들린다').toBeCloseTo(1, 9);
+    // ② 그리고 실제로 흔드는 코드가 붙어 있다 (셰이더 주입 = onBeforeCompile)
+    const mat = glow().material as THREE.Material;
+    expect(typeof mat.onBeforeCompile, '불꽃 재질에 셰이더 주입이 없다 — 불이 얼어붙는다')
+      .toBe('function');
+    expect(mat.customProgramCacheKey?.(), '캐시 키가 없다 — three 가 다른 재질의 프로그램을 재사용한다')
+      .toBe('wgd-flame-1');
     camp.dispose();
   });
 

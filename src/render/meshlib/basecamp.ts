@@ -41,7 +41,8 @@
  */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { C, flatMat, glowMat } from '../palette';
+import { C, flatMat } from '../palette';
+import { makeFlameMaterial } from './flamemat';
 import { buildParts, type PartSpec } from './factory';
 
 export interface Basecamp {
@@ -1135,6 +1136,78 @@ function skullPosts(d: Dmg): PartSpec[] {
  * 모닥불 불꽃 — 레벨이 오르면 커지고, 피해가 크면 작아지는 대신 잔해에 불이 붙는다.
  * 레이어와 달리 **누적하지 않는다** (같은 자리의 불이 겹쳐 타면 안 되므로 통짜 교체).
  */
+
+/**
+ * 발광(glowMat) 메시의 파트 — 모닥불과 **마을 화재**를 한 벌로 만든다.
+ *
+ * ⚠⚠ 여기 넣는 것이 곧 드로우콜 0 증가다. 불꽃을 별도 메시로 빼면 마을이 3콜이 되고,
+ *   전투 예산(e2e 기준 프레임 56콜)에 그대로 얹힌다. 그래서 **색이 다른 불도 같은 메시**에 둔다
+ *   (glowMat 은 정점 색을 쓰므로 색을 나누는 데 재질이 더 필요 없다).
+ */
+/**
+ * **불꽃 한 무더기** — 이 게임의 불을 그리는 유일한 함수. 어디에 피든 이걸 부른다.
+ *
+ * ── 왜 이렇게 생겼나 (사용자 지적) ───────────────────────────────────────────
+ *   > "거의 마지막 단계 불타는 모습이 좀 어색해, 이부분 좀더 잘 만들어봐"
+ * 옛 판본은 큰 원뿔 **하나**였다. 로우폴리에서 매끈한 원뿔 하나는 불이 아니라 **도형**으로
+ * 읽힌다 — 실루엣이 좌우 대칭이고 색이 한 겹이라 "주황 삼각형"이다. 불로 읽히는 조건 셋:
+ *  ① **여러 갈래** — 높이·굵기·기울기가 서로 다른 혀가 겹쳐야 윤곽이 불규칙해진다
+ *  ② **색이 층진다** — 밑이 어둡고 붉고, 위로 갈수록 밝고 노랗다. 한 색이면 평면이다
+ *  ③ **낮은 분할** — `seg: 4~5` 의 각진 실루엣이 오히려 불꽃 혀처럼 보인다(6은 원뿔)
+ * 움직임은 지오메트리가 아니라 `flamemat.ts` 가 정점을 흔들어 만든다(혀마다 따로).
+ *
+ * @param x,z  밑동 위치 · @param s 크기 배율 · @param seed 갈래 배치를 흩는 정수
+ */
+function fireTuft(x: number, z: number, s: number, seed: number): PartSpec[] {
+  // 결정론이 필요 없는 연출이지만(렌더 전용) 같은 자리에 같은 불이 서야 캐시가 뜻이 있다
+  const r = (i: number): number => {
+    const h = Math.sin(seed * 12.9898 + i * 78.233) * 43758.5453;
+    return h - Math.floor(h);
+  };
+  /*
+   * ⚠⚠ **비율이 이 함수의 전부다.** 처음 판본은 갈래를 폭의 5배까지 길게 뽑았는데,
+   *   화면에서 불이 아니라 **노란 수정 조각**으로 읽혔다(뾰족하고 밖으로 뻗어 별처럼 보였다).
+   *   불은 **물방울**이다 — 밑이 넓고 위로 갈수록 좁아지며, 전체 높이가 폭의 2배 남짓이다.
+   *   그래서 세 가지를 묶어 둔다: 갈래 길이 ≤ 폭의 4배 · 기울기 0.16rad · 밖으로 벌어지는
+   *   거리 ≤ 0.15s. 셋 중 하나만 늘려도 다시 별이 된다.
+   */
+  /*
+   * ⚠⚠ **세로로 색이 층져야 불이다.** 처음 판본은 몸통(주황) 안에 심지를 **숨겨** 두어
+   *   화면에서 온통 같은 주황이었고, 가까이서 보면 "주황 원뿔 밭"이었다. 불이 불로 읽히는
+   *   것은 **아래가 붉고 위가 노랗다**는 세로 그라디언트다. 그래서 세 겹을 **높이로 겹친다**:
+   *     밑동(암적) 0 ~ 0.30s → 몸통(주황) 0.10 ~ 0.72s → 심지(노랑) 0.34 ~ 1.02s
+   *   심지가 몸통보다 **높아야** 노란 끝이 밖으로 나온다 — 안에 넣으면 안 보인다.
+   */
+  const parts: PartSpec[] = [
+    // ① 밑동 — 넓고 낮고 가장 붉다. 장작에 붙은 부분
+    { kind: 'cone', pos: [x, 0.14 * s, z], scale: [0.54 * s, 0.3 * s, 0.54 * s], color: 0xc42a08, seg: 5 },
+    // ② 몸통 — 주황. 덩어리의 주인. 살짝 기울여 좌우 대칭을 깬다
+    { kind: 'cone', pos: [x + 0.02 * s, 0.36 * s, z - 0.01 * s], rot: [0.05, 0, -0.07], scale: [0.38 * s, 0.58 * s, 0.38 * s], color: C.fire, seg: 5 },
+    /*
+     * ③ 심지 — 몸통 위로 **살짝만** 솟는다. 세로 그라디언트를 만드는 줄이지만,
+     *   ⚠ 가늘고 길게 뽑으면(폭의 4배 넘게) 불이 아니라 **돛/지느러미**로 읽힌다.
+     *   폭 대비 2.7배가 상한이고, 기울여 두면 그 상한 안에서도 곧지 않게 보인다.
+     */
+    { kind: 'cone', pos: [x - 0.02 * s, 0.6 * s, z + 0.03 * s], rot: [-0.08, 0, 0.13], scale: [0.2 * s, 0.54 * s, 0.2 * s], color: 0xffd257, seg: 4 },
+  ];
+  // ④ 곁불 둘 — 밑동 옆에 낮게. 윤곽을 깨되 위로는 안 넘어선다(넘으면 다시 별이 된다)
+  for (let i = 0; i < 2; i++) {
+    const a = r(i) * Math.PI * 2;
+    const off = (0.16 + r(i + 9) * 0.1) * s;
+    const wide = (0.1 + r(i + 6) * 0.05) * s;
+    const tall = wide * (2.2 + r(i + 3) * 1.2);
+    parts.push({
+      kind: 'cone',
+      pos: [x + Math.cos(a) * off, 0.09 * s + tall * 0.5, z + Math.sin(a) * off],
+      rot: [Math.sin(a) * 0.26, 0, -Math.cos(a) * 0.26],
+      scale: [wide, tall, wide],
+      color: i === 0 ? 0xff7a18 : 0xffa32a,
+      seg: 4,
+    });
+  }
+  return parts;
+}
+
 /**
  * 마을에 **불이 붙은 자리** — 슬롯과 크기 배율. 레벨이 오를수록 탈 것이 늘어난다.
  *
@@ -1144,14 +1217,16 @@ function skullPosts(d: Dmg): PartSpec[] {
  *   1.45 를 안 넘는다. `tests/render/basecamp.test.ts` 가 전 레벨 × 전 피해로 잰다.
  */
 const BURN_SITES: readonly (readonly [number, [number, number], number])[] = [
-  [1, HUT_A, 1.0],
-  [2, HUT_B, 0.86],
-  [2, [WALL_R * 0.72, -WALL_R * 0.5], 0.7],
-  [3, [0.2, -0.1], 0.78],
-  [3, TOTEM, 0.72],
-  [4, [-WALL_R * 0.66, WALL_R * 0.42], 0.68],
-  [5, HALL, 1.0],
-  [5, LEANTO, 0.8],
+  // ⚠ 배율을 넓게 흩는다(0.55~1.15). 비슷한 크기가 늘어서면 불이 아니라 **원뿔 밭**으로
+  //   읽힌다 — 실제로 균일하게 뒀더니 가까이서 그렇게 보였다.
+  [1, HUT_A, 1.15],
+  [2, HUT_B, 0.72],
+  [2, [WALL_R * 0.72, -WALL_R * 0.5], 0.55],
+  [3, [0.2, -0.1], 0.95],
+  [3, TOTEM, 0.6],
+  [4, [-WALL_R * 0.66, WALL_R * 0.42], 0.58],
+  [5, HALL, 1.1],
+  [5, LEANTO, 0.66],
 ];
 
 /**
@@ -1159,7 +1234,7 @@ const BURN_SITES: readonly (readonly [number, [number, number], number])[] = [
  *
  * ⚠⚠ 여기 넣는 것이 곧 드로우콜 0 증가다. 불꽃을 별도 메시로 빼면 마을이 3콜이 되고,
  *   전투 예산(e2e 기준 프레임 56콜)에 그대로 얹힌다. 그래서 **색이 다른 불도 같은 메시**에 둔다
- *   (glowMat 은 정점 색을 쓰므로 색을 나누는 데 재질이 더 필요 없다).
+ *   (재질이 정점 색을 쓰므로 색을 나누는 데 재질이 더 필요 없다).
  */
 function flames(level: number, d: Dmg): PartSpec[] {
   const [x, z] = HEARTH;
@@ -1170,58 +1245,46 @@ function flames(level: number, d: Dmg): PartSpec[] {
    * 반대로 **가장 커진다**: 그때 이 자리는 "마을의 화덕"이 아니라 **마을을 태우는 불기둥**이다.
    * 뜻이 뒤집히는 자리라 삼항 하나로 뭉개지 않고 단계를 그대로 적는다.
    */
-  const s = grow * (d === 0 ? 1 : d === 1 ? 0.76 : d === 2 ? 0.48 : 1.35);
-  const parts: PartSpec[] = [
-    { kind: 'cone', pos: [x, 0.32 * s + 0.08, z], scale: [0.4 * s, 0.64 * s, 0.4 * s], color: C.fire, seg: 6 },
-    { kind: 'cone', pos: [x + 0.04, 0.26 * s + 0.08, z + 0.03], scale: [0.25 * s, 0.44 * s, 0.25 * s], color: 0xffd24a, seg: 5 },
-  ];
-  if (d === 0) {
-    parts.push(
-      { kind: 'cone', pos: [x - 0.17 * s, 0.24 * s + 0.06, z + 0.12 * s], rot: [0, 0, 0.42], scale: [0.16 * s, 0.34 * s, 0.16 * s], color: C.ember, seg: 4 },
-      { kind: 'cone', pos: [x + 0.18 * s, 0.22 * s + 0.06, z - 0.13 * s], rot: [0, 0, -0.4], scale: [0.14 * s, 0.3 * s, 0.14 * s], color: 0xffb43a, seg: 4 },
-    );
-  }
+  const s = grow * (d === 0 ? 1 : d === 1 ? 0.76 : d === 2 ? 0.48 : 1.15);
+  const parts: PartSpec[] = fireTuft(x, z, s, 11);
   if (!wrecked(d)) return parts;
 
   /*
    * 반파(2)·전소(3) — 구조물에 불이 붙는다. 두 단계의 차이는 **크기와 개수**다:
-   *  · 2 : 무너진 자리 몇 곳에서 잔불이 오른다 (배율 0.62)
-   *  · 3 : 전 슬롯이 타고, 불길이 지붕 높이를 넘어 **마을이 통째로 불덩이**가 된다 (배율 1.55)
-   * 곧 "받을수록 더 불탄다"가 **연속이 아니라 두 단계의 대비**로 읽힌다.
+   *  · 2 : 무너진 자리 몇 곳에서 잔불이 오른다 (배율 0.5)
+   *  · 3 : 전 슬롯이 타고, 자리마다 갈래가 두 무더기씩 겹쳐 **마을이 통째로 불덩이**가 된다
    */
-  const burn = d === 2 ? 0.62 : 1.55;
+  const burn = d === 2 ? 0.5 : 1.1;
+  let seed = 3;
   for (const [need, [bx, bz], mul] of BURN_SITES) {
     if (level < need) continue;
-    const k = burn * mul;
-    parts.push({
-      kind: 'cone',
-      pos: [bx, 0.18 * k + 0.06, bz],
-      scale: [0.2 * k, 0.42 * k, 0.2 * k],
-      color: C.ember,
-      seg: 4,
-    });
-    if (d === 3) {
-      // 심지(안쪽 밝은 불) — 겉불보다 좁고 짧아 두 겹으로 읽힌다
-      parts.push({
-        kind: 'cone',
-        pos: [bx + 0.03, 0.13 * k + 0.05, bz - 0.02],
-        scale: [0.12 * k, 0.28 * k, 0.12 * k],
-        color: 0xffc03a,
-        seg: 4,
-      });
+    /*
+     * ⚠ 불은 **슬롯보다 안쪽**에 세운다. 슬롯은 반경 1.0 고리 위이고 무더기가 갈래까지
+     *   0.3 남짓 벌어지므로, 슬롯에 그대로 세우면 `BASECAMP_MAX_RADIUS`(1.45)를 넘는다 —
+     *   실측으로 Lv2 전소가 **1.464** 로 섬 밖으로 나갔고 계약이 잡았다. 0.82 로 당기면
+     *   구조물 잔해 위에 얹힌 그림은 그대로이고 반경만 들어온다.
+     */
+    const ix = bx * 0.82;
+    const iz = bz * 0.82;
+    parts.push(...fireTuft(ix, iz, burn * mul, (seed += 7)));
+    /*
+     * 큰 자리에만 무더기를 하나 더 겹친다. ⚠ 전 자리에 겹치면 비슷한 불이 열여섯이 되어
+     *   "불타는 마을"이 아니라 **원뿔 밭**으로 읽힌다 — 실제로 그렇게 보였다.
+     *   큰 불 몇 개 + 작은 불 여럿이 눈에 훨씬 불답다.
+     */
+    if (d === 3 && mul >= 0.9) {
+      parts.push(...fireTuft(ix * 0.66, iz * 0.66, burn * mul * 0.62, (seed += 7)));
     }
   }
   if (d !== 3) return parts;
   /*
    * 전소 전용 — **불이 마을 위로 솟는다.** 부감 55° 카메라에서 바닥의 불만으로는
-   * "마을이 탄다"가 안 읽힌다(위에서 보면 작은 삼각형 몇 개다). 중앙에 큰 불기둥을
-   * 하나 세워 실루엣을 만든다. 반경은 중앙이라 1.45 제약과 무관하다.
+   * "마을이 탄다"가 안 읽힌다(위에서 보면 작은 삼각형 몇 개다). 중앙에 큰 무더기를
+   * 세워 실루엣을 만든다. 반경은 중앙이라 1.45 제약과 무관하다.
+   * ⚠ 크기 1.55 는 전체 높이가 **1.7타일**쯤 되는 값이다 — 망루(≈1.8)와 어깨를 나란히 해야
+   *   "마을을 삼켰다"로 읽히고, 더 키우면 다시 불이 아니라 기둥으로 보인다.
    */
-  parts.push(
-    { kind: 'cone', pos: [0, 0.86, 0], scale: [0.46, 1.5, 0.46], color: C.fire, seg: 6 },
-    { kind: 'cone', pos: [0.06, 0.62, -0.05], scale: [0.26, 1.0, 0.26], color: 0xffd24a, seg: 5 },
-    { kind: 'cone', pos: [-0.1, 0.4, 0.12], rot: [0, 0, 0.3], scale: [0.2, 0.66, 0.2], color: 0xffb43a, seg: 4 },
-  );
+  parts.push(...fireTuft(0, 0, 1.55, 91));
   return parts;
 }
 
@@ -1362,7 +1425,12 @@ export function createBasecamp(): Basecamp {
   const main = new THREE.Mesh(campGeo(LAYERS.length, 0), flatMat());
   main.castShadow = true;
   main.receiveShadow = true;
-  const flameMesh = new THREE.Mesh(flameGeo(LAYERS.length, 0), glowMat());
+  /*
+   * 불꽃은 **전용 재질**을 쓴다(`flamemat.ts`) — 공유 `glowMat` 이 아니다.
+   * 정점을 흔드는 셰이더가 붙어 있어 다른 발광 메시(수정·빔)까지 흔들면 안 되기 때문이다.
+   */
+  const flame = makeFlameMaterial();
+  const flameMesh = new THREE.Mesh(flameGeo(LAYERS.length, 0), flame.mat);
   group.add(main, flameMesh);
 
   let dmg: Dmg = 0;
@@ -1394,19 +1462,20 @@ export function createBasecamp(): Basecamp {
     },
     smokeLevel: () => dmg,
     flicker(time) {
-      if (dmg === 0) {
-        // 온전할 때는 모닥불 하나뿐 — 아주 옅게만 흔든다(눈에 띄면 화덕이 불안해 보인다)
-        const p = 1 + Math.sin(time * 7.3) * 0.04;
-        flameMesh.scale.set(1, p, 1);
-        return;
-      }
-      // 불이 커질수록 크게 흔들린다. 세로가 가로보다 두 배 흔들려 "혀"처럼 읽힌다
-      const amp = dmg === 3 ? 0.16 : 0.08;
-      const a = time * 9.1;
-      flameMesh.scale.set(1 + Math.sin(a * 0.83) * amp * 0.5, 1 + Math.sin(a) * amp, 1 + Math.cos(a * 0.71) * amp * 0.5);
+      /*
+       * ⚠⚠ **메시를 통째로 늘이지 않는다.** 옛 판본은 `flameMesh.scale` 을 흔들었는데,
+       *   그러면 마을의 모든 불이 **한 몸처럼 같은 박자로 부푼다** — 풍선이지 불이 아니다.
+       *   지금은 시간만 넘기고, 혀마다 다른 위상으로 흔드는 일은 셰이더가 한다
+       *   (`flamemat.ts`). 스케일은 1 로 고정이므로 반경 계약도 안 흔들린다.
+       */
+      flame.setTime(time);
     },
     fireOffset,
-    dispose: () => owned.forEach((g) => g.dispose()),
+    dispose: () => {
+      owned.forEach((g) => g.dispose());
+      // 전용 재질이라 주인이 여기다 — 공유 팔레트 재질과 달리 반드시 버려야 샌다
+      flame.mat.dispose();
+    },
   };
   return camp;
 }
