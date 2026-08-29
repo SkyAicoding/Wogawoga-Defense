@@ -19,7 +19,7 @@ import type { SfxName } from '@/audio';
 import type { Stage3D } from '@/render/stage3d';
 import { towerTierScale } from '@/render/meshlib/towers';
 import { baseDamageStage, BASECAMP_MAX_RADIUS } from '@/render/meshlib/basecamp';
-import { ShakeBus } from './shakebus';
+import { QUAKE_BUDGET, ShakeBus } from './shakebus';
 import { ATK_LAUNCH } from '@/render/meshlib/gait';
 import type { RaidShotOpts } from '@/render/views/projectileview';
 import type { DioramaCamera } from '@/render/camera';
@@ -527,20 +527,28 @@ export class FxRouter {
      * ④ 잔해 기둥 — 위로 솟는 검은 파편. `upBias` 를 크게 줘 버섯구름처럼 뜬다.
      *   폭발 자체의 파편은 옆으로 퍼지므로 세로 성분이 따로 필요하다.
      */
-    s3.particles.burst(w.x, 0.5, w.z, 0x2e2622, 26, 2.6, 0.14, 1.6, {
+    /*
+     * ⚠ `burst()` 는 `explosion()` 과 달리 **품질 티어 예산(`budgetMul`)을 안 탄다** —
+     *   넘긴 개수를 그대로 다 뿌린다. 저사양 풀이 main 189 라 손으로 여러 발 나열하면
+     *   한 방에 풀을 갈아엎어 **다른 연출이 조용히 사라진다**. 그래서 무거운 몫은 위
+     *   `explosion()` 에 맡기고 여기서는 **세로 성분 한 발**만 더한다(폭발 파편은 옆으로
+     *   퍼지므로 버섯구름이 따로 필요하다).
+     */
+    s3.particles.burst(w.x, 0.5, w.z, 0x2e2622, 22, 2.6, 0.14, 1.6, {
       gravity: 5,
       drag: 1.1,
       upBias: 2.2,
       sizeVar: 0.7,
     });
-    s3.particles.burst(w.x, 0.7, w.z, 0xff8a2c, 18, 2.2, 0.11, 1.2, {
-      gravity: 2,
-      drag: 1.6,
-      upBias: 1.6,
-      sizeVar: 0.6,
-    });
-    // ⑤ 큰 사건 채널로 흔든다 — 보스 파괴와 같은 언어이고, 이 판에서 마지막 한 번이다
-    this.quake(1);
+    /*
+     * ⑤ 큰 사건 채널로 흔든다 — **`QUAKE_BUDGET` 전액**이다(0.5).
+     *   이 저장소의 최대 단일 흔들림이 보스 등장 0.4 · 보스 처치 0.42 · 마을 큰 피격 0.35 이고,
+     *   예산 0.5 는 그것들이 **겹칠 때**를 막으려고 둔 한 프레임 총량이다. 패배는 판의
+     *   마지막이자 가장 큰 사건이라 전액을 쓴다.
+     *   ⚠ 1 을 넘겨도 예산에 잘려 0.5 가 나간다 — 잘리는 값을 적으면 "얼마를 의도했나"가
+     *     코드에서 사라진다. 그래서 예산 상수를 그대로 쓴다.
+     */
+    this.quake(QUAKE_BUDGET);
   }
 
   /** 잦은 사건 — 착탄·지형 정리. **피해량을 안 받는 것이 요점이다** (./shakebus) */

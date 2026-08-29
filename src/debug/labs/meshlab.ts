@@ -26,7 +26,7 @@ import { attackLean, makeGaitMaterials } from '@/render/meshlib/gait';
 import { assembleTower, buildTower, towerTierScale } from '@/render/meshlib/towers';
 import { PROJECTILE_TOWERS, buildProjectile } from '@/render/meshlib/projectiles';
 import { tierPreviewMat } from '@/render/meshlib/projmat';
-import { BASECAMP_LAYER_COUNT, createBasecamp } from '@/render/meshlib/basecamp';
+import { BASECAMP_LAYER_COUNT, createBasecamp, type Dmg } from '@/render/meshlib/basecamp';
 
 /*
  * ⚠ **사본을 두지 마라 — 원본에서 가져온다.**
@@ -117,7 +117,7 @@ function hometownItem(level: number): Item {
 }
 
 /** 같은 레벨의 피해 3단계 (온전/파손/반파) */
-function hometownDamageItem(level: number, dmg: 0 | 1 | 2): Item {
+function hometownDamageItem(level: number, dmg: Dmg): Item {
   return makeItem(`Lv${level} 피해${dmg}`, (g) => {
     const camp = createBasecamp();
     camp.setLevel(level, BASECAMP_LAYER_COUNT);
@@ -162,9 +162,11 @@ const GROUPS: Record<string, { cols: number; build: () => Item[] }> = {
   ),
   hometown: { cols: 5, build: () => [1, 2, 3, 4, 5].map(hometownItem) },
   hometownDamage: {
-    cols: 3,
+    // 4열 = 온전 · 파손 · 반파 · **전소**. 열 수·순회 배열·파라미터 타입 셋을 같이 넓히지
+    // 않으면 전소가 갤러리에 안 나온다(셋 다 typecheck 를 조용히 통과한다)
+    cols: 4,
     build: () =>
-      [1, 3, 5].flatMap((lv) => ([0, 1, 2] as const).map((d) => hometownDamageItem(lv, d))),
+      [1, 3, 5].flatMap((lv) => ([0, 1, 2, 3] as const).map((d) => hometownDamageItem(lv, d))),
   },
   // 한 행 = 한 종, 왼→오 = T1→T5. 등급 성장을 나란히 읽는 격자.
   towers: { cols: 5, build: () => TOWER_IDS.flatMap((id) => [0, 1, 2, 3, 4].map((t) => towerItem(id, t))) },

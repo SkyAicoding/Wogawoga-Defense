@@ -11,6 +11,7 @@ import { FixedStepLoop } from '@/core/time';
 import { Rng } from '@/core/rng';
 import { GameRenderer } from '@/render/renderer';
 import { DioramaCamera } from '@/render/camera';
+import type { Dmg } from '@/render/meshlib/basecamp';
 import { build } from '@/render/stage3d';
 import { pathArcTable, samplePath } from '@/render/meshlib/terrain';
 import { flagsFor } from '@/render/quality';
@@ -223,7 +224,9 @@ export function run(): void {
     }
     if (tickCount % 240 === 0) stage3d.decals.pulseChevrons();
     if (tickCount % 300 === 0) {
-      stage3d.setBaseDamageLevel(((tickCount / 300) % 3) as 0 | 1 | 2);
+      // ⚠ 4 다 — 전소(3)가 늘었다. 3 으로 두면 랩이 그 단계를 **영원히 안 보여 준다**
+      //   (타입은 안 깨진다: 0|1|2 는 0|1|2|3 에 대입 가능하다)
+      stage3d.setBaseDamageLevel(((tickCount / 300) % 4) as Dmg);
     }
   }
 

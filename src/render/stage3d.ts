@@ -16,7 +16,7 @@ import {
 } from './meshlib/terrain';
 import { buildProps } from './meshlib/props';
 import { buildGroundDetail } from './meshlib/grounddetail';
-import { createBasecamp, type Basecamp } from './meshlib/basecamp';
+import { createBasecamp, type Basecamp, type Dmg } from './meshlib/basecamp';
 import { EnemyView } from './views/enemyview';
 import { TowerView } from './views/towerview';
 import { ProjectileView } from './views/projectileview';
@@ -42,7 +42,8 @@ export interface Stage3D {
   particles: ParticleSystem;
   basecamp: Basecamp;
   /** 기지 피해 외형 0=온전/1=파손/2=반파 */
-  setBaseDamageLevel(level: 0 | 1 | 2 | 3): void;
+  /** 마을 피해 단계 — 값의 정의는 `meshlib/basecamp.ts` 의 `Dmg` 하나뿐이다(베끼지 않는다) */
+  setBaseDamageLevel(level: Dmg): void;
   /**
    * 홈타운 레벨 외형 (1-base). 지금은 마을 스케일만 커진다 —
    * 실제 구조물 성장은 3단계가 meshlib/basecamp.ts 안에서 만든다.

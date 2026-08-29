@@ -573,6 +573,15 @@ export class BattleController {
   private scheduleEnd(won: boolean): void {
     if (this.ended) return;
     this.ended = true;
+    /*
+     * ⚠⚠ **배속을 1 로 되돌린다.** 아래 `END_DELAY_MS` 는 `setTimeout` 이라 **실시간**
+     *   1.5초인데, `loop.speed` 는 그 창 안에 흐르는 **시뮬레이션·파티클 시간**을 곱한다.
+     *   4배속으로 지면 폭발이 실시간 0.375초 만에 다 타 버리고, 정작 결과 화면 뒤에
+     *   남는 정지화면에는 **이미 꺼진 빈 마을**만 있다(일시정지 중 dt 가 0.0001 이라
+     *   그 뒤로는 아무것도 안 자란다 — 이 연출의 산출물은 t≈1.5초의 한 장면이다).
+     *   판은 이미 끝났으므로 여기서 속도를 되돌려도 잃는 것이 없다.
+     */
+    this.loop.speed = 1;
     this.endTimer = setTimeout(() => {
       if (this.disposed) return;
       const st = this.sim.state;
@@ -635,6 +644,12 @@ export class BattleController {
         this.sim.applyCommand({ type: 'placeTower', handIndex, cellX: x, cellZ: z }),
       callWave: (): boolean => this.sim.applyCommand({ type: 'callWave' }),
       drawCalls: (): number => this.renderer.gl.info.render.calls,
+      /*
+       * **마을 피해 연출의 증인** — 화면 밖에서 못 재는 두 값을 그대로 연다.
+       *  · baseDamage : 마을이 지금 몇 단계로 무너져 있는가(0~3). 렌더 상태라 sim 에 없다.
+       * (파티클 누계는 아래 `particlesSpawned` 가 이미 연다 — 폭발이 났는지는 그것으로 잰다)
+       */
+      baseDamage: (): number => this.stage3d.basecamp.smokeLevel(),
       /*
        * **계측의 증인** — 이 프레임을 잰 조건이 정말 우리가 재려던 조건인가.
        *  · shadowsOn : three 의 실제 상태(gl.shadowMap.enabled). false 면 그림자 패스가
