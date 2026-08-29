@@ -195,10 +195,13 @@ export function createLobbyScreen(): Screen<GameFacade> {
           }
         });
       });
-      const scrollToIdx = (idx: number): void => {
+      const scrollToIdx = (idx: number, instant = false): void => {
         const target = cards[idx];
         if (!target) return;
-        carousel.scrollTo({ left: target.offsetLeft - carousel.offsetLeft, behavior: 'smooth' });
+        carousel.scrollTo({
+          left: target.offsetLeft - carousel.offsetLeft,
+          behavior: instant ? 'auto' : 'smooth',
+        });
       };
       const arrow = (dir: -1 | 1): HTMLElement =>
         h('button', {
@@ -253,6 +256,24 @@ export function createLobbyScreen(): Screen<GameFacade> {
         ),
       );
       mount(uiRoot(), root);
+      /*
+       * ⚠⚠ **캐러셀을 고른 자리로 되돌린다** — 사용자 제보:
+       *   > "스테이지2,3,4,5,6 등을 선택해서 플레이 하다가 중단하고 홈으로 나오면 보이는
+       *   >  화면은 무조건 스테이지1 화면이 보여. … 전투시작을 누르면 자동으로 했던
+       *   >  스테이지로 들어가버려."
+       *
+       * 원인이 정확히 이 자리였다. `selectedIdx` 는 이 클로저의 변수라 화면을 나갔다 와도
+       * **남는데**, 캐러셀 DOM 은 `enter()` 마다 새로 만들어져 **`scrollLeft` 가 0** 이다.
+       * 곧 상태는 6인데 화면은 1이고, 점·전투 시작·화살표는 전부 6을 따라 움직인다.
+       * (화살표를 한 번 누르면 화면이 6으로 '갑자기 바뀌는' 것도 같은 어긋남의 결과다.)
+       *
+       * ⚠ `instant` 다 — 되돌리는 것은 **애니메이션이 아니라 초기 상태**다. smooth 로 두면
+       *   로비가 뜰 때마다 카드가 주르륵 흘러가고, 그 사이의 scroll 이벤트가 중간 인덱스로
+       *   `selectedIdx` 를 덮어써서 선택이 스스로 바뀐다.
+       * ⚠ `mount` **뒤에** 부른다 — 그 전에는 `offsetLeft/offsetWidth` 가 전부 0 이라
+       *   어디로도 못 옮긴다(조용히 아무 일도 안 일어난다).
+       */
+      scrollToIdx(selectedIdx, true);
       syncButtons();
     },
     exit() {
