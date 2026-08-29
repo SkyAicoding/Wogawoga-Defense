@@ -18,6 +18,7 @@ import { audio } from '@/audio';
 import type { SfxName } from '@/audio';
 import type { Stage3D } from '@/render/stage3d';
 import { towerTierScale } from '@/render/meshlib/towers';
+import { baseDamageStage, BASECAMP_MAX_RADIUS } from '@/render/meshlib/basecamp';
 import { ShakeBus } from './shakebus';
 import { ATK_LAUNCH } from '@/render/meshlib/gait';
 import type { RaidShotOpts } from '@/render/views/projectileview';
@@ -479,6 +480,67 @@ export class FxRouter {
   /** 큰 사건 — 보스·타워 파괴·마을 돌파. 잦은 사건은 `tap()` 이다 (./shakebus) */
   private quake(amount: number): void {
     this.shakes.quake(amount);
+  }
+
+  /**
+   * **마을이 불타 무너진다** — 패배 확정 연출 (사용자 요구).
+   *   > "마지막에 끝날때는 폭발 하는 애니메이션이 있어야되, 완전히 불타서 마을이
+   *   >  망하는 모습을 더 추가해줘"
+   *
+   * ── 왜 타이머를 안 쓰는가 ────────────────────────────────────────────────────
+   * 단계를 `setTimeout` 으로 나누면 **씬이 파기된 뒤에 터질 수 있다.** `FxRouter` 에는
+   * 정리 경로가 없고(`dispose` 가 없다), `stage3d` 는 판을 떠날 때 버려진다 — 그때 남은
+   * 타이머가 버려진 지오메트리를 만진다. 대신 **파티클 수명으로 단계를 만든다**:
+   * 코어 플래시(짧다) → 파편(중력) → 잔불·연기(길다) → 링 셋(수명이 다르다).
+   *
+   * ── 보이는 시간 ─────────────────────────────────────────────────────────────
+   * `battlecontroller.END_DELAY_MS` 가 1.5초다. 그 뒤 결과 화면이 뜨지만 **판을 안 버리므로**
+   * (v2.3.0) 불타는 마을이 반투명 결과창 뒤에 그대로 남는다. 곧 이 연출은 1.5초 동안
+   * 움직이고, 그 뒤로는 **정지 화면으로 계속 보인다** — 마지막 그림이 폐허여야 하는 이유다.
+   */
+  private burnDownVillage(s3: Stage3D): void {
+    // ① 마을을 즉시 전소 상태로 — 폭발이 걷힌 자리에 폐허가 남아 있어야 인과가 맞는다
+    s3.setBaseDamageLevel(3);
+    const w = s3.basecamp.group.position;
+    // ② 본 폭발 — 이 게임에서 가장 큰 한 방이다(보스 처치가 strength 2 대라 그 위로 잡는다)
+    s3.particles.explosion(w.x, 0.55, w.z, {
+      strength: 3.2,
+      core: 0xfff2cf,
+      debris: 0xffa034,
+      smoke: 0x3a3230,
+      shock: 0xffc65a,
+      gravity: 7,
+      debrisMul: 1.8,
+      smokeMul: 2.2,
+      shockRadius: BASECAMP_MAX_RADIUS,
+      smokeLifeMul: 2.4,
+    });
+    /*
+     * ③ 링 셋 — **수명이 서로 달라 단계처럼 읽힌다.** 좁고 빠른 것부터 넓고 느린 것까지.
+     *   반경은 마을 바깥끝(1.45)에서 유도한다 — 숫자를 박으면 마을이 커질 때 링만 남는다.
+     */
+    const R = BASECAMP_MAX_RADIUS;
+    s3.particles.shockwave(w.x, w.z, 0xfff2cf, R * 0.8, 0.26, { count: 22, thickness: 1.2 });
+    s3.particles.shockwave(w.x, w.z, 0xffb43a, R * 1.5, 0.5, { count: 26 });
+    s3.particles.shockwave(w.x, w.z, 0x7a5a3c, R * 2.4, 0.9, { count: 30, thickness: 0.7 });
+    /*
+     * ④ 잔해 기둥 — 위로 솟는 검은 파편. `upBias` 를 크게 줘 버섯구름처럼 뜬다.
+     *   폭발 자체의 파편은 옆으로 퍼지므로 세로 성분이 따로 필요하다.
+     */
+    s3.particles.burst(w.x, 0.5, w.z, 0x2e2622, 26, 2.6, 0.14, 1.6, {
+      gravity: 5,
+      drag: 1.1,
+      upBias: 2.2,
+      sizeVar: 0.7,
+    });
+    s3.particles.burst(w.x, 0.7, w.z, 0xff8a2c, 18, 2.2, 0.11, 1.2, {
+      gravity: 2,
+      drag: 1.6,
+      upBias: 1.6,
+      sizeVar: 0.6,
+    });
+    // ⑤ 큰 사건 채널로 흔든다 — 보스 파괴와 같은 언어이고, 이 판에서 마지막 한 번이다
+    this.quake(1);
   }
 
   /** 잦은 사건 — 착탄·지형 정리. **피해량을 안 받는 것이 요점이다** (./shakebus) */
@@ -1260,8 +1322,7 @@ export class FxRouter {
            */
           this.baseHits++;
           this.baseHitAmount += Math.max(0, ev.amount);
-          const ratio = ev.hpLeft / Math.max(1, this.baseHpMax);
-          s3.setBaseDamageLevel(ratio > 0.6 ? 0 : ratio > 0.3 ? 1 : 2);
+          s3.setBaseDamageLevel(baseDamageStage(ev.hpLeft, this.baseHpMax));
           break;
         }
         case 'baseFired': {
@@ -1288,8 +1349,7 @@ export class FxRouter {
            */
           this.baseHpMax = ev.hpMax;
           s3.setBaseLevel(ev.level);
-          const ratio = ev.hp / Math.max(1, ev.hpMax);
-          s3.setBaseDamageLevel(ratio > 0.6 ? 0 : ratio > 0.3 ? 1 : 2);
+          s3.setBaseDamageLevel(baseDamageStage(ev.hp, ev.hpMax));
           audio.play('towerUpgrade');
           this.buzz(30);
           // 기지 좌표는 이벤트에 싣지 않았다 — 마을은 판에 하나뿐이고 렌더가 이미 안다
@@ -1313,6 +1373,7 @@ export class FxRouter {
           audio.music.playStinger(ev.won ? 'victory' : 'defeat');
           audio.play(ev.won ? 'victory' : 'defeat');
           this.buzz(ev.won ? [40, 60, 120] : 80);
+          if (!ev.won) this.burnDownVillage(s3);
           break;
         default:
           break;

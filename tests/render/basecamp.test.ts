@@ -26,7 +26,12 @@ import { BASECAMP_LAYER_COUNT, BASECAMP_MAX_RADIUS, createBasecamp } from '@/ren
 import { BASE_LEVEL_MAX } from '@/data/hometown';
 import { STAGES } from '@/data/stages';
 
-const DAMAGE_LEVELS = [0, 1, 2] as const;
+/**
+ * ⚠ **3(전소 폐허)이 2026-08-28 에 늘었다.** 사용자 요구로 "완전히 불타서 망한 마을"이
+ *   생겼고, 그 단계도 아래 계약(반경 1.45 · 드로우콜 2 · 무상태)을 **똑같이** 지켜야 한다.
+ *   여기 3 을 안 넣으면 새 단계가 섬 밖으로 나가도 아무도 모른다.
+ */
+const DAMAGE_LEVELS = [0, 1, 2, 3] as const;
 
 /** 지금 실제로 그려지는 메시들의 XZ 최대 반경 (그룹 스케일 반영) */
 function visibleRadius(group: THREE.Group): number {
@@ -41,6 +46,88 @@ function visibleRadius(group: THREE.Group): number {
     }
   });
   return r;
+}
+
+/**
+ * **본체인가 불꽃인가** — 마을은 메시 둘로 그려진다(구조물 + 발광 불꽃).
+ * 가르는 기준은 `castShadow` 다: 구조물은 그림자를 던지고 **불꽃은 안 던진다**
+ * (`createBasecamp` 이 그렇게 세운다). 재질 타입으로 가르면 팔레트가 바뀔 때 낡는다.
+ *
+ * ⚠ 갈라야 하는 이유: 합쳐서 삼각형만 세면 "구조물이 무너져 줄었다"와 "불이 늘었다"가
+ *   서로 상쇄돼 아무것도 못 잡는다.
+ */
+function isBody(o: THREE.Mesh): boolean {
+  return o.castShadow === true;
+}
+
+/**
+ * 불꽃(발광) 메시의 **총 삼각형 면적** = 마을이 타는 양.
+ *
+ * ⚠⚠ **개수를 세면 안 된다.** 단계 사이의 차이는 주로 **크기**(원뿔 배율)이지 파트 수가
+ *   아니다 — 실제로 개수로 재는 판본을 만들었더니, 전소 불길을 반파와 같게 만드는
+ *   사보타주가 **초록으로 통과했다**(파트 수는 그대로였기 때문이다).
+ *   면적은 배율의 제곱으로 자라 "얼마나 크게 타는가"를 그대로 잡는다.
+ */
+function glowArea(group: THREE.Group): number {
+  group.updateMatrixWorld(true);
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const ab = new THREE.Vector3();
+  const ac = new THREE.Vector3();
+  let sum = 0;
+  forEachDrawn(group, (o) => {
+    if (isBody(o)) return;
+    const pos = o.geometry.getAttribute('position');
+    for (let i = 0; i + 2 < pos.count; i += 3) {
+      a.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+      b.fromBufferAttribute(pos, i + 1).applyMatrix4(o.matrixWorld);
+      c.fromBufferAttribute(pos, i + 2).applyMatrix4(o.matrixWorld);
+      sum += ab.subVectors(b, a).cross(ac.subVectors(c, a)).length() * 0.5;
+    }
+  });
+  return sum;
+}
+
+/** 구조물(본체)의 삼각형 수 — 잿더미가 실제로 얹혔는지 되읽는다 */
+function bodyTris(group: THREE.Group): number {
+  let n = 0;
+  forEachDrawn(group, (o) => {
+    if (isBody(o)) n += o.geometry.getAttribute('position').count / 3;
+  });
+  return n;
+}
+
+/** **구조물만**의 최고 높이 — 불기둥은 빼고 잰다 */
+function bodyHeight(group: THREE.Group): number {
+  group.updateMatrixWorld(true);
+  const v = new THREE.Vector3();
+  let h = 0;
+  forEachDrawn(group, (o) => {
+    if (!isBody(o)) return;
+    const pos = o.geometry.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+      h = Math.max(h, v.y);
+    }
+  });
+  return h;
+}
+
+/** 구조물 정점 색의 평균 밝기 — 그을음이 실제로 어두워졌는지 되읽는다 */
+function bodyLuma(group: THREE.Group): number {
+  let sum = 0;
+  let n = 0;
+  forEachDrawn(group, (o) => {
+    if (!isBody(o)) return;
+    const col = o.geometry.getAttribute('color');
+    if (!col) return;
+    for (let i = 0; i < col.count; i++) {
+      sum += 0.2126 * col.getX(i) + 0.7152 * col.getY(i) + 0.0722 * col.getZ(i);
+      n++;
+    }
+  });
+  return n === 0 ? 0 : sum / n;
 }
 
 /** 그려지는 메시들의 최고 높이 */
@@ -131,6 +218,80 @@ describe('홈타운 마을 모델', () => {
     }
     // Lv1은 "움막 하나" — 완성된 마을의 1/3도 안 되는 양이어야 한다
     expect((tris[0] as number) / (tris[tris.length - 1] as number)).toBeLessThan(0.33);
+    camp.dispose();
+  });
+
+  /*
+   * ── 피해 연출 (2026-08-28) — 사용자 요구 ────────────────────────────────────
+   *   > "홈타운이 공격을 받을수록 더 부서진 모습이나 불타는 모습이 있어야 하고 …
+   *   >  완전히 불타서 마을이 망하는 모습을 더 추가해줘"
+   *
+   * ⚠ 잣대는 **발광 메시(불꽃)와 본체 메시를 갈라서** 잰다. 둘을 합쳐 삼각형만 세면
+   *   "구조물이 무너져 삼각형이 줄었다"와 "불이 늘었다"가 상쇄돼 **아무것도 못 잡는다** —
+   *   실제로 그렇게 재면 d2 와 d3 의 총합이 비슷하다.
+   */
+  it('피해가 커질수록 불이 커진다 (발광 면적)', () => {
+    const camp = createBasecamp();
+    camp.setLevel(BASECAMP_LAYER_COUNT, BASECAMP_LAYER_COUNT);
+    const fire: number[] = [];
+    for (const dmg of DAMAGE_LEVELS) {
+      camp.setDamageLevel(dmg);
+      fire.push(glowArea(camp.group));
+    }
+    /*
+     * 실측(만렙 마을, 발광 총면적): **d0 0.883 / d1 0.415 / d2 0.460 / d3 5.691**.
+     * 0→1 은 **줄어든다**(지키던 불이 사그라든다) — 그래서 단조 증가가 아니라 아래 셋을 잠근다.
+     *
+     * 문턱 10배의 유도(전부 실측):
+     *  · 정상            d3/d2 = **12.36**
+     *  · 구조물 화재만 반파 크기로 되돌린 사보타주 = **7.68**  ← 이것이 빨개져야 한다
+     *  · 전소 단계를 통째로 없앤 사보타주        = **1.00**
+     * 10 은 12.36 과 7.68 **사이**이고 양쪽에 24%·29% 여유가 있다. 임의 값이 아니다.
+     */
+    expect((fire[3] as number) / (fire[2] as number), `d3/d2 = ${((fire[3] as number) / (fire[2] as number)).toFixed(2)} (면적 ${fire.map((v) => v.toFixed(3)).join('/')})`)
+      .toBeGreaterThan(10);
+    // 그리고 **온전한 마을보다** 훨씬 많이 탄다 — 전소를 없애면 여기도 같이 빨개진다
+    expect(fire[3] as number, `d3 불 ${fire[3]} vs d0 ${fire[0]}`).toBeGreaterThan(
+      (fire[0] as number) * 2,
+    );
+    expect(fire[2] as number, `d2 불 ${fire[2]} vs d1 ${fire[1]}`).toBeGreaterThan(
+      fire[1] as number,
+    );
+    camp.dispose();
+  });
+
+  it('전소(3)는 반파(2)보다 더 무너지고 더 검다', () => {
+    const camp = createBasecamp();
+    camp.setLevel(BASECAMP_LAYER_COUNT, BASECAMP_LAYER_COUNT);
+    camp.setDamageLevel(2);
+    const h2 = bodyHeight(camp.group);
+    const l2 = bodyLuma(camp.group);
+    camp.setDamageLevel(3);
+    const h3 = bodyHeight(camp.group);
+    const l3 = bodyLuma(camp.group);
+    // ⚠ 높이는 `bodyHeight` 로 잰다 — 전소는 **불기둥이 높아서** 전체 높이가 오히려
+    //   커진다. 합쳐 재면 "더 무너졌다"가 "더 높아졌다"로 뒤집혀 읽힌다.
+    expect(h3, `전소 높이 ${h3.toFixed(3)} vs 반파 ${h2.toFixed(3)}`).toBeLessThanOrEqual(h2 + 1e-9);
+    /*
+     * 문턱 0.75 의 유도(실측 · 만렙 마을 구조물 정점색 평균):
+     *  · 정상                       d3/d2 = **0.517**  (병합 뒤 0.55 곱)
+     *  · 그을림 곱을 없앤 사보타주  = **0.940**  ← 이것이 빨개져야 한다
+     * 0.75 는 둘 사이이고 양쪽에 여유가 있다.
+     * ⚠ `l3 < l2` 만으로는 **안 잡힌다** — 잿더미(어두운 파트)가 얹히는 것만으로 평균이
+     *   조금 내려가기 때문이다(0.940). 실제로 그 판본이 사보타주를 통과했다.
+     */
+    expect(l3 / l2, `전소/반파 밝기 비 ${(l3 / l2).toFixed(3)} — 숯이 더 어두워야 한다`)
+      .toBeLessThan(0.75);
+    /*
+     * 그리고 **잿더미가 실제로 깔린다.** 전소는 반파와 붕괴 형상을 공유하므로(`wrecked`),
+     * 구조물 삼각형이 늘어나는 유일한 출처가 `ashes()` 다 — 곧 이 한 줄이 그것을 잠근다.
+     * (색만 재면 `soot` 하나로도 통과해서 잿더미를 지워도 안 잡힌다 — 실측으로 확인했다.)
+     */
+    camp.setDamageLevel(2);
+    const t2 = bodyTris(camp.group);
+    camp.setDamageLevel(3);
+    const t3 = bodyTris(camp.group);
+    expect(t3, `전소 구조물 삼각형 ${t3} vs 반파 ${t2} — 잿더미가 없다`).toBeGreaterThan(t2);
     camp.dispose();
   });
 

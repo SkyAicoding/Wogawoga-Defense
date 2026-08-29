@@ -47,14 +47,19 @@ import { buildParts, type PartSpec } from './factory';
 export interface Basecamp {
   group: THREE.Group;
   /** 0=온전 / 1=파손 / 2=반파 */
-  setDamageLevel(level: 0 | 1 | 2): void;
+  setDamageLevel(level: Dmg): void;
   /**
    * 홈타운 레벨 반영 (level·maxLevel 모두 1-base).
    * 레벨 → 레이어를 비율로 사상하므로 BASE_LEVELS 길이가 바뀌어도 양끝이 맞는다.
    */
   setLevel(level: number, maxLevel: number): void;
-  /** 파티클 훅용: 현재 연기 강도 0~2 */
+  /** 파티클 훅용: 현재 연기 강도 0~3 */
   readonly smokeLevel: () => number;
+  /**
+   * 불길 맥동 — 발광 메시의 **스케일만** 시간으로 흔든다(지오메트리 재생성 0 · 드로우콜 0).
+   * 불이 정지해 있으면 아무리 크게 그려도 "그려 넣은 삼각형"으로 읽힌다.
+   */
+  flicker(time: number): void;
   /**
    * 모닥불 월드 오프셋 (파티클 스폰 위치).
    * 화덕이 원점이 아니라 HEARTH 슬롯에 있으므로 x/z가 0이 아니다 —
@@ -64,8 +69,27 @@ export interface Basecamp {
   dispose(): void;
 }
 
-/** 피해 단계 */
-type Dmg = 0 | 1 | 2;
+/**
+ * 피해 단계 — 0=온전 / 1=파손 / 2=반파 / **3=전소 폐허**
+ *
+ * ── 3 이 생긴 이유 (사용자 요구 원문) ────────────────────────────────────────
+ *   > "우리 홈타운이 공격을 받을수록 더 부서진 모습이나 불타는 모습이 있어야 하고 …
+ *   >  완전히 불타서 마을이 망하는 모습을 더 추가해줘"
+ * 2 까지는 "무너지고 그을렸다"이고, 3 은 **다 타 버린 뒤**다: 남은 것이 숯기둥과
+ * 잿더미뿐이고 불길이 마을 전체를 덮는다. 판이 끝나는 순간(패배)에 여기로 간다.
+ */
+type Dmg = 0 | 1 | 2 | 3;
+
+/**
+ * **무너진 상태인가** — 2(반파)와 3(전소)이 같은 붕괴 형상을 쓴다.
+ *
+ * ⚠ 40곳의 `wrecked(d)` 를 이것으로 바꾼 이유: 3 을 따로 조각하면 같은 구조물의 붕괴가
+ *   **두 벌**이 되고, 하나를 고칠 때 다른 하나가 낡는다(이 저장소가 반복해서 당한 꼴).
+ *   3 은 붕괴 형상을 물려받고 **색(`soot`)과 불길(`flames`)로** 갈린다.
+ */
+function wrecked(d: Dmg): boolean {
+  return d >= 2;
+}
 
 /** 화살이 떠나는 높이 = 아래 발판 높이 (sim/hometown.ts ARROW_Y와 같은 값) */
 const WATCH_DECK_Y = 0.6;
@@ -122,7 +146,8 @@ function shade(hex: number, f: number): number {
 
 /** 피해 단계별 그을림 — 반파일수록 어둡고 탁하게 */
 function soot(hex: number, d: Dmg): number {
-  return d === 0 ? hex : shade(hex, d === 1 ? 0.84 : 0.66);
+  // 3(전소)은 숯이다 — 0.40 밑으로 내리면 색이 죽어 실루엣이 배경과 안 갈린다(부감 55°)
+  return d === 0 ? hex : shade(hex, d === 1 ? 0.84 : wrecked(d) ? 0.66 : 0.42);
 }
 
 /** 뒤집힌 원뿔 = 밑동 플레어 / 항아리 목 / 갓 테두리 */
@@ -163,7 +188,7 @@ function beam(x: number, y: number, z: number, len: number, r: number, color: nu
  * 어떤 레벨에서도 hypot(중심, 반경) ≤ 1.45 를 넘지 않는다 (헤더의 바닥판 제약).
  */
 function groundL1(d: Dmg): PartSpec[] {
-  const dirt = d === 2 ? 0x827058 : 0x9c8259;
+  const dirt = wrecked(d) ? 0x827058 : 0x9c8259;
   return [
     // Lv1은 움막·화톳불·발판만 덮는 작은 터 — 마을이 아니라 '자리를 잡은 집 한 채'
     { kind: 'cyl', pos: [-0.2, 0.024, -0.14], scale: [2.1, 0.045, 2.1], color: dirt, seg: 11, hueJitter: 0.02 },
@@ -172,7 +197,7 @@ function groundL1(d: Dmg): PartSpec[] {
 }
 
 function groundL2(d: Dmg): PartSpec[] {
-  const dirt = d === 2 ? 0x827058 : 0x9c8259;
+  const dirt = wrecked(d) ? 0x827058 : 0x9c8259;
   return [
     // 목책을 두르며 뒤편이 넓어진다
     { kind: 'cyl', pos: [0.0, 0.024, -0.42], scale: [1.96, 0.044, 1.96], color: shade(dirt, 0.96), seg: 10, hueJitter: 0.02 },
@@ -181,14 +206,14 @@ function groundL2(d: Dmg): PartSpec[] {
 }
 
 function groundL3(d: Dmg): PartSpec[] {
-  const dirt = d === 2 ? 0x827058 : 0x9c8259;
+  const dirt = wrecked(d) ? 0x827058 : 0x9c8259;
   return [
     { kind: 'cyl', pos: [0.56, 0.025, -0.3], scale: [1.6, 0.046, 1.6], color: shade(dirt, 1.05), seg: 9, hueJitter: 0.02 },
   ];
 }
 
 function groundL4(d: Dmg): PartSpec[] {
-  const dirt = d === 2 ? 0x827058 : 0x9c8259;
+  const dirt = wrecked(d) ? 0x827058 : 0x9c8259;
   return [
     { kind: 'cyl', pos: [0.1, 0.026, 0.42], scale: [1.86, 0.048, 1.86], color: shade(dirt, 1.08), seg: 9, hueJitter: 0.02 },
     // 입구 진입로 — 아치 아래로 이어지는 밟아 다진 길
@@ -197,7 +222,7 @@ function groundL4(d: Dmg): PartSpec[] {
 }
 
 function groundL5(d: Dmg): PartSpec[] {
-  const dirt = d === 2 ? 0x827058 : 0x9c8259;
+  const dirt = wrecked(d) ? 0x827058 : 0x9c8259;
   return [
     { kind: 'cyl', pos: [0.66, 0.027, 0.04], scale: [1.54, 0.05, 1.54], color: shade(dirt, 1.02), seg: 8, hueJitter: 0.02 },
   ];
@@ -209,9 +234,9 @@ function groundL5(d: Dmg): PartSpec[] {
  */
 function emberPit(d: Dmg): PartSpec[] {
   const [x, z] = HEARTH;
-  const stone = d === 2 ? 0x5a5450 : C.stone;
+  const stone = wrecked(d) ? 0x5a5450 : C.stone;
   const parts: PartSpec[] = [
-    { kind: 'cyl', pos: [x, 0.05, z], scale: [0.44, 0.05, 0.44], color: d === 2 ? 0x3a3430 : 0x4e463e, seg: 7 },
+    { kind: 'cyl', pos: [x, 0.05, z], scale: [0.44, 0.05, 0.44], color: wrecked(d) ? 0x3a3430 : 0x4e463e, seg: 7 },
   ];
   for (let i = 0; i < 5; i++) {
     const a = (i / 5) * Math.PI * 2 + 0.3;
@@ -224,10 +249,10 @@ function emberPit(d: Dmg): PartSpec[] {
       hueJitter: 0.012,
     });
   }
-  const logColor = d === 2 ? 0x2e2622 : C.woodDark;
+  const logColor = wrecked(d) ? 0x2e2622 : C.woodDark;
   parts.push(
     post(x, 0.09, z, 0.075, 0.4, logColor, 5, [0, 0.5, 1.35]),
-    { kind: 'ico', pos: [x - 0.08, 0.06, z + 0.07], scale: [0.12, 0.07, 0.11], color: d === 2 ? 0x6a3a20 : C.ember },
+    { kind: 'ico', pos: [x - 0.08, 0.06, z + 0.07], scale: [0.12, 0.07, 0.11], color: wrecked(d) ? 0x6a3a20 : C.ember },
   );
   return parts;
 }
@@ -251,7 +276,7 @@ function watchDeck(d: Dmg): PartSpec[] {
     [-s, -s],
   ];
   legs.forEach(([lx, lz], i) => {
-    if (d === 2 && i === 3) {
+    if (wrecked(d) && i === 3) {
       parts.push(post(lx - 0.16, 0.05, lz - 0.12, 0.075, y * 0.8, woodD, 4, [0.5, 0.8, 1.4]));
       return;
     }
@@ -269,8 +294,8 @@ function watchDeck(d: Dmg): PartSpec[] {
     }
   }
   // 발판 (판자 3장) — 화살이 떠나는 면
-  const deckY = d === 2 ? y - 0.1 : y;
-  const deckTilt = d === 2 ? 0.16 : d === 1 ? 0.05 : 0;
+  const deckY = wrecked(d) ? y - 0.1 : y;
+  const deckTilt = wrecked(d) ? 0.16 : d === 1 ? 0.05 : 0;
   for (let i = 0; i < 3; i++) {
     parts.push({
       kind: 'box',
@@ -324,7 +349,7 @@ function hideHut(d: Dmg): PartSpec[] {
   const hideD = soot(C.hideDark, d);
   const wood = soot(C.woodDark, d);
 
-  if (d === 2) {
+  if (wrecked(d)) {
     // 붕괴 + 불타는 잔해
     return [
       { kind: 'ico', pos: [x, 0.09, z], rot: [0.3, 0.5, 0.1], scale: [0.86, 0.2, 0.82], color: 0x4a3a2c, hueJitter: 0.02 },
@@ -386,7 +411,7 @@ function scatterL1(d: Dmg): PartSpec[] {
     { kind: 'cyl', pos: [-0.3, 0.06, 0.22], rot: [0, 0.9, Math.PI / 2], scale: [0.07, 0.32, 0.07], color: soot(C.woodDark, d), seg: 4 },
     { kind: 'ico', pos: [0.06, 0.04, -0.62], rot: [0.7, 1.2, 0.3], scale: [0.16, 0.1, 0.15], color: soot(C.rock, d) },
   ];
-  if (d === 2) {
+  if (wrecked(d)) {
     parts.push(
       { kind: 'ico', pos: [-0.42, 0.03, -0.8], rot: [0.3, 0.6, 0.2], scale: [0.3, 0.06, 0.26], color: 0x3e3630 },
       { kind: 'ico', pos: [-0.82, 0.05, 0.46], rot: [0.2, 0.7, 0.4], scale: [0.24, 0.07, 0.22], color: 0x9a958c },
@@ -400,7 +425,7 @@ function scatterL1(d: Dmg): PartSpec[] {
 /** Lv2 화덕 — Lv1 화톳불을 **둘러싸는** 바깥 돌 + 큰 장작 + 재 원반 */
 function hearthFull(d: Dmg): PartSpec[] {
   const [x, z] = HEARTH;
-  const stone = d === 2 ? 0x5a5450 : C.stone;
+  const stone = wrecked(d) ? 0x5a5450 : C.stone;
   const parts: PartSpec[] = [
     { kind: 'ico', pos: [x, 0.03, z], rot: [0, 0.3, 0], scale: [0.98, 0.05, 0.98], color: 0x7d6742, hueJitter: 0.02 },
   ];
@@ -415,10 +440,10 @@ function hearthFull(d: Dmg): PartSpec[] {
       hueJitter: 0.012,
     });
   }
-  const logColor = d === 2 ? 0x2e2622 : C.woodDark;
+  const logColor = wrecked(d) ? 0x2e2622 : C.woodDark;
   parts.push(post(x + 0.02, 0.12, z - 0.02, 0.085, 0.48, shade(logColor, 0.85), 5, [1.35, 0.9, 0]));
   if (d < 2) parts.push(post(x - 0.02, 0.14, z + 0.02, 0.075, 0.44, shade(logColor, 1.15), 5, [0.7, 2.1, 0.9]));
-  parts.push({ kind: 'ico', pos: [x + 0.12, 0.06, z - 0.08], scale: [0.11, 0.07, 0.1], color: d === 2 ? 0x5a3018 : 0xff7a28 });
+  parts.push({ kind: 'ico', pos: [x + 0.12, 0.06, z - 0.08], scale: [0.11, 0.07, 0.1], color: wrecked(d) ? 0x5a3018 : 0xff7a28 });
   return parts;
 }
 
@@ -427,7 +452,7 @@ function fireside(d: Dmg): PartSpec[] {
   const [x, z] = HEARTH;
   const wood = soot(C.wood, d);
   const woodD = soot(C.woodDark, d);
-  if (d === 2) {
+  if (wrecked(d)) {
     return [
       { kind: 'cyl', pos: [x + 0.6, 0.08, z - 0.16], rot: [0, 0.5, Math.PI / 2], scale: [0.13, 0.56, 0.13], color: 0x33291f, seg: 6 },
       { kind: 'ico', pos: [x - 0.42, 0.05, z + 0.16], rot: [0.5, 0.4, 0.2], scale: [0.24, 0.1, 0.2], color: 0x2e251c },
@@ -468,9 +493,9 @@ function palisade(d: Dmg): PartSpec[] {
   const span = Math.PI * 0.8;
   for (let i = 0; i < n; i++) {
     if (d === 1 && i % 4 === 1) continue;
-    if (d === 2 && i % 2 === 0 && i !== 6) continue;
+    if (wrecked(d) && i % 2 === 0 && i !== 6) continue;
     const a = a0 + (i / (n - 1)) * span;
-    const h = 0.5 + ((i * 7) % 3) * 0.06 - (d === 2 ? 0.16 : 0);
+    const h = 0.5 + ((i * 7) % 3) * 0.06 - (wrecked(d) ? 0.16 : 0);
     const px = Math.cos(a) * r;
     const pz = -Math.sin(a) * r;
     parts.push(
@@ -502,7 +527,7 @@ function palisade(d: Dmg): PartSpec[] {
     });
   }
   // 밧줄 결속
-  const lashN = d === 2 ? 1 : 3;
+  const lashN = wrecked(d) ? 1 : 3;
   for (let i = 0; i < lashN; i++) {
     const a = a0 + 0.18 + (i / 3) * (span - 0.36);
     parts.push({
@@ -513,7 +538,7 @@ function palisade(d: Dmg): PartSpec[] {
       color: soot(C.rope, d),
     });
   }
-  if (d === 2) {
+  if (wrecked(d)) {
     parts.push(
       post(0.46, 0.06, -1.06, 0.075, 0.44, woodD, 4, [0.4, 0.9, 1.5]),
       post(-0.66, 0.06, -0.94, 0.075, 0.4, wood, 4, [1.5, 0.3, 0.6]),
@@ -529,7 +554,7 @@ function thatchHut(d: Dmg): PartSpec[] {
   const strawD = soot(shade(C.straw, 0.8), d);
   const wood = soot(C.woodDark, d);
 
-  if (d === 2) {
+  if (wrecked(d)) {
     const parts: PartSpec[] = [
       { kind: 'cyl', pos: [x, 0.13, z], scale: [0.7, 0.26, 0.7], color: shade(wood, 0.8), seg: 7 },
       { kind: 'ico', pos: [x, 0.06, z], rot: [0.2, 0.5, 0], scale: [0.76, 0.12, 0.74], color: 0x4a3c2a },
@@ -593,7 +618,7 @@ function thatchHut(d: Dmg): PartSpec[] {
 function dryingRack(d: Dmg): PartSpec[] {
   const [rx, rz] = RACK;
   const wood = soot(C.wood, d);
-  if (d === 2) {
+  if (wrecked(d)) {
     return [
       post(rx, 0.05, rz + 0.1, 0.048, 0.54, soot(C.woodDark, 2), 4, [0.4, 0.3, 1.45]),
       post(rx + 0.1, 0.06, rz - 0.34, 0.048, 0.48, soot(C.woodDark, 2), 4, [1.4, 0.6, 0.2]),
@@ -637,8 +662,8 @@ function watchTower(d: Dmg): PartSpec[] {
     [-s, -s],
   ];
   legs.forEach(([lx, lz], i) => {
-    if (d === 2 && i === 3) return; // 반파: 한 기둥이 통째로 없다
-    const lean = d === 2 ? 0.06 : d === 1 ? 0.03 : 0;
+    if (wrecked(d) && i === 3) return; // 반파: 한 기둥이 통째로 없다
+    const lean = wrecked(d) ? 0.06 : d === 1 ? 0.03 : 0;
     parts.push(
       post(lx, (WATCH_DECK_Y + upperY) * 0.5, lz, 0.06, upperY - WATCH_DECK_Y + 0.06, woodD, 4, [lean, 0, lean]),
     );
@@ -654,7 +679,7 @@ function watchTower(d: Dmg): PartSpec[] {
       );
     }
   }
-  if (d === 2) {
+  if (wrecked(d)) {
     // 위층이 주저앉아 널판이 비스듬히 걸쳐 있다
     parts.push(
       { kind: 'box', pos: [-0.1, upperY - 0.12, 0.06], rot: [0.3, 0.4, 0.42], scale: [0.72, 0.06, 0.5], color: shade(woodD, 0.9) },
@@ -704,7 +729,7 @@ function watchTower(d: Dmg): PartSpec[] {
 /** 토템 기둥 (Lv3) — 조각 단 + 날개 + 두개골 + 깃털 */
 function totemPole(d: Dmg): PartSpec[] {
   const [tx, tz] = TOTEM;
-  if (d === 2) {
+  if (wrecked(d)) {
     return [
       { kind: 'cyl', pos: [tx, 0.07, tz], scale: [0.34, 0.14, 0.34], color: soot(C.stone, 2), seg: 7 },
       post(tx, 0.24, tz, 0.24, 0.28, soot(C.wood, 2), 7),
@@ -738,7 +763,7 @@ function leanTo(d: Dmg): PartSpec[] {
   const wood = soot(C.wood, d);
   const hide = soot(C.hide, d);
 
-  if (d === 2) {
+  if (wrecked(d)) {
     return [
       post(x - 0.2, 0.16, z + 0.2, 0.048, 0.32, soot(C.woodDark, 2), 4, [0.3, 0, 0.25]),
       post(x + 0.24, 0.06, z - 0.1, 0.048, 0.48, soot(C.woodDark, 2), 4, [0, 0.5, 1.4]),
@@ -783,7 +808,7 @@ function toolPile(d: Dmg): PartSpec[] {
   const sx = 0.34;
   const sz = -0.76;
   const wood = soot(C.wood, d);
-  if (d === 2) {
+  if (wrecked(d)) {
     return [
       post(sx, 0.04, sz, 0.033, 0.62, soot(C.woodDark, 2), 4, [0, 0.6, 1.52]),
       post(sx - 0.16, 0.04, sz + 0.2, 0.033, 0.56, soot(C.woodDark, 2), 4, [0.3, 1.5, 1.5]),
@@ -834,11 +859,11 @@ function stoneWall(d: Dmg): PartSpec[] {
   const stone = soot(C.stone, d);
   const stoneD = soot(C.stoneDark, d);
   for (let i = 0; i < n; i++) {
-    if (d === 2 && i % 3 === 1) continue;
+    if (wrecked(d) && i % 3 === 1) continue;
     const a = a0 + (i / (n - 1)) * span;
     const px = Math.cos(a) * r;
     const pz = -Math.sin(a) * r;
-    const h = d === 2 ? 0.16 : 0.26 + ((i * 5) % 3) * 0.04;
+    const h = wrecked(d) ? 0.16 : 0.26 + ((i * 5) % 3) * 0.04;
     parts.push({
       kind: 'box',
       pos: [px, h * 0.5, pz],
@@ -858,7 +883,7 @@ function stoneWall(d: Dmg): PartSpec[] {
       });
     }
   }
-  if (d === 2) {
+  if (wrecked(d)) {
     parts.push(
       { kind: 'ico', pos: [0.86, 0.06, -0.86], rot: [0.4, 0.6, 0.2], scale: [0.3, 0.14, 0.28], color: stoneD },
       { kind: 'ico', pos: [-0.5, 0.05, -1.02], rot: [0.9, 0.2, 0.5], scale: [0.26, 0.12, 0.24], color: stone },
@@ -887,7 +912,7 @@ function banners(d: Dmg): PartSpec[] {
     [-0.9, 0.56, C.allyFur, 0.78],
   ];
   spots.forEach(([bx, bz, color, h], i) => {
-    if (d === 2 && i === 1) {
+    if (wrecked(d) && i === 1) {
       parts.push(post(bx + 0.2, 0.05, bz + 0.16, 0.035, h * 0.7, wood, 4, [0.4, 0.7, 1.44]));
       return;
     }
@@ -921,7 +946,7 @@ function banners(d: Dmg): PartSpec[] {
 /** 뼈 아치 입구 (Lv4) — 마을 정면 */
 function boneArch(d: Dmg): PartSpec[] {
   const z = ARCH_Z;
-  if (d === 2) {
+  if (wrecked(d)) {
     return [
       post(-0.58, 0.05, z - 0.02, 0.055, 0.42, soot(C.woodDark, 2), 4, [0.3, 0.5, 1.4]),
       { kind: 'ico', pos: [-0.18, 0.06, z + 0.02], rot: [0.6, 0.3, 0.2], scale: [0.18, 0.11, 0.16], color: soot(C.boneDark, 2) },
@@ -949,7 +974,7 @@ function pottery(d: Dmg): PartSpec[] {
   const px = -0.86;
   const pz = 0.24;
   const clay = soot(0xa9663c, d);
-  if (d === 2) {
+  if (wrecked(d)) {
     return [
       { kind: 'ico', pos: [px, 0.05, pz], rot: [0.4, 0.6, 0.3], scale: [0.22, 0.1, 0.2], color: clay },
       { kind: 'ico', pos: [px + 0.22, 0.04, pz - 0.16], rot: [1.1, 0.2, 0.5], scale: [0.17, 0.08, 0.15], color: shade(clay, 0.86) },
@@ -983,7 +1008,7 @@ function greatHall(d: Dmg): PartSpec[] {
   const hide = soot(C.hide, d);
   const straw = soot(C.straw, d);
 
-  if (d === 2) {
+  if (wrecked(d)) {
     return [
       { kind: 'box', pos: [x, 0.1, z], rot: [0, 0.06, 0.05], scale: [0.6, 0.2, 0.9], color: 0x4a3a2c, hueJitter: 0.02 },
       { kind: 'box', pos: [x - 0.16, 0.24, z + 0.3], rot: [0.4, 0.2, 0.5], scale: [0.5, 0.07, 0.42], color: shade(straw, 0.62) },
@@ -1043,7 +1068,7 @@ function greatHall(d: Dmg): PartSpec[] {
 /** 망루 꼭대기층 (Lv5) — 지붕 위 깃대와 뿔, 그리고 한 단 더 높은 전망 */
 function watchTop(d: Dmg): PartSpec[] {
   const topY = WATCH_RAIL_Y;
-  if (d === 2) {
+  if (wrecked(d)) {
     return [
       { kind: 'cone', pos: [0.34, 0.08, 0.5], rot: [1.3, 0.4, 0.2], scale: [0.13, 0.4, 0.13], color: soot(C.woodDark, 2), seg: 4 },
       { kind: 'box', pos: [-0.4, 0.06, 0.42], rot: [0, 0.5, 0.08], scale: [0.24, 0.05, 0.18], color: soot(C.allySky, 2) },
@@ -1088,7 +1113,7 @@ function skullPosts(d: Dmg): PartSpec[] {
     [Math.cos(Math.PI * 0.68) * (WALL_R - 0.02), -Math.sin(Math.PI * 0.68) * (WALL_R - 0.02)],
   ];
   spots.forEach(([sx, sz], i) => {
-    if (d === 2 && i === 0) {
+    if (wrecked(d) && i === 0) {
       parts.push({ kind: 'ico', pos: [sx * 0.8, 0.06, sz * 0.8], rot: [0.6, 0.4, 0.2], scale: [0.19, 0.14, 0.18], color: soot(C.boneDark, 2) });
       return;
     }
@@ -1110,11 +1135,42 @@ function skullPosts(d: Dmg): PartSpec[] {
  * 모닥불 불꽃 — 레벨이 오르면 커지고, 피해가 크면 작아지는 대신 잔해에 불이 붙는다.
  * 레이어와 달리 **누적하지 않는다** (같은 자리의 불이 겹쳐 타면 안 되므로 통짜 교체).
  */
+/**
+ * 마을에 **불이 붙은 자리** — 슬롯과 크기 배율. 레벨이 오를수록 탈 것이 늘어난다.
+ *
+ * ⚠ 좌표는 전부 구조물 슬롯(HEARTH/HUT_A/…)에서 유도한다. 숫자를 새로 박으면 구조물을
+ *   옮길 때 불만 제자리에 남는다 — 실제로 그 꼴을 여러 번 본 저장소다.
+ * ⚠ 반경: 슬롯이 1.0 고리 위이고 불꽃 반경이 ≤ 0.3 이라 어떤 자리도 `BASECAMP_MAX_RADIUS`
+ *   1.45 를 안 넘는다. `tests/render/basecamp.test.ts` 가 전 레벨 × 전 피해로 잰다.
+ */
+const BURN_SITES: readonly (readonly [number, [number, number], number])[] = [
+  [1, HUT_A, 1.0],
+  [2, HUT_B, 0.86],
+  [2, [WALL_R * 0.72, -WALL_R * 0.5], 0.7],
+  [3, [0.2, -0.1], 0.78],
+  [3, TOTEM, 0.72],
+  [4, [-WALL_R * 0.66, WALL_R * 0.42], 0.68],
+  [5, HALL, 1.0],
+  [5, LEANTO, 0.8],
+];
+
+/**
+ * 발광(glowMat) 메시의 파트 — 모닥불과 **마을 화재**를 한 벌로 만든다.
+ *
+ * ⚠⚠ 여기 넣는 것이 곧 드로우콜 0 증가다. 불꽃을 별도 메시로 빼면 마을이 3콜이 되고,
+ *   전투 예산(e2e 기준 프레임 56콜)에 그대로 얹힌다. 그래서 **색이 다른 불도 같은 메시**에 둔다
+ *   (glowMat 은 정점 색을 쓰므로 색을 나누는 데 재질이 더 필요 없다).
+ */
 function flames(level: number, d: Dmg): PartSpec[] {
   const [x, z] = HEARTH;
   // Lv1 화톳불은 작고, Lv2에서 정식 화덕이 되며 이후 완만히 커진다
   const grow = level <= 1 ? 0.62 : 0.86 + Math.min(3, level - 2) * 0.05;
-  const s = grow * (d === 0 ? 1 : d === 1 ? 0.76 : 0.48);
+  /*
+   * 화덕 불의 크기 — 피해가 커지면 **작아진다**(지키던 불이 꺼져 간다). 그런데 3(전소)에서는
+   * 반대로 **가장 커진다**: 그때 이 자리는 "마을의 화덕"이 아니라 **마을을 태우는 불기둥**이다.
+   * 뜻이 뒤집히는 자리라 삼항 하나로 뭉개지 않고 단계를 그대로 적는다.
+   */
+  const s = grow * (d === 0 ? 1 : d === 1 ? 0.76 : d === 2 ? 0.48 : 1.35);
   const parts: PartSpec[] = [
     { kind: 'cone', pos: [x, 0.32 * s + 0.08, z], scale: [0.4 * s, 0.64 * s, 0.4 * s], color: C.fire, seg: 6 },
     { kind: 'cone', pos: [x + 0.04, 0.26 * s + 0.08, z + 0.03], scale: [0.25 * s, 0.44 * s, 0.25 * s], color: 0xffd24a, seg: 5 },
@@ -1125,18 +1181,71 @@ function flames(level: number, d: Dmg): PartSpec[] {
       { kind: 'cone', pos: [x + 0.18 * s, 0.22 * s + 0.06, z - 0.13 * s], rot: [0, 0, -0.4], scale: [0.14 * s, 0.3 * s, 0.14 * s], color: 0xffb43a, seg: 4 },
     );
   }
-  if (d === 2) {
-    // 무너진 구조물에 붙은 불 — 레벨이 높을수록 탈 것이 많다
-    parts.push({ kind: 'cone', pos: [HUT_A[0], 0.24, HUT_A[1] + 0.1], scale: [0.18, 0.34, 0.18], color: C.ember, seg: 4 });
-    if (level >= 2) {
-      parts.push({ kind: 'cone', pos: [HUT_B[0] + 0.1, 0.18, HUT_B[1] + 0.2], scale: [0.13, 0.26, 0.13], color: C.fire, seg: 4 });
+  if (!wrecked(d)) return parts;
+
+  /*
+   * 반파(2)·전소(3) — 구조물에 불이 붙는다. 두 단계의 차이는 **크기와 개수**다:
+   *  · 2 : 무너진 자리 몇 곳에서 잔불이 오른다 (배율 0.62)
+   *  · 3 : 전 슬롯이 타고, 불길이 지붕 높이를 넘어 **마을이 통째로 불덩이**가 된다 (배율 1.55)
+   * 곧 "받을수록 더 불탄다"가 **연속이 아니라 두 단계의 대비**로 읽힌다.
+   */
+  const burn = d === 2 ? 0.62 : 1.55;
+  for (const [need, [bx, bz], mul] of BURN_SITES) {
+    if (level < need) continue;
+    const k = burn * mul;
+    parts.push({
+      kind: 'cone',
+      pos: [bx, 0.18 * k + 0.06, bz],
+      scale: [0.2 * k, 0.42 * k, 0.2 * k],
+      color: C.ember,
+      seg: 4,
+    });
+    if (d === 3) {
+      // 심지(안쪽 밝은 불) — 겉불보다 좁고 짧아 두 겹으로 읽힌다
+      parts.push({
+        kind: 'cone',
+        pos: [bx + 0.03, 0.13 * k + 0.05, bz - 0.02],
+        scale: [0.12 * k, 0.28 * k, 0.12 * k],
+        color: 0xffc03a,
+        seg: 4,
+      });
     }
-    if (level >= 3) {
-      parts.push({ kind: 'cone', pos: [0.2, 0.16, -0.1], scale: [0.12, 0.24, 0.12], color: 0xffb43a, seg: 4 });
-    }
-    if (level >= 5) {
-      parts.push({ kind: 'cone', pos: [HALL[0] - 0.1, 0.22, HALL[1] - 0.2], scale: [0.16, 0.3, 0.16], color: C.ember, seg: 4 });
-    }
+  }
+  if (d !== 3) return parts;
+  /*
+   * 전소 전용 — **불이 마을 위로 솟는다.** 부감 55° 카메라에서 바닥의 불만으로는
+   * "마을이 탄다"가 안 읽힌다(위에서 보면 작은 삼각형 몇 개다). 중앙에 큰 불기둥을
+   * 하나 세워 실루엣을 만든다. 반경은 중앙이라 1.45 제약과 무관하다.
+   */
+  parts.push(
+    { kind: 'cone', pos: [0, 0.86, 0], scale: [0.46, 1.5, 0.46], color: C.fire, seg: 6 },
+    { kind: 'cone', pos: [0.06, 0.62, -0.05], scale: [0.26, 1.0, 0.26], color: 0xffd24a, seg: 5 },
+    { kind: 'cone', pos: [-0.1, 0.4, 0.12], rot: [0, 0, 0.3], scale: [0.2, 0.66, 0.2], color: 0xffb43a, seg: 4 },
+  );
+  return parts;
+}
+
+/**
+ * 전소(3) 전용 **잿더미와 숯기둥** — 불이 꺼진 뒤에도 남는 것.
+ * 레이어 1 에 얹으므로 어느 레벨에서도 나온다(마을이 작아도 폐허는 폐허다).
+ * ⚠ 발광이 아니라 **본체 메시**다 — 잿더미가 빛나면 안 된다.
+ */
+function ashes(d: Dmg): PartSpec[] {
+  if (d !== 3) return [];
+  const ash = 0x4a4440;
+  const ashPale = 0x6e6862;
+  const char = 0x241f1c;
+  const parts: PartSpec[] = [
+    // 마을 바닥을 덮는 재 — 넓고 얇은 원반 둘을 겹쳐 얼룩지게
+    { kind: 'cyl', pos: [0, 0.035, 0], scale: [1.18, 0.03, 1.18], color: ash, seg: 9, hueJitter: 0.03 },
+    { kind: 'cyl', pos: [0.16, 0.05, -0.12], scale: [0.72, 0.025, 0.72], color: ashPale, seg: 8, hueJitter: 0.04 },
+  ];
+  // 숯기둥 — 무너진 구조물 자리마다 타다 만 기둥 밑동
+  for (const [sx, sz] of [HUT_A, HUT_B, HALL, TOTEM, LEANTO, RACK] as const) {
+    parts.push(
+      { kind: 'cyl', pos: [sx * 0.92, 0.12, sz * 0.92], rot: [0.18, 0, 0.12], scale: [0.075, 0.24, 0.075], color: char, seg: 4 },
+      { kind: 'ico', pos: [sx * 0.8, 0.045, sz * 0.8], rot: [0.4, 0.9, 0.2], scale: [0.26, 0.05, 0.24], color: shade(char, 1.5) },
+    );
   }
   return parts;
 }
@@ -1149,7 +1258,7 @@ function flames(level: number, d: Dmg): PartSpec[] {
  */
 const LAYERS: readonly ((d: Dmg) => PartSpec[])[][] = [
   // Lv1 — 움막 하나 · 화톳불 · 사수 발판
-  [groundL1, hideHut, emberPit, watchDeck, scatterL1],
+  [groundL1, hideHut, emberPit, watchDeck, scatterL1, ashes],
   // Lv2 — 모닥불 · 목책 · 짚 움막 · 건조대
   [groundL2, hearthFull, fireside, palisade, thatchHut, dryingRack],
   // Lv3 — 망루 · 토템 · 작업장 · 도구
@@ -1161,6 +1270,25 @@ const LAYERS: readonly ((d: Dmg) => PartSpec[])[][] = [
 ];
 
 export const BASECAMP_LAYER_COUNT = LAYERS.length;
+
+/**
+ * 마을 HP 비율 → **피해 단계**. 이 사상의 **유일한 출처**다.
+ *
+ * ⚠⚠ 종전에는 `fx.ts` 의 `baseDamaged` 와 `baseUpgraded` 두 곳에
+ *   `ratio > 0.6 ? 0 : ratio > 0.3 ? 1 : 2` 가 **복제**돼 있었다. 단계가 셋일 때는
+ *   눈에 안 띄었지만, 넷이 되면 한쪽만 고쳐 **레벨업 순간에 마을이 멀쩡해지는** 종류의
+ *   버그가 생긴다(같은 값을 두 곳이 다르게 계산한다). 한 벌로 모은다.
+ *
+ * 문턱: 0.60 · 0.30 은 종전 값 그대로 두고, 전소(3)만 새로 잡았다.
+ *  · **0.10** — 마지막 10% 다. 이 구간에 들어오면 화면이 "곧 진다"를 말해야 한다.
+ *    더 높이면(예: 0.2) 아직 지킬 만한 판에서 마을이 불덩이가 되어 정보가 거짓이 되고,
+ *    더 낮추면 한두 대 맞고 끝나 **볼 시간이 없다**.
+ *  · 패배 확정 시에는 비율과 무관하게 3 을 쓴다(`fx.ts` battleEnded).
+ */
+export function baseDamageStage(hp: number, hpMax: number): Dmg {
+  const r = hp / Math.max(1, hpMax);
+  return r > 0.6 ? 0 : r > 0.3 ? 1 : r > 0.1 ? 2 : 3;
+}
 
 export function createBasecamp(): Basecamp {
   const group = new THREE.Group();
@@ -1199,6 +1327,23 @@ export function createBasecamp(): Basecamp {
     // 병합은 이미 구운 버퍼의 복사라 프리미티브 재생성이 없다 (헤더의 빌드 비용 근거)
     const merged = parts.length === 1 ? parts[0]!.clone() : mergeGeometries(parts, false);
     if (!merged) throw new Error('기지 레이어 병합 실패');
+    /*
+     * ⚠⚠ **전소(3)의 그을림은 여기서 한 번에 먹인다 — `soot()` 로는 안 된다.**
+     *   붕괴 분기(`wrecked(d)`)의 파트들은 색을 **리터럴로** 적는다(`0x4a3a2c` …).
+     *   곧 `soot()` 를 아무리 어둡게 해도 무너진 구조물에는 안 닿는다 — 실측으로
+     *   확인했다: 그 값을 0.42 → 0.66 으로 되돌려도 d3 의 평균 밝기가 **비트 단위로
+     *   같았다**(0.0698). 무너진 뒤의 색은 리터럴이 정하기 때문이다.
+     *   병합된 정점 색을 곱하면 파트가 색을 어떻게 정했든 **전부** 숯이 된다.
+     *   0.55: 더 내리면 실루엣이 배경 그림자와 안 갈리고, 더 올리면 "탔다"로 안 읽힌다.
+     */
+    if (d === 3) {
+      const col = merged.getAttribute('color');
+      if (col) {
+        const arr = col.array as Float32Array;
+        for (let i = 0; i < arr.length; i++) arr[i] = (arr[i] as number) * 0.55;
+        col.needsUpdate = true;
+      }
+    }
     campGeos.set(key, merged);
     owned.push(merged);
     return merged;
@@ -1248,6 +1393,18 @@ export function createBasecamp(): Basecamp {
       apply();
     },
     smokeLevel: () => dmg,
+    flicker(time) {
+      if (dmg === 0) {
+        // 온전할 때는 모닥불 하나뿐 — 아주 옅게만 흔든다(눈에 띄면 화덕이 불안해 보인다)
+        const p = 1 + Math.sin(time * 7.3) * 0.04;
+        flameMesh.scale.set(1, p, 1);
+        return;
+      }
+      // 불이 커질수록 크게 흔들린다. 세로가 가로보다 두 배 흔들려 "혀"처럼 읽힌다
+      const amp = dmg === 3 ? 0.16 : 0.08;
+      const a = time * 9.1;
+      flameMesh.scale.set(1 + Math.sin(a * 0.83) * amp * 0.5, 1 + Math.sin(a) * amp, 1 + Math.cos(a * 0.71) * amp * 0.5);
+    },
     fireOffset,
     dispose: () => owned.forEach((g) => g.dispose()),
   };
@@ -1256,7 +1413,7 @@ export function createBasecamp(): Basecamp {
 
 /** 테스트/감사 전용 — 구조물별 반경을 개별로 재기 위한 노출 (런타임 경로는 쓰지 않는다) */
 export const __BASECAMP_AUDIT__: readonly [number, string, (d: Dmg) => PartSpec[]][] = [
-  [1, 'groundL1', groundL1], [1, 'hideHut', hideHut], [1, 'emberPit', emberPit],
+  [1, 'groundL1', groundL1], [1, 'hideHut', hideHut], [1, 'emberPit', emberPit], [1, 'ashes', ashes],
   [1, 'watchDeck', watchDeck], [1, 'scatterL1', scatterL1],
   [2, 'groundL2', groundL2], [2, 'hearthFull', hearthFull], [2, 'fireside', fireside],
   [2, 'palisade', palisade], [2, 'thatchHut', thatchHut], [2, 'dryingRack', dryingRack],

@@ -42,7 +42,7 @@ export interface Stage3D {
   particles: ParticleSystem;
   basecamp: Basecamp;
   /** 기지 피해 외형 0=온전/1=파손/2=반파 */
-  setBaseDamageLevel(level: 0 | 1 | 2): void;
+  setBaseDamageLevel(level: 0 | 1 | 2 | 3): void;
   /**
    * 홈타운 레벨 외형 (1-base). 지금은 마을 스케일만 커진다 —
    * 실제 구조물 성장은 3단계가 meshlib/basecamp.ts 안에서 만든다.
@@ -241,11 +241,26 @@ export function build(stage: StageDef, quality?: QualityFlags, opts?: Stage3DOpt
       particles.update(dt);
       // 기지 모닥불 연기/불티 (피해 클수록 검은 연기)
       const lvl = basecamp.smokeLevel();
-      if (Math.floor(time * 9) !== Math.floor((time - dt) * 9)) {
+      /*
+       * 연기 — 피해가 클수록 **잦고 검고 크다**. 3(전소)에서는 마을 전체가 타므로
+       * 화덕 한 자리가 아니라 **마을 반경 안에 흩뿌린다**(한 점에서만 나면 모닥불로 읽힌다).
+       * 주기도 1/9초 → 1/22초로 올려 연기 기둥이 끊기지 않게 한다.
+       */
+      const rate = lvl === 3 ? 22 : 9;
+      if (Math.floor(time * rate) !== Math.floor((time - dt) * rate)) {
         firePos.copy(basecamp.fireOffset).add(basecamp.group.position);
-        const smokeColor = lvl === 0 ? 0xffb02e : lvl === 1 ? 0x8a8078 : 0x4a4644;
-        particles.trail(firePos.x, firePos.y, firePos.z, smokeColor, lvl === 0 ? 0.06 : 0.1);
+        const smokeColor = lvl === 0 ? 0xffb02e : lvl === 1 ? 0x8a8078 : lvl === 2 ? 0x4a4644 : 0x322e2c;
+        if (lvl === 3) {
+          // 결정론이 필요 없는 연출이라 시간 위상으로 흩는다(sim 이 아니라 렌더다)
+          const a = time * 5.1;
+          firePos.x += Math.cos(a) * 0.9;
+          firePos.z += Math.sin(a * 1.37) * 0.9;
+          firePos.y += 0.25;
+        }
+        particles.trail(firePos.x, firePos.y, firePos.z, smokeColor, lvl === 0 ? 0.06 : lvl === 3 ? 0.18 : 0.1);
       }
+      // 불길이 살아 움직이게 — 발광 메시만 미세하게 맥동시킨다(지오메트리 재생성 0)
+      basecamp.flicker(time);
       // 물결 — 정점 위치가 아니라 **물결선의 위상**을 민다.
       // (예전의 진폭 0.09 세로 흔들림은 이 카메라에서 한 픽셀도 안 움직였다)
       waterBuild.animate(time);
