@@ -122,6 +122,7 @@ export const en: Record<string, string> = {
   // 같은 배지의 둘째 얼굴 — 문 앞이 다 갚았을 때 걸어오는 것들의 빚을 적는다 (ko 주석 참조)
   'battle.ally.title': 'Rally',
   'battle.ally.pillHint': 'Tribesmen out — tap to open the village (rally & upgrade)',
+  'battle.ally.pillHintClose': 'Tribesmen out — tap to close the village',
   // ⚠ 조작이 기기마다 갈리므로 줄도 둘이다 (ko 주석 참조)
   'battle.ally.rulesMouse': 'Left-click one to select all of that kind → right-click to move, gather or attack · up to {m}',
   'battle.ally.rulesTouch': 'Tap one on the board to select all of that kind → tap a tile to move, gather or attack · up to {m}',

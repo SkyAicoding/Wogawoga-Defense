@@ -118,6 +118,19 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .pill--ally .pill-num { color: #9fdcf7; font-size: 0.82rem; }
 .pill--ally.is-full .pill-num { color: #ff9d6a; }
 .pill--ally:active { transform: scale(0.94); }
+/*
+ * **열린 상태** — 마을 패널이 떠 있는 동안. 토글이므로 "한 번 더 누르면 닫힌다"가
+ * 화면에 있어야 한다(battlehud.ts 의 onClick 주석). 같은 기둥의 자동 토글은
+ * `.side-btn.is-on` 에서 초록으로 뒤집는데, 이 알약은 **한랭색이 곧 아군 축**이라
+ * (출동 버튼·아군 체력바·3D 인스턴스와 같은 자리) 그 색으로 채운다 —
+ * 초록으로 칠하면 아군 축과 상태 축 두 색이 한 버튼에서 싸운다.
+ */
+.pill--ally.is-open {
+  background: linear-gradient(180deg, #2f6f92, #1d4a63);
+  border-color: #9fdcf7;
+}
+.pill--ally.is-open .pill-num { color: #eaf7ff; }
+.pill--ally.is-open.is-full .pill-num { color: #ffd0a8; }
 /* 서 있는 타워 수 — 줄면 붉게 한 번 튄다 (타워를 잃은 순간의 유일한 HUD 신호) */
 .pill--tower .pill-num { color: #ffe3c2; }
 .pill--tower-drop { animation: tower-drop 0.7s ease-out 1; }

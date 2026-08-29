@@ -454,13 +454,40 @@ export function createBattleHud(): Screen<GameFacade> {
        * 사용자 요청("맨 위에 인원수, x1, 자동 순서로 우측에 세로로"). 상태 표시라
        * 토글 둘과 성격이 달라서 아래 간격을 두 배로 벌리고(.hud-side .pill--ally의
        * margin-bottom) 알약 모양·한랭색을 유지해 사각 토글과 갈리게 뒀다.
-       * 옮겨도 **기능은 그대로다** — 여전히 button이고 여전히 api.selectBase()를
-       * 부른다. 죽이면 마을 패널로 가는 상시 입구가 다시 0이 된다.
+       * 옮겨도 **기능은 그대로다** — 여전히 button이고 여전히 마을을 고른다.
+       * 죽이면 마을 패널로 가는 상시 입구가 다시 0이 된다.
+       *
+       * ── **토글이다** (사용자 요구, 2026-08-29) ─────────────────────────────────
+       *   > "이 버튼을 토글로 해줘 한번 하면 나오고 한번더 누르면 사라지게"
+       *
+       *   전에는 `selectBase()` 한 방향뿐이었다. 그 함수는 이미 골라져 있으면
+       *   **그냥 돌아간다**(placement.ts) — 곧 두 번째 누름이 아무 일도 안 했다.
+       *   여는 손이 닫을 줄도 알아야 하는데, 닫는 길은 패널 안의 ✕ 나 판 위의 움막
+       *   재탭뿐이었다. 둘 다 **여기가 아닌 곳**이라 손이 한 번 더 옮겨간다.
+       *
+       *   ⚠ 닫는 쪽은 ✕ 버튼과 **같은 경로**를 쓴다(`disarmBase()` + `clearSelection()`).
+       *     새 API 를 파지 않은 이유가 이것이다 — 닫기가 두 갈래가 되면 한쪽만 고치는
+       *     회귀가 난다. 판 위의 움막 재탭도 placement 안에서 이미 같은 토글이다.
        */
       allyPill = h('button', {
         class: 'pill pill--ally hud-item',
-        attrs: { type: 'button', 'aria-label': t('battle.ally.pillHint'), title: t('battle.ally.pillHint') },
-        onClick: () => api(facade)?.selectBase?.(),
+        attrs: {
+          type: 'button',
+          // 패널을 여닫는 버튼이므로 aria-pressed 가 아니라 **aria-expanded** 다
+          'aria-expanded': 'false',
+          'aria-label': t('battle.ally.pillHint'),
+          title: t('battle.ally.pillHint'),
+        },
+        onClick: () => {
+          const bb = api(facade);
+          if (!bb) return;
+          if (bb.selectedBase?.()) {
+            disarmBase(); // 닫으면 레벨업 2단 확인 무장은 무효 — ✕ 버튼과 같다
+            bb.clearSelection();
+          } else {
+            bb.selectBase?.();
+          }
+        },
       },
         h('span', { class: 'pill-ico', html: ALLY_ICON_SVG.clubber }), allyPillNum) as HTMLButtonElement;
 
@@ -1162,6 +1189,17 @@ export function createBattleHud(): Screen<GameFacade> {
       if (homeSel !== lastSelBase) {
         lastSelBase = homeSel;
         htPanel.style.display = homeSel ? '' : 'none';
+        /*
+         * 토글 버튼은 **자기 상태를 말해야 한다.** 열려 있는 동안 눌린 꼴로 두면
+         * "한 번 더 누르면 닫힌다"가 화면에 있다 — 안 그러면 두 번째 누름이 무엇을
+         * 할지 눌러 보기 전에는 알 수 없다. (같은 기둥의 자동 토글 `.is-on` 과 같은 규약)
+         * 문구도 같이 바꾼다: 열려 있으면 '눌러서 닫기'가 맞는 말이다.
+         */
+        cls(allyPill, 'is-open', homeSel);
+        allyPill.setAttribute('aria-expanded', homeSel ? 'true' : 'false');
+        const pillHint = t(homeSel ? 'battle.ally.pillHintClose' : 'battle.ally.pillHint');
+        allyPill.setAttribute('aria-label', pillHint);
+        allyPill.setAttribute('title', pillHint);
         disarmBase(); // 패널이 닫히거나 새로 열리면 확인 무장은 무효
         lastAllySig = ''; // 다시 열릴 때 인원/가격을 무조건 한 번 다시 쓴다
         if (!homeSel) b.reportPanelTop?.(null); // 닫히면 판이 제자리로 돌아온다
