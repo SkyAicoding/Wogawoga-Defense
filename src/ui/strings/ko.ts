@@ -255,20 +255,10 @@ export const ko: Record<string, string> = {
   'battle.hint.gatherMouse': '🍓 부족원을 좌클릭하고 나무를 우클릭해 보세요 — 캐서 마을로 지고 오면 코인이 들어와요',
   'battle.hint.gatherTouch': '🍓 부족원을 탭하고 나무를 찍어 보세요 — 캐서 마을로 지고 오면 코인이 들어와요',
 
-  // --- 웨이브 미리보기 띠 (prep 전용) --------------------------------------
-  // 칩에는 **적 이름을 쓰지 않는다** — '안킬로사우루스'가 390px에서 깨진다.
-  // 이름은 탭 후 상세에만 나오고, 칩은 아이콘 + 마릿수 + 특성 배지로만 말한다.
-  'battle.preview.title': '다음 웨이브',
-  'battle.preview.expand': '자세히 보기',
-  'battle.preview.collapse': '접기',
-  'battle.preview.demand': '내 타워가 얼마나 듣나',
-  'battle.preview.more': '+{n}종',
-  'battle.preview.hp': '체력 {n} × {c}마리',
-  'battle.preview.good': '잘 들어요',
-  'battle.preview.bad': '안 들어요',
-  // 없는 답을 알려주는 것은 정보가 아니라 좌절이다 — 그래서 **내 덱 안**에서만 찾는다
-  'battle.preview.noAnswer': '지금 덱에는 잘 듣는 카드가 없어요',
-  'battle.preview.plain': '특별한 방어는 없어요',
+  // --- 손패 카드의 상성 경고 -------------------------------------------------
+  // ⚠ 여기 하나만 남은 `battle.preview.*` 키다. 웨이브 미리보기 띠는 없앴지만
+  //   (battlehud.ts 의 제거 기록 참조) 이 문자열은 띠가 아니라 **카드**가 쓴다
+  //   (widgets/card.ts — 회색 오버레이 옆 특성 아이콘의 툴팁 낱말).
   'battle.preview.weakVs': '{n} 상대로 약해요',
 
   // 특성 — 이름은 배지에, 설명은 상세 한 줄에 쓴다

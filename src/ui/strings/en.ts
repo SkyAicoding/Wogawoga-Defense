@@ -193,17 +193,7 @@ export const en: Record<string, string> = {
   'battle.hint.gatherMouse': '🍓 Left-click a tribesman, then right-click a tree — they gather it and carry it home for coins',
   'battle.hint.gatherTouch': '🍓 Tap a tribesman, then tap a tree — they gather it and carry it home for coins',
 
-  // --- Wave preview band (prep only) ---------------------------------------
-  'battle.preview.title': 'Next wave',
-  'battle.preview.expand': 'Show details',
-  'battle.preview.collapse': 'Collapse',
-  'battle.preview.demand': 'How well your towers land',
-  'battle.preview.more': '+{n} more',
-  'battle.preview.hp': '{n} HP × {c}',
-  'battle.preview.good': 'Works well',
-  'battle.preview.bad': 'Falls short',
-  'battle.preview.noAnswer': 'No good answer in your current deck',
-  'battle.preview.plain': 'No special defence',
+  // --- Hand-card counter warning (the band itself is gone) -----------------
   'battle.preview.weakVs': 'Weak against {n}',
 
   'trait.air.name': 'Air',

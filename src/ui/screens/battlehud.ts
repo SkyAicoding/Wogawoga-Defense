@@ -46,8 +46,6 @@ import {
 import type { TowerCard } from '../widgets/card';
 import { showModal } from '../widgets/modal';
 import type { ModalHandle } from '../widgets/modal';
-import { createWavePreview } from '../widgets/wavepreview';
-import type { WavePreviewBand } from '../widgets/wavepreview';
 
 /**
  * selectedTower/requestSetTargeting은 계약(BattleUiApi)에 편입됐고, **채집 둘만** 아직
@@ -159,11 +157,15 @@ export function createBattleHud(): Screen<GameFacade> {
   let pauseModal: ModalHandle | null = null;
 
   /**
-   * 웨이브 미리보기 띠 (prep 전용) + 그 미리보기를 손패 경고와 **함께 쓴다**.
+   * 이번 웨이브 미리보기 — 지금은 **손패 상성 경고 전용**이다(아래 `setCounter`).
+   *
+   * ⚠ 화면의 미리보기 띠는 없앴지만 `previewWave` 조회는 **살아 있다.** 띠가 그리던
+   *   칩·수요 막대와, 카드 위의 회색 오버레이·특성 아이콘은 같은 자료를 쓰던 다른
+   *   표시였다. 사용자가 지운 것은 앞의 것뿐이다.
+   *
    * 웨이브 번호가 바뀔 때만 새로 뽑는다 — previewWave는 순수 함수이므로 같은 웨이브에
    * 대해 항상 같은 값이고, 매 프레임 부르면 60Hz로 객체를 버리는 셈이 된다.
    */
-  let band: WavePreviewBand | null = null;
   let preview: WavePreview | null = null;
   let previewWaveNo = -1;
 
@@ -285,7 +287,7 @@ export function createBattleHud(): Screen<GameFacade> {
    *     적어 놨다. 죽은 줄 하나를 상시로 두면 손패·마을 패널이 그만큼 밀린다.
    * (2) 비활성 버튼은 가르치지 못한다. 이 띠가 파는 것은 "지금"이고,
    *     **나타나는 것 자체가 신호**다.
-   * (3) 이 파일의 선례와 같다 — 웨이브 시작 버튼·미리보기 띠도 prep 이 아니면
+   * (3) 이 파일의 선례와 같다 — 웨이브 시작 버튼도 prep 이 아니면
    *     display:none 이지 비활성으로 남지 않는다.
    */
   /** 띠가 지금 보이는가 — 켜짐/꺼짐 전환에만 DOM 을 만진다 */
@@ -789,18 +791,6 @@ export function createBattleHud(): Screen<GameFacade> {
         onClick: () => api(facade)?.requestRefresh(),
       }, h('span', { class: 'refresh-ico', text: '🔄' }), refreshLabel);
 
-      // --- 웨이브 미리보기 띠 ------------------------------------------------
-      // 웨이브 호출 버튼 **바로 위** — 둘 다 prep에만 존재하므로 세로 예산을 나눠 쓴다.
-      // (상단은 390px에서 이미 포화라 HUD_TOP_PX를 한 자리도 안 건드린다)
-      band = createWavePreview();
-
-      /*
-       * 문간 띠는 하단 덩어리의 **맨 위**다. 셋을 동시에 만족하는 유일한 자리다:
-       *  · 상단 HUD 를 한 자리도 안 건드린다 (HUD_TOP_PX 74 는 카메라 예약이다).
-       *  · 흐름 안에 있어 나타날 때 위로 자라고, 사라지면 자리를 통째로 돌려준다.
-       *  · 390×844 세로에서 **엄지 구역**이다 — 문 앞의 시간이 3~12초뿐이라
-       *    상단(반대쪽 끝)에 두면 한 손으로는 그 시간을 못 지킨다.
-       */
       /*
        * ⚠⚠ **쌓는 순서가 곧 "무엇이 안 움직이는가" 다** (사용자 지적).
        *   > "하단 메뉴 위에 각종 알림 정보가 뜨는데 … 아래에서부터 위로 차곡차곡 쌓아
@@ -812,13 +802,13 @@ export function createBattleHud(): Screen<GameFacade> {
        *   자기 자리는 그대로다. 반대로 앞쪽에 있는 것은 아래에서 뭔가 나타나는 순간
        *   그만큼 위로 밀린다.
        *
-       *   종전 순서(위→아래)는 `패널 · 소품 · 홈타운 · 미리보기띠 · 웨이브시작 · 손패`
-       *   였다. 미리보기 띠와 웨이브 시작 버튼은 **준비 단계에만 떴다 사라지는데**
-       *   홈타운 패널보다 **아래**에 있었다 — 곧 그 둘이 나타날 때마다 홈타운 메뉴가
-       *   통째로 밀려 올라갔다. 사용자가 누르려던 버튼이 손가락 밑에서 움직인 것이다.
+       *   종전 순서(위→아래)는 `패널 · 소품 · 홈타운 · 웨이브시작 · 손패` 였다.
+       *   웨이브 시작 버튼은 **준비 단계에만 떴다 사라지는데** 홈타운 패널보다
+       *   **아래**에 있었다 — 곧 그것이 나타날 때마다 홈타운 메뉴가 통째로 밀려
+       *   올라갔다. 사용자가 누르려던 버튼이 손가락 밑에서 움직인 것이다.
        *
        *   지금 순서는 **뜨고 지는 것을 위로, 손이 가는 것을 아래로** 보낸다:
-       *     미리보기띠 · 웨이브시작  ← 준비 단계에만 존재(가장 많이 나타났다 사라진다)
+       *     웨이브시작                      ← 준비 단계에만 존재(가장 많이 나타났다 사라진다)
        *     타워패널 · 소품패널 · 홈타운패널  ← 골라서 여는 것
        *     손패                            ← 언제나 있다 = 바닥 기준점
        *   ⇒ 새 알림은 **위에서 나오고**, 아래에 있는 것들은 그 자리를 지킨다.
@@ -826,7 +816,6 @@ export function createBattleHud(): Screen<GameFacade> {
        *     가장 안 흔들리는 자리를 갖는다.
        */
       const bottom = h('div', { class: 'hud-bottom' },
-        band.el,
         callWaveBtn,
         panelHost,
         scPanel,
@@ -870,8 +859,6 @@ export function createBattleHud(): Screen<GameFacade> {
       allyBtns = [];
       lastAllySig = '';
       lastAllyPillSig = '';
-      band?.reset();
-      band = null;
       preview = null;
       previewWaveNo = -1;
       /*
@@ -958,7 +945,6 @@ export function createBattleHud(): Screen<GameFacade> {
         previewWaveNo = s.waveIndex;
         preview = b.sim.previewWave(s.waveIndex);
       }
-      band?.update(s, preview);
 
       const sel = b.selectedCard();
       cards.forEach((c, i) => {
@@ -967,7 +953,8 @@ export function createBattleHud(): Screen<GameFacade> {
         c.setDisabled(cost > s.gold);
         /*
          * 손패 상성 경고 — **배치 티어(T1)** 기준이다. 이 카드를 지금 놓으면 T1이 서기
-         * 때문이다(이미 세운 타워의 티어는 미리보기 띠의 수요 막대가 따로 말한다).
+         * 때문이다(이미 세워 둔 타워의 티어는 이 표시가 말하지 않는다 — 미리보기 띠의
+         * 수요 막대가 그 몫이었는데, 띠는 없앴다. 아래 ⚠ 기록 참조).
          * 새로고침을 슬롯머신에서 **정보에 근거한 구매**로 바꾸는 것이 이 표시의 값이다.
          */
         const def = TOWER_DEFS[c.towerId];
@@ -1333,6 +1320,27 @@ export function createBattleHud(): Screen<GameFacade> {
     return best;
   }
 
+  /*
+   * ⚠⚠ **웨이브 미리보기 띠도 통째로 없앴다 (사용자 요구, 2026-08-29).**
+   *   > "이렇게 하단 메뉴위에 나오는 스테이지 안내는 없어도 될거 같아.
+   *   >  있어도 잘 보이지 않고, 본다해도 너무 짧게 보여서 의미가 없어. 그냥 없애도 되"
+   *
+   *   근거는 **노출 시간**이었다. 띠는 prep 에만 살고 prep 은 3~12초다. 그 안에
+   *   접힘 한 줄(칩 + 배지)을 읽고, 펼쳐서 수요 막대와 상세까지 보라는 설계였는데
+   *   실제로는 나타났다 사라지는 것으로 끝났다. 자리를 차지하는 값을 못 한 것이다.
+   *
+   *   없어진 것: 적 칩(아이콘 ×N + 특성 배지) · 수요 막대 · 칩 탭 상세.
+   *   그리고 그것들만 쓰던 `widgets/wavepreview.ts`, `battle.preview.*` 열 키,
+   *   `.wave-preview` · `.wp-*` CSS (좁은 폭·가로 미디어쿼리 둘 포함) 도 함께.
+   *
+   *   ⚠ **`sim.previewWave` 조회는 안 지웠다** — 손패 카드의 상성 경고(회색 오버레이
+   *     + 특성 아이콘)가 같은 자료를 쓴다. 사라진 것은 **띠**이지 미리보기가 아니다.
+   *     그래서 `tests/sim/preview.test.ts`(미리보기 = 실제 웨이브) 도 그대로 산다.
+   *
+   *   ⚠ `battle.preview.weakVs` 한 키만 살아남았다 — 그것은 띠가 아니라 **카드**가
+   *     쓰는 문자열이다(`widgets/card.ts`). 키 이름은 그대로 뒀다(옮기면 ko/en 두
+   *     파일과 소비자를 동시에 건드리는데, 얻는 것이 이름뿐이다).
+   */
   /*
    * ⚠⚠ **문간 띠는 통째로 없앴다 (사용자 요구).**
    *   > "보스전 할때 여기 보이는 정보는 필요 없어 이거 지워줘." → 정보 줄 제거
