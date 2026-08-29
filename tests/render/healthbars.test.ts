@@ -188,7 +188,7 @@ describe('HealthBarView', () => {
    * 빨간 바가 "적이 곧 죽는다"(좋은 소식)와 "내 타워가 무너진다"(나쁜 소식) 양쪽을
    * 뜻해 의미가 반전됐다. 프래그먼트 분기의 근거인 barKind 속성을 잠근다.
    */
-  it('barKind로 적(0)과 타워(1)를 가르고, 타워 바가 확실히 두껍다', () => {
+  it('barKind로 적(0)과 타워(1)를 가르고, 내 편 바가 적 바보다 두껍지 않다', () => {
     const scene = new THREE.Scene();
     const view = new HealthBarView(scene);
     const mesh = meshesOf(scene)[0]!;
@@ -197,7 +197,17 @@ describe('HealthBarView', () => {
     expect(kind, 'barKind 인스턴스 속성').toBeTruthy();
     expect(kind.getX(0), '적 = 0').toBe(0);
     expect(kind.getX(1), '타워 = 1').toBe(1);
-    // 높이(스케일 y) — 타워 바가 적 바보다 확실히 두껍다 (기본 줌 1~2px → 4~5px)
+    /*
+     * ⚠⚠ **이 줄은 2026-08-28 에 부호가 뒤집혔다 — 완화가 아니라 설계 축 교체다.**
+     *   옛 판본은 `타워 > 적 × 1.5` 였다. 그 뜻은 *"적 바와 내 편 바가 갈려야 한다"* 였고,
+     *   두께는 그 갈림의 **한 수단**이었다. 사용자가 그 축을 버렸다:
+     *     > "우리 편 타워, 주민, 홈타운 등의 hp 바의 두께를 적군의 hp 두께 정도로 줄여줘.
+     *     >  지금 우리편 hp 두께가 너무 두꺼워"
+     *   갈림의 **본체**는 그대로 남는다 — 위 `barKind` 두 줄(적 0 / 타워 1)이 팔레트를
+     *   가르고, 그것이 "빨간 바의 뜻이 반전되는" 문제를 실제로 막는 장치다.
+     *   그래서 여기서는 **새 요구를 잠근다**: 내 편 바가 적 바보다 두껍지 않다.
+     *   되돌려서 두껍게 만들면(0.17·0.22) 이 줄이 빨개진다.
+     */
     const m = new THREE.Matrix4();
     const scl = new THREE.Vector3();
     mesh.getMatrixAt(0, m);
@@ -205,7 +215,8 @@ describe('HealthBarView', () => {
     const foeH = scl.y;
     mesh.getMatrixAt(1, m);
     m.decompose(new THREE.Vector3(), new THREE.Quaternion(), scl);
-    expect(scl.y).toBeGreaterThan(foeH * 1.5);
+    expect(scl.y, `타워 바 ${scl.y} vs 적 바 ${foeH} — 내 편 바가 더 두껍다`)
+      .toBeLessThanOrEqual(foeH * 1.05);
     view.dispose();
   });
 

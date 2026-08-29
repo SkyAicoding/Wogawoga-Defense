@@ -89,6 +89,34 @@ function glowArea(group: THREE.Group): number {
   return sum;
 }
 
+/**
+ * 불이 **퍼진 넓이** — 발광 정점의 XZ 바운딩 넓이(타일²).
+ *
+ * ⚠ 면적(`glowArea`)만으로는 "불이 커졌다"와 "불이 번졌다"가 안 갈린다 — 화덕 하나를
+ *   키워도 면적은 자란다(실제로 그 사보타주가 통과했다). 번짐은 **자리의 흩어짐**이므로
+ *   XZ 로 얼마나 넓게 퍼졌는지를 따로 잰다.
+ */
+function glowSpread(group: THREE.Group): number {
+  group.updateMatrixWorld(true);
+  const v = new THREE.Vector3();
+  let x0 = Infinity;
+  let x1 = -Infinity;
+  let z0 = Infinity;
+  let z1 = -Infinity;
+  forEachDrawn(group, (o) => {
+    if (isBody(o)) return;
+    const pos = o.geometry.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+      if (v.x < x0) x0 = v.x;
+      if (v.x > x1) x1 = v.x;
+      if (v.z < z0) z0 = v.z;
+      if (v.z > z1) z1 = v.z;
+    }
+  });
+  return x1 < x0 ? 0 : (x1 - x0) * (z1 - z0);
+}
+
 /** 구조물(본체)의 삼각형 수 — 잿더미가 실제로 얹혔는지 되읽는다 */
 function bodyTris(group: THREE.Group): number {
   let n = 0;
@@ -230,7 +258,7 @@ describe('홈타운 마을 모델', () => {
    *   "구조물이 무너져 삼각형이 줄었다"와 "불이 늘었다"가 상쇄돼 **아무것도 못 잡는다** —
    *   실제로 그렇게 재면 d2 와 d3 의 총합이 비슷하다.
    */
-  it('피해가 커질수록 불이 커진다 (발광 면적)', () => {
+  it('피해가 커질수록 불이 **커지고 번진다** (발광 면적이 단조 증가)', () => {
     const camp = createBasecamp();
     camp.setLevel(BASECAMP_LAYER_COUNT, BASECAMP_LAYER_COUNT);
     const fire: number[] = [];
@@ -239,27 +267,46 @@ describe('홈타운 마을 모델', () => {
       fire.push(glowArea(camp.group));
     }
     /*
-     * 실측(만렙 마을, 발광 총면적): **d0 1.439 / d1 0.831 / d2 2.183 / d3 20.365**.
-     * 0→1 은 **줄어든다**(지키던 불이 사그라든다) — 그래서 단조 증가가 아니라 아래 셋을 잠근다.
+     * ⚠⚠ **2026-08-28 : 잣대가 "비율"에서 "단조 증가"로 바뀌었다 — 사용자가 축을 바꿨다.**
+     *   > "게임 시작하자 말자 홈타운은 이미 불꽃이 타고 있어. 이건 아니잖아. … 그 불꽃이
+     *   >  공격을 받기 시작하면 점점 많아 지거나 크기가 조금씩 커지는게 좋겠어"
      *
-     * ⚠⚠ **문턱을 2026-08-28 에 10 → 5 로 다시 유도했다. 빨강을 피하려고 내린 것이 아니라
-     *   기하가 바뀌어 옛 유도가 낡았기 때문이다.** 불꽃이 "원뿔 하나"에서 "갈래 여럿 + 층진
-     *   색"(`fireTuft`)으로 바뀌면서 **반파의 불도 같이 커졌다**(0.460 → 2.183). 분모가 커지면
-     *   같은 연출에서도 비가 내려간다 — 곧 10 은 새 기하에서 아무 뜻이 없는 옛 숫자다.
-     *   새 유도(둘 다 실측):
-     *    · 정상                                   d3/d2 = **9.33**
-     *    · 전소 불길을 반파와 같게 만든 사보타주  = **1.72**  ← 이것이 빨개져야 한다
-     *   5 는 9.33 과 1.72 **사이**이고 양쪽에 46%·191% 여유가 있다.
+     *   옛 판본은 `d3/d2 > 5` 하나였고, 그 아래에 "0→1 은 **줄어든다**(지키던 불이
+     *   사그라든다)"는 문장이 붙어 있었다. 그 설계가 화면에서 두 가지를 동시에 잘못
+     *   말했다 — 시작 화덕이 커서 "이미 불타는 마을", 맞을수록 불이 작아져 "괜찮아지는 중".
+     *   지금 잠그는 것은 **사용자가 말한 그것**이다: 맞을수록 불이 커진다.
+     *
+     * 실측(만렙 마을, 발광 총면적): d0 **0.669** / d1 **2.096** / d2 **6.224** / d3 **24.417**.
+     * 배수는 3.13 · 2.97 · 3.92 — 세 걸음이 고르게 자란다.
+     * 문턱 **1.5배**의 유도: 실측 최소 배수 2.97 의 절반쯤이라 여유가 넉넉하고, 화면에서
+     * "커졌다"를 알아볼 수 있는 하한이다(1.2 면 부감 55°에서 구분이 안 된다).
      */
-    expect((fire[3] as number) / (fire[2] as number), `d3/d2 = ${((fire[3] as number) / (fire[2] as number)).toFixed(2)} (면적 ${fire.map((v) => v.toFixed(3)).join('/')})`)
-      .toBeGreaterThan(5);
-    // 그리고 **온전한 마을보다** 훨씬 많이 탄다 — 전소를 없애면 여기도 같이 빨개진다
-    expect(fire[3] as number, `d3 불 ${fire[3]} vs d0 ${fire[0]}`).toBeGreaterThan(
-      (fire[0] as number) * 2,
-    );
-    expect(fire[2] as number, `d2 불 ${fire[2]} vs d1 ${fire[1]}`).toBeGreaterThan(
-      fire[1] as number,
-    );
+    for (let i = 1; i < fire.length; i++) {
+      expect(fire[i] as number, `d${i} 불 ${(fire[i] as number).toFixed(2)} vs d${i - 1} ${(fire[i - 1] as number).toFixed(2)} — 맞았는데 불이 안 커졌다`)
+        .toBeGreaterThan((fire[i - 1] as number) * 1.5);
+    }
+    // 그리고 시작(온전)은 **화덕 하나**여야 한다 — 전소의 1/10 밑이라야 "평화로운 시작"이다
+    expect(fire[0] as number, `d0 불 ${(fire[0] as number).toFixed(2)} — 시작부터 마을이 탄다`)
+      .toBeLessThan((fire[3] as number) * 0.1);
+    /*
+     * ── 그리고 **번진다** — 사용자가 말한 "점점 많아 지거나 … 많은 곳에 붙여주면" ──────
+     * ⚠ 위 면적만으로는 이걸 못 잡는다: 화덕 **하나만** 키워도 면적은 자란다. 실제로
+     *   "파손 단계에 불이 안 번지게" 하는 사보타주가 면적 계약을 **초록으로 통과했다**.
+     *   그래서 자리의 흩어짐(XZ 바운딩 넓이)을 따로 잰다.
+     * 실측: d0 **0.133** / d1 **1.505** / d2 **3.254** / d3 **4.362** 타일² (d1 이 d0 의 11.3배).
+     * 문턱은 단조 비감소 + d1 이 d0 의 **3배 이상**(첫 번짐이 눈에 보여야 한다).
+     */
+    const spread: number[] = [];
+    for (const dmg of DAMAGE_LEVELS) {
+      camp.setDamageLevel(dmg);
+      spread.push(glowSpread(camp.group));
+    }
+    for (let i = 1; i < spread.length; i++) {
+      expect(spread[i] as number, `d${i} 번짐 ${(spread[i] as number).toFixed(2)} vs d${i - 1} ${(spread[i - 1] as number).toFixed(2)}`)
+        .toBeGreaterThanOrEqual((spread[i - 1] as number) - 1e-9);
+    }
+    expect(spread[1] as number, `d1 번짐 ${(spread[1] as number).toFixed(2)} vs d0 ${(spread[0] as number).toFixed(2)} — 맞아도 불이 한 자리에만 있다`)
+      .toBeGreaterThan((spread[0] as number) * 3);
     camp.dispose();
   });
 
